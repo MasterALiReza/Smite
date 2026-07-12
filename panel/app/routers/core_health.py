@@ -16,7 +16,7 @@ from app.node_client import NodeClient
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-CORES = ["backhaul", "rathole", "chisel", "frp"]
+CORES = ["backhaul", "rathole", "chisel", "frp", "gost"]
 
 
 class CoreHealthResponse(BaseModel):
