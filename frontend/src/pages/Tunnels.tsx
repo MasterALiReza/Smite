@@ -586,6 +586,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     custom_host: tunnel.custom_host || '',
     custom_sni: tunnel.custom_sni || '',
     ws_path: tunnel.ws_path || '',
+    is_reverse: tunnel.is_reverse || false,
   })
   const parsedBackhaul = parseBackhaulSpec(tunnel.spec, tunnel.type)
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(parsedBackhaul.state)
@@ -683,7 +684,8 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           gaming_mode: formData.gaming_mode,
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
-          ws_path: formData.ws_path
+          ws_path: formData.ws_path,
+          is_reverse: formData.is_reverse
         })
       })
       onSuccess()
@@ -972,6 +974,17 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Iran node will act as a client and connect to the foreign server</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" checked={formData.is_reverse} onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})} />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                  <div>
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">CDN Mode</label>
                     <p className="text-xs text-gray-500 dark:text-gray-400">Optimize traffic for CDN / Cloudflare</p>
                   </div>
@@ -1071,6 +1084,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     custom_host: '',
     custom_sni: '',
     ws_path: '',
+    is_reverse: false,
   })
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(createDefaultBackhaulState())
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(createDefaultBackhaulAdvancedState())
@@ -1241,7 +1255,8 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           gaming_mode: formData.gaming_mode,
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
-          ws_path: formData.ws_path
+          ws_path: formData.ws_path,
+          is_reverse: formData.is_reverse
         })
       }
       await api.post('/tunnels', payload)
@@ -1655,6 +1670,17 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
               <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Iran node will act as a client and connect to the foreign server</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" checked={formData.is_reverse} onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})} />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">CDN Mode</label>
