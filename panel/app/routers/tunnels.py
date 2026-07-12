@@ -107,6 +107,9 @@ class TunnelCreate(BaseModel):
     stealth_domain: str | None = None
     allowed_ips: list[str] | None = None
     rate_limit_mbps: float | None = None
+    transport_type: str | None = "tcp"
+    security_type: str | None = "none"
+    failover_ips: list[str] | None = None
 
 
 class TunnelUpdate(BaseModel):
@@ -125,6 +128,9 @@ class TunnelUpdate(BaseModel):
     stealth_domain: str | None = None
     allowed_ips: list[str] | None = None
     rate_limit_mbps: float | None = None
+    transport_type: str | None = None
+    security_type: str | None = None
+    failover_ips: list[str] | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -146,6 +152,9 @@ class TunnelResponse(BaseModel):
     stealth_domain: str | None = None
     allowed_ips: list[str] | None = None
     rate_limit_mbps: float | None = None
+    transport_type: str | None = "tcp"
+    security_type: str | None = "none"
+    failover_ips: list[str] | None = None
     status: str
     error_message: str | None = None
     revision: int
@@ -614,8 +623,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 server_spec["custom_host"] = db_tunnel.custom_host
                 server_spec["custom_sni"] = db_tunnel.custom_sni
                 server_spec["ws_path"] = db_tunnel.ws_path
-                server_spec["stealth_domain"] = db_tunnel.stealth_domain
                 server_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
+                server_spec["transport_type"] = db_tunnel.transport_type
+                server_spec["security_type"] = db_tunnel.security_type
+                server_spec["failover_ips"] = db_tunnel.failover_ips
                 server_spec["allowed_ips"] = db_tunnel.allowed_ips
                 server_spec["port_ranges"] = db_tunnel.port_ranges
                 
@@ -625,8 +636,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 client_spec["auth_token"] = auth_token
                 client_spec["transport"] = transport
                 client_spec["ports"] = ports # Usually relay servers don't need ports, but keep for node adapter reference
-                client_spec["stealth_domain"] = db_tunnel.stealth_domain
                 client_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
+                client_spec["transport_type"] = db_tunnel.transport_type
+                client_spec["security_type"] = db_tunnel.security_type
+                client_spec["failover_ips"] = db_tunnel.failover_ips
                 client_spec["port_ranges"] = db_tunnel.port_ranges
                 
                 # Add Iran Node IP to allowed_ips safely so it isn't blocked
@@ -1666,6 +1679,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     server_spec["ws_path"] = getattr(tunnel, "ws_path", None)
                     server_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
                     server_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+                    server_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
+                    server_spec["security_type"] = getattr(tunnel, "security_type", "none")
+                    server_spec["failover_ips"] = getattr(tunnel, "failover_ips", None)
                     server_spec["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
                     server_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
                     
@@ -1676,8 +1692,10 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     client_spec["auth_token"] = auth_token
                     client_spec["transport"] = transport
                     client_spec["ports"] = ports
-                    client_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
                     client_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+                    client_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
+                    client_spec["security_type"] = getattr(tunnel, "security_type", "none")
+                    client_spec["failover_ips"] = getattr(tunnel, "failover_ips", None)
                     client_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
                     
                     allowed_ips = getattr(tunnel, "allowed_ips", None)
@@ -1909,6 +1927,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             spec_for_node["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
             spec_for_node["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
             spec_for_node["port_ranges"] = getattr(tunnel, "port_ranges", None)
+            spec_for_node["transport_type"] = getattr(tunnel, "transport_type", "tcp")
+            spec_for_node["security_type"] = getattr(tunnel, "security_type", "none")
+            spec_for_node["failover_ips"] = getattr(tunnel, "failover_ips", None)
         
         if tunnel.core == "frp":
             try:

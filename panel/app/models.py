@@ -49,6 +49,9 @@ class Tunnel(Base):
     stealth_domain = Column(String, nullable=True)
     allowed_ips = Column(JSON, nullable=True)
     rate_limit_mbps = Column(Float, nullable=True)
+    transport_type = Column(String, default="tcp")
+    security_type = Column(String, default="none")
+    failover_ips = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -88,6 +88,18 @@ async def migrate_db():
             logger.info("Adding rate_limit_mbps column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN rate_limit_mbps FLOAT"))
 
+        if "transport_type" not in columns:
+            logger.info("Adding transport_type column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN transport_type VARCHAR DEFAULT 'tcp'"))
+
+        if "security_type" not in columns:
+            logger.info("Adding security_type column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN security_type VARCHAR DEFAULT 'none'"))
+
+        if "failover_ips" not in columns:
+            logger.info("Adding failover_ips column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN failover_ips JSON"))
+
 
 async def init_db():
     """Initialize database tables"""

@@ -588,6 +588,9 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     ws_path: tunnel.ws_path || '',
     is_reverse: tunnel.is_reverse || false,
     stealth_domain: tunnel.stealth_domain || '',
+    transport_type: tunnel.transport_type || 'tcp',
+    security_type: tunnel.security_type || 'none',
+    failover_ips: tunnel.failover_ips && Array.isArray(tunnel.failover_ips) ? tunnel.failover_ips.join('\n') : '',
     rate_limit_mbps: tunnel.rate_limit_mbps ? tunnel.rate_limit_mbps.toString() : '',
     allowed_ips: tunnel.allowed_ips && Array.isArray(tunnel.allowed_ips) ? tunnel.allowed_ips.join('\n') : '',
     rate_limit_enabled: !!tunnel.rate_limit_mbps,
@@ -723,6 +726,9 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           ws_path: formData.ws_path,
           is_reverse: formData.is_reverse,
           stealth_domain: formData.stealth_domain || null,
+          transport_type: formData.transport_type,
+          security_type: formData.security_type,
+          failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
             ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
@@ -1017,6 +1023,46 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
               <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Transport Type</label>
+                    <select
+                      value={formData.transport_type}
+                      onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="tcp">TCP</option>
+                      <option value="ws">WebSocket (WS)</option>
+                      <option value="mws">Multiplex WS (MWS)</option>
+                      <option value="grpc">gRPC</option>
+                      <option value="h2">HTTP/2 (H2)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Security Type</label>
+                    <select
+                      value={formData.security_type}
+                      onChange={(e) => setFormData({...formData, security_type: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="none">None</option>
+                      <option value="tls">TLS</option>
+                      <option value="utls">uTLS (Stealth TLS)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Failover IPs</label>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to if the main IP is blocked (One per line)</p>
+                  <textarea
+                    value={formData.failover_ips}
+                    onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="1.2.3.4&#10;5.6.7.8"
+                    rows={2}
+                  />
+                </div>
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>
@@ -1202,6 +1248,9 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     ws_path: '',
     is_reverse: false,
     stealth_domain: '',
+    transport_type: 'tcp',
+    security_type: 'none',
+    failover_ips: '',
     rate_limit_mbps: '',
     allowed_ips: '',
     rate_limit_enabled: false,
@@ -1407,6 +1456,9 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           ws_path: formData.ws_path,
           is_reverse: formData.is_reverse,
           stealth_domain: formData.stealth_domain || null,
+          transport_type: formData.transport_type,
+          security_type: formData.security_type,
+          failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
             ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
@@ -1828,6 +1880,46 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
               <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Transport Type</label>
+                    <select
+                      value={formData.transport_type}
+                      onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="tcp">TCP</option>
+                      <option value="ws">WebSocket (WS)</option>
+                      <option value="mws">Multiplex WS (MWS)</option>
+                      <option value="grpc">gRPC</option>
+                      <option value="h2">HTTP/2 (H2)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Security Type</label>
+                    <select
+                      value={formData.security_type}
+                      onChange={(e) => setFormData({...formData, security_type: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="none">None</option>
+                      <option value="tls">TLS</option>
+                      <option value="utls">uTLS (Stealth TLS)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Failover IPs</label>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to if the main IP is blocked (One per line)</p>
+                  <textarea
+                    value={formData.failover_ips}
+                    onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="1.2.3.4&#10;5.6.7.8"
+                    rows={2}
+                  />
+                </div>
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>

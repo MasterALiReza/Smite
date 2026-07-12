@@ -1085,8 +1085,15 @@ class GostAdapter:
             raise ValueError("GOST requires 'control_port' or 'remote_port' in spec")
             
         auth_token = spec.get('auth_token', '')
-        transport = spec.get('transport', 'tcp')
+        transport_type = spec.get('transport_type') or spec.get('transport') or 'tcp'
+        security_type = spec.get('security_type', 'none')
         use_ipv6 = spec.get('use_ipv6', False)
+        
+        gost_type = transport_type
+        if transport_type == "ws" and security_type in ["tls", "utls"]:
+            gost_type = "wss"
+        elif transport_type == "mws" and security_type in ["tls", "utls"]:
+            gost_type = "mwss"
         
         config = {
             "services": [],
@@ -1102,9 +1109,16 @@ class GostAdapter:
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
                 
-            listener = {"type": transport}
+            listener = {"type": gost_type}
             if listener_metadata:
                 listener["metadata"] = listener_metadata
+            
+            if security_type == "tls":
+                # Basic TLS doesn't require specific config on server unless we provide certs
+                pass
+            elif security_type == "utls":
+                # Server side doesn't do uTLS actively, it just accepts TLS
+                pass
                 
             # 1. Access Control (ACL)
             if spec.get("allowed_ips"):
@@ -1162,9 +1176,18 @@ class GostAdapter:
             if spec.get("custom_sni"):
                 dialer_tls["serverName"] = spec.get("custom_sni")
             
-            # 3. Stealth TLS (Overrides custom_sni if both exist, as it's specifically for anti-DPI)
             if spec.get("stealth_domain"):
                 dialer_tls["serverName"] = spec.get("stealth_domain")
+                
+            if security_type == "utls":
+                # Provide uTLS config
+                dialer_tls["utls"] = {"client": "chrome"}
+                if not dialer_tls.get("serverName"):
+                    dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
+                # When using uTLS/TLS often we don't have valid cert for our own server IP
+                dialer_tls["insecureSkipVerify"] = True
+            elif security_type == "tls":
+                dialer_tls["insecureSkipVerify"] = True
                 
             # 2. Rate Limit (Limiter)
             if spec.get("rate_limit_mbps"):
@@ -1187,10 +1210,10 @@ class GostAdapter:
                     }
                 }
                 
-            dialer = {"type": transport}
+            dialer = {"type": gost_type}
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if dialer_tls:
+            if security_type in ["tls", "utls"] or dialer_tls:
                 dialer["tls"] = dialer_tls
             if dialer_mux:
                 dialer["mux"] = dialer_mux
@@ -1201,27 +1224,51 @@ class GostAdapter:
                 "matchers": ["geoip:ir"]
             })
                 
+            # Generate node objects for primary and failover IPs
+            hop_nodes = []
+            
+            # Primary IP node
+            hop_nodes.append({
+                "name": f"node-{tunnel_id}-primary",
+                "addr": target_addr,
+                "connector": {
+                    "type": "relay",
+                    "auth": {
+                        "username": auth_token,
+                        "password": ""
+                    }
+                },
+                "dialer": dialer,
+                "bypass": f"bypass-ir-{tunnel_id}"
+            })
+            
+            # Failover IPs
+            failover_ips = spec.get("failover_ips", [])
+            if failover_ips:
+                for i, f_ip in enumerate(failover_ips):
+                    if not f_ip or not f_ip.strip(): continue
+                    f_addr = f"[{f_ip.strip()}]:{control_port}" if ":" in f_ip and not f_ip.startswith("[") else f"{f_ip.strip()}:{control_port}"
+                    hop_nodes.append({
+                        "name": f"node-{tunnel_id}-failover-{i+1}",
+                        "addr": f_addr,
+                        "connector": {
+                            "type": "relay",
+                            "auth": {
+                                "username": auth_token,
+                                "password": ""
+                            }
+                        },
+                        "dialer": dialer,
+                        "bypass": f"bypass-ir-{tunnel_id}"
+                    })
+                
             # Create Relay Chain
             config["chains"].append({
                 "name": f"chain-{tunnel_id}",
                 "hops": [
                     {
                         "name": f"hop-{tunnel_id}",
-                        "nodes": [
-                            {
-                                "name": f"node-{tunnel_id}",
-                                "addr": target_addr,
-                                "connector": {
-                                    "type": "relay",
-                                    "auth": {
-                                        "username": auth_token,
-                                        "password": ""
-                                    }
-                                },
-                                "dialer": dialer,
-                                "bypass": f"bypass-ir-{tunnel_id}"
-                            }
-                        ]
+                        "nodes": hop_nodes
                     }
                 ]
             })

@@ -1,0 +1,21 @@
+feat(gost): complete overhaul of GOST v3 integration for advanced DPI circumvention
+
+This major upgrade entirely rewrites the GOST v3 tunneling architecture across 
+the database, backend, node adapter, and frontend layers to support high-performance, 
+DPI-resistant tunnels.
+
+Key improvements:
+- Refactored Client/Server Topology: Implemented a robust reverse tunnel architecture 
+  where the foreign node correctly acts as the server (relay+wss) and the domestic 
+  node acts as the client to reliably bypass strict filtering.
+- Native Config Generation: Deprecated error-prone CLI arguments in favor of dynamically 
+  generating native `gost.json` config blocks (`services` and `chains`) on the nodes.
+- Yamux Multiplexing (Gaming Mode): Integrated Yamux muxing natively via `mconfig` to 
+  drastically reduce handshake latency and optimize UDP forwarding for gaming.
+- CDN & WebSocket Masquerading (CDN Mode): Added support for passing traffic through 
+  Cloudflare/CDNs with customizable `Host`, `SNI`, and specific `WebSocket Path` headers.
+- UI/UX Enhancements: Introduced an "Advanced GOST Settings" dynamic section in the 
+  React frontend, complete with conditional rendering and pre-submission validation.
+
+Resolves critical architectural flaws in previous GOST implementations and fully 
+prepares the system for censorship-resistant routing.
