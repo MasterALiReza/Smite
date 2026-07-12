@@ -1,0 +1,48 @@
+# Smite Node - Docker Compose Configuration
+# Usage: cd node && docker compose up -d
+
+services:
+  smite-node:
+    image: ghcr.io/zzedix/smite-node:${SMITE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smite-node
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./certs:/etc/smite-node/certs:ro
+      - ./config:/etc/smite-node
+      - node-data:/var/lib/smite-node
+    env_file:
+      - .env
+    environment:
+      - NODE_API_PORT=${NODE_API_PORT:-8888}
+      - NODE_NAME=${NODE_NAME:-node-1}
+      - PANEL_CA_PATH=${PANEL_CA_PATH:-/etc/smite-node/certs/ca.crt}
+      - PANEL_ADDRESS=${PANEL_ADDRESS}
+      - PANEL_API_PORT=${PANEL_API_PORT:-8000}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${NODE_API_PORT:-8888}/api/agent/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Security: Drop all capabilities except those needed
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  node-data:
+    driver: local
+    name: smite-node-data

@@ -1,0 +1,81 @@
+services:
+  smite-panel:
+    image: ghcr.io/zzedix/smite-panel:${SMITE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: panel/Dockerfile
+    container_name: smite-panel
+    network_mode: host
+    volumes:
+      - ./panel/data:/app/data
+      - ./panel/certs:/app/certs
+      - ./.env:/app/config/.env:ro
+      - ./docker-compose.yml:/app/config/docker-compose.yml:ro
+    env_file:
+      - .env
+    environment:
+      - PANEL_HOST=${PANEL_HOST:-0.0.0.0}
+      - DB_TYPE=${DB_TYPE:-sqlite}
+      - DB_PATH=${DB_PATH:-./data/smite.db}
+      - SMITE_VERSION=${SMITE_VERSION:-latest}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; port=os.environ.get('PANEL_PORT','8000'); urllib.request.urlopen(f'http://localhost:{port}/api/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:alpine
+    container_name: smite-nginx
+    network_mode: host
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/entrypoint.sh:/docker-entrypoint.d/10-smitenginx.sh:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    env_file:
+      - .env
+    environment:
+      - SMITE_HTTP_PORT=${SMITE_HTTP_PORT:-80}
+      - SMITE_HTTPS_PORT=${SMITE_HTTPS_PORT:-443}
+      - SMITE_SSL_DOMAIN=${SMITE_SSL_DOMAIN:-REPLACE_DOMAIN}
+      - PANEL_PORT=${PANEL_PORT:-8000}
+    depends_on:
+      - smite-panel
+    restart: unless-stopped
+    profiles:
+      - https
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smite-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - smite-panel
+    restart: unless-stopped
+    networks:
+      - smite-network
+    profiles:
+      - frontend
+
+networks:
+  smite-network:
+    driver: bridge
+    name: smite-network
+
+volumes:
+  panel-data:
+    driver: local
+  panel-certs:
+    driver: local
+

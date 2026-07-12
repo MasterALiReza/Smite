@@ -1,0 +1,51 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+README*
+LICENSE*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Scripts (not needed in images)
+scripts/
+cli/
+
+# Assets (only needed for build)
+assets/
+
+# Tests
+test/
+tests/
+*.test.*
+*_test.*
+
+# Misc
+*.log
+*.tmp
+.cache/
+

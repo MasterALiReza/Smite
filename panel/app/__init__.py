@@ -1,0 +1,2 @@
+"""Smite Panel Application"""
+
