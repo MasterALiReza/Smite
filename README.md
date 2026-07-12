@@ -47,7 +47,7 @@
 ### Quick Install
 
 ```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/zZedix/Smite/main/scripts/install.sh)"
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/install.sh)"
 ```
 
 <details>
@@ -55,7 +55,7 @@ sudo bash -c "$(curl -sL https://raw.githubusercontent.com/zZedix/Smite/main/scr
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/zZedix/Smite.git
+git clone https://github.com/MasterALiReza/Smite.git
 cd Smite
 ```
 
@@ -96,7 +96,7 @@ smite admin create
 ### Quick Install
 
 ```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/zZedix/Smite/main/scripts/smite-node.sh)"
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh)"
 ```
 
 <details>
@@ -181,14 +181,13 @@ smite-node edit-env     # Edit .env file
 
 ## 📖 Tunnel Types
 
-### GOST Tunnels (Iran Node Forwarding)
-- **TCP**: Simple TCP forwarding
-- **UDP**: UDP packet forwarding
-- **WebSocket (WS)**: WebSocket protocol forwarding
-- **gRPC**: gRPC protocol forwarding
-- **TCPMux**: TCP multiplexing for multiple connections
+### GOST Tunnels (Advanced Tunneling)
+- **Dual-Node Reverse Architecture**: Server role on foreign nodes and Client role on domestic nodes to mask traffic directionality
+- **Yamux Multiplexing**: Advanced Yamux muxing over WebSocket to consolidate connections and prevent traffic analysis
+- **Cloudflare CDN Mode**: Dynamic WebSocket path, custom Host headers, and SNI spoofing for seamless CDN routing
+- **Supported Protocols**: TCP, UDP, WebSocket (WS), gRPC, and TCPMux
 
-GOST tunnels run on Iran nodes and forward traffic to Foreign servers. When creating a GOST tunnel, specify both an Iran node and a Foreign server. The Iran node will listen on the specified port and forward all traffic to the Foreign server's IP address and port.
+GOST tunnels support both straightforward port forwarding and advanced Dual-Node Reverse tunneling. In reverse mode, the foreign server listens for incoming connections from the Iran node, allowing you to bypass strict DPI systems effectively.
 
 ### Backhaul Tunnels (Reverse Tunnel)
 - **TCP / UDP**: Low-latency reverse tunnels with optional UDP-over-TCP
@@ -241,7 +240,7 @@ If you find Smite useful and want to support its development, consider making a 
 
 <div align="center">
   
-  **Made with ❤️ by [zZedix](https://github.com/zZedix)**
+  **Made with ❤️ by [MasterALiReza](https://github.com/MasterALiReza)**
   
   *Securing the digital world, one line of code at a time!*
   
