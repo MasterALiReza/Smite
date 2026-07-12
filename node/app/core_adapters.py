@@ -1273,45 +1273,55 @@ class GostAdapter:
                 ]
             })
             
+            tunnel_proto = spec.get("type", "tcp").lower()
+            # If the type is legacy or invalid, default to tcp forwarding
+            if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
+                tunnel_proto = "tcp"
+
             # Create Local Listeners
             for port in ports:
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"
                 
-                listener_tcp = {"type": "tcp"}
-                listener_udp = {"type": "udp"}
-                if spec.get("rate_limit_mbps"):
-                    listener_tcp["limiter"] = f"limiter-{tunnel_id}"
-                    listener_udp["limiter"] = f"limiter-{tunnel_id}"
+                if tunnel_proto in ["tcp", "tcp+udp"]:
+                    listener_tcp = {"type": "tcp"}
+                    if spec.get("rate_limit_mbps"):
+                        listener_tcp["limiter"] = f"limiter-{tunnel_id}"
+                    
+                    config["services"].append({
+                        "name": f"tcp-in-{port_num}",
+                        "addr": listen_addr,
+                        "handler": {
+                            "type": "tcp",
+                            "chain": f"chain-{tunnel_id}"
+                        },
+                        "listener": listener_tcp,
+                        "forwarder": {
+                            "nodes": [
+                                {"name": f"target-tcp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                            ]
+                        }
+                    })
                 
-                config["services"].append({
-                    "name": f"tcp-in-{port_num}",
-                    "addr": listen_addr,
-                    "handler": {
-                        "type": "tcp",
-                        "chain": f"chain-{tunnel_id}"
-                    },
-                    "listener": listener_tcp,
-                    "forwarder": {
-                        "nodes": [
-                            {"name": f"target-tcp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
-                        ]
-                    }
-                })
-                config["services"].append({
-                    "name": f"udp-in-{port_num}",
-                    "addr": listen_addr,
-                    "handler": {
-                        "type": "udp",
-                        "chain": f"chain-{tunnel_id}"
-                    },
-                    "listener": listener_udp,
-                    "forwarder": {
-                        "nodes": [
-                            {"name": f"target-udp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
-                        ]
-                    }
-                })
+                if tunnel_proto in ["udp", "tcp+udp"]:
+                    listener_udp = {"type": "udp"}
+                    if spec.get("rate_limit_mbps"):
+                        listener_udp["limiter"] = f"limiter-{tunnel_id}"
+                    
+                    config["services"].append({
+                        "name": f"udp-in-{port_num}",
+                        "addr": listen_addr,
+                        "handler": {
+                            "type": "udp",
+                            "chain": f"chain-{tunnel_id}"
+                        },
+                        "listener": listener_udp,
+                        "forwarder": {
+                            "nodes": [
+                                {"name": f"target-udp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                            ]
+                        }
+                    })
 
         # Remove empty blocks
         if not config["chains"]:

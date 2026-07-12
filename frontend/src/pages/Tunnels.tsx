@@ -1630,8 +1630,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                   <>
                     <option value="tcp">TCP</option>
                     <option value="udp">UDP</option>
-                    <option value="grpc">gRPC</option>
-                    <option value="tcpmux">TCPMux</option>
+                    <option value="tcp+udp">TCP + UDP</option>
                   </>
                 )}
               </select>

@@ -288,7 +288,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     await db.refresh(db_tunnel)
     
     try:
-        needs_gost_forwarding = db_tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and db_tunnel.core == "gost" and not is_reverse_tunnel
+        needs_gost_forwarding = db_tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and db_tunnel.core == "gost" and not is_reverse_tunnel
         needs_rathole_server = False
         needs_backhaul_server = False
         needs_chisel_server = False
@@ -1288,7 +1288,7 @@ async def update_tunnel(
     
     if spec_changed:
         try:
-            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.is_reverse and not tunnel.node_id
+            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and tunnel.core == "gost" and not tunnel.is_reverse and not tunnel.node_id
             needs_rathole_server = tunnel.core == "rathole"
             needs_backhaul_server = tunnel.core == "backhaul"
             needs_chisel_server = tunnel.core == "chisel"
@@ -2025,7 +2025,7 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
     
-    needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc"] and tunnel.core == "gost" and not tunnel.node_id
+    needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and tunnel.core == "gost" and not tunnel.node_id
     needs_rathole_server = tunnel.core == "rathole"
     needs_backhaul_server = tunnel.core == "backhaul"
     needs_chisel_server = tunnel.core == "chisel"
