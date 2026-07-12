@@ -48,6 +48,30 @@ async def migrate_db():
                 "ALTER TABLE tunnels ADD COLUMN iran_node_id VARCHAR"
             ))
 
+        if "cdn_mode" not in columns:
+            logger.info("Adding cdn_mode column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN cdn_mode BOOLEAN DEFAULT FALSE"))
+
+        if "gaming_mode" not in columns:
+            logger.info("Adding gaming_mode column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN gaming_mode BOOLEAN DEFAULT FALSE"))
+
+        if "custom_host" not in columns:
+            logger.info("Adding custom_host column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN custom_host VARCHAR"))
+
+        if "custom_sni" not in columns:
+            logger.info("Adding custom_sni column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN custom_sni VARCHAR"))
+
+        if "ws_path" not in columns:
+            logger.info("Adding ws_path column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN ws_path VARCHAR"))
+
+        if "is_reverse" not in columns:
+            logger.info("Adding is_reverse column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN is_reverse BOOLEAN DEFAULT FALSE"))
+
 
 async def init_db():
     """Initialize database tables"""
