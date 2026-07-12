@@ -103,6 +103,10 @@ class TunnelCreate(BaseModel):
     custom_sni: str | None = None
     ws_path: str | None = None
     is_reverse: bool | None = False
+    port_ranges: list[str] | None = None
+    stealth_domain: str | None = None
+    allowed_ips: list[str] | None = None
+    rate_limit_mbps: float | None = None
 
 
 class TunnelUpdate(BaseModel):
@@ -117,6 +121,10 @@ class TunnelUpdate(BaseModel):
     node_id: str | None = None
     foreign_node_id: str | None = None
     iran_node_id: str | None = None
+    port_ranges: list[str] | None = None
+    stealth_domain: str | None = None
+    allowed_ips: list[str] | None = None
+    rate_limit_mbps: float | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -134,6 +142,10 @@ class TunnelResponse(BaseModel):
     custom_sni: str | None = None
     ws_path: str | None = None
     is_reverse: bool | None = False
+    port_ranges: list[str] | None = None
+    stealth_domain: str | None = None
+    allowed_ips: list[str] | None = None
+    rate_limit_mbps: float | None = None
     status: str
     error_message: str | None = None
     revision: int
@@ -256,6 +268,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         custom_sni=tunnel.custom_sni,
         ws_path=tunnel.ws_path,
         is_reverse=tunnel.is_reverse or False,
+        port_ranges=tunnel.port_ranges,
+        stealth_domain=tunnel.stealth_domain,
+        allowed_ips=tunnel.allowed_ips,
+        rate_limit_mbps=tunnel.rate_limit_mbps,
         status="pending"
     )
     db.add(db_tunnel)
@@ -598,6 +614,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 server_spec["custom_host"] = db_tunnel.custom_host
                 server_spec["custom_sni"] = db_tunnel.custom_sni
                 server_spec["ws_path"] = db_tunnel.ws_path
+                server_spec["stealth_domain"] = db_tunnel.stealth_domain
+                server_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
+                server_spec["allowed_ips"] = db_tunnel.allowed_ips
+                server_spec["port_ranges"] = db_tunnel.port_ranges
                 
                 # Foreign Node config (GOST Server)
                 client_spec["mode"] = "server"
@@ -605,6 +625,18 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 client_spec["auth_token"] = auth_token
                 client_spec["transport"] = transport
                 client_spec["ports"] = ports # Usually relay servers don't need ports, but keep for node adapter reference
+                client_spec["stealth_domain"] = db_tunnel.stealth_domain
+                client_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
+                client_spec["port_ranges"] = db_tunnel.port_ranges
+                
+                # Add Iran Node IP to allowed_ips safely so it isn't blocked
+                if db_tunnel.allowed_ips:
+                    allowed_ips_foreign = db_tunnel.allowed_ips.copy()
+                    if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
+                        allowed_ips_foreign.append(iran_node_ip)
+                    client_spec["allowed_ips"] = allowed_ips_foreign
+                else:
+                    client_spec["allowed_ips"] = None
             
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
@@ -1632,6 +1664,10 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     server_spec["custom_host"] = getattr(tunnel, "custom_host", None)
                     server_spec["custom_sni"] = getattr(tunnel, "custom_sni", None)
                     server_spec["ws_path"] = getattr(tunnel, "ws_path", None)
+                    server_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
+                    server_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+                    server_spec["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
+                    server_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
                     
                     # Foreign Node config (GOST Server)
                     client_spec = spec.copy()
@@ -1640,6 +1676,19 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     client_spec["auth_token"] = auth_token
                     client_spec["transport"] = transport
                     client_spec["ports"] = ports
+                    client_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
+                    client_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+                    client_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
+                    
+                    allowed_ips = getattr(tunnel, "allowed_ips", None)
+                    if allowed_ips:
+                        allowed_ips_foreign = allowed_ips.copy()
+                        iran_ip = iran_node.node_metadata.get("ip_address")
+                        if iran_ip and iran_ip not in allowed_ips_foreign:
+                            allowed_ips_foreign.append(iran_ip)
+                        client_spec["allowed_ips"] = allowed_ips_foreign
+                    else:
+                        client_spec["allowed_ips"] = None
                 
                 elif tunnel.core == "frp":
                     bind_port = spec.get("bind_port")
@@ -1851,6 +1900,15 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         
         if tunnel.core == "gost":
             spec_for_node["type"] = tunnel.type
+            spec_for_node["cdn_mode"] = getattr(tunnel, "cdn_mode", False)
+            spec_for_node["gaming_mode"] = getattr(tunnel, "gaming_mode", False)
+            spec_for_node["custom_host"] = getattr(tunnel, "custom_host", None)
+            spec_for_node["custom_sni"] = getattr(tunnel, "custom_sni", None)
+            spec_for_node["ws_path"] = getattr(tunnel, "ws_path", None)
+            spec_for_node["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
+            spec_for_node["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+            spec_for_node["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
+            spec_for_node["port_ranges"] = getattr(tunnel, "port_ranges", None)
         
         if tunnel.core == "frp":
             try:

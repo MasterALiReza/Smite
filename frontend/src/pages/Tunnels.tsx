@@ -587,6 +587,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     custom_sni: tunnel.custom_sni || '',
     ws_path: tunnel.ws_path || '',
     is_reverse: tunnel.is_reverse || false,
+    stealth_domain: tunnel.stealth_domain || '',
+    rate_limit_mbps: tunnel.rate_limit_mbps ? tunnel.rate_limit_mbps.toString() : '',
+    allowed_ips: tunnel.allowed_ips && Array.isArray(tunnel.allowed_ips) ? tunnel.allowed_ips.join('\n') : '',
+    rate_limit_enabled: !!tunnel.rate_limit_mbps,
+    allowed_ips_enabled: !!(tunnel.allowed_ips && tunnel.allowed_ips.length > 0),
   })
   const parsedBackhaul = parseBackhaulSpec(tunnel.spec, tunnel.type)
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(parsedBackhaul.state)
@@ -600,20 +605,49 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
       
       const useV4ToV6 = updatedSpec.use_ipv6 || false
       
-      // Parse comma-separated ports
-      const parsePorts = (portsStr: string): number[] => {
-        return portsStr
+      // Parse comma-separated ports and ranges
+      const parsePortsAndRanges = (portsStr: string): { ports: number[], port_ranges: string[] } => {
+        const ports: number[] = []
+        const port_ranges: string[] = []
+        
+        portsStr.split(',').forEach(p => {
+          const trimmed = p.trim()
+          if (!trimmed) return
+          if (trimmed.includes('-')) {
+            port_ranges.push(trimmed)
+          } else {
+            const num = parseInt(trimmed)
+            if (!isNaN(num) && num > 0 && num <= 65535) {
+              ports.push(num)
+            }
+          }
+        })
+        return { ports, port_ranges }
+      }
+      
+      let ports: number[] = []
+      let port_ranges: string[] = []
+      
+      if (tunnel.core === 'gost') {
+        const parsed = parsePortsAndRanges(formData.ports)
+        ports = parsed.ports
+        port_ranges = parsed.port_ranges
+        if (ports.length === 0 && port_ranges.length === 0) {
+          alert('Please enter at least one valid port or port range')
+          return
+        }
+      } else {
+        ports = formData.ports
           .split(',')
           .map(p => p.trim())
           .filter(p => p)
           .map(p => parseInt(p))
           .filter(p => !isNaN(p) && p > 0 && p <= 65535)
-      }
-      
-      const ports = parsePorts(formData.ports)
-      if (ports.length === 0) {
-        alert('Please enter at least one valid port')
-        return
+          
+        if (ports.length === 0) {
+          alert('Please enter at least one valid port')
+          return
+        }
       }
       
       if (tunnel.core === 'rathole') {
@@ -634,8 +668,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         const remoteIp = formData.remote_ip || '127.0.0.1'
         updatedSpec.remote_ip = remoteIp
         updatedSpec.ports = ports
-        updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
-        updatedSpec.listen_port = ports[0]  // Keep for backward compatibility
+        updatedSpec.port_ranges = port_ranges
+        const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
+        updatedSpec.remote_port = fallbackPort  // Keep for backward compatibility
+        updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
       } else if (tunnel.core === 'chisel') {
         updatedSpec.ports = ports
         const firstPort = ports[0]
@@ -685,7 +721,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse
+          is_reverse: formData.is_reverse,
+          stealth_domain: formData.stealth_domain || null,
+          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
+          allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
+            ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
+            : null,
+          port_ranges: port_ranges.length > 0 ? port_ranges : null
         }),
         node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
         iran_node_id: formData.iran_node_id,
@@ -736,7 +778,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Ports
+                  Ports & Ranges
                 </label>
                 <input
                   type="text"
@@ -745,10 +787,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                     setFormData({ ...formData, ports: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="8080,8081,8082"
+                  placeholder="8080, 8081, 10000-20000"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Ports (comma-separated, same for panel and target server)
+                  Ports or ranges (comma-separated, same for panel and target server)
                 </p>
               </div>
             </>
@@ -1008,6 +1050,77 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   </label>
                 </div>
 
+                {/* Security & Traffic Limits */}
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider text-red-500">Security & Limits</h4>
+                  <div className="space-y-4">
+                    
+                    {/* IP Whitelist Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">IP Whitelist (ACL)</label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Restrict access to specific IPs (One per line)</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={formData.allowed_ips_enabled} onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})} />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    {formData.allowed_ips_enabled && (
+                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
+                        <textarea
+                          value={formData.allowed_ips}
+                          onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                          placeholder="192.168.1.1&#10;10.0.0.0/24"
+                          rows={3}
+                        />
+                      </div>
+                    )}
+
+                    {/* Rate Limit Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Bandwidth Limit (Client-side)</label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Limit speed per connection to save server bandwidth</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={formData.rate_limit_enabled} onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})} />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    {formData.rate_limit_enabled && (
+                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={formData.rate_limit_mbps}
+                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="e.g. 5"
+                            min="0.1"
+                            step="0.1"
+                          />
+                          <span className="text-sm text-gray-600 dark:text-gray-400">Mbps</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stealth Domain */}
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Stealth SNI (TLS Spoofing)</label>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mask your traffic as a legitimate website</p>
+                      <input
+                        type="text"
+                        value={formData.stealth_domain}
+                        onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g. www.google.com"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {formData.cdn_mode && (
                   <div className="grid grid-cols-1 gap-4 p-4 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-gray-100 dark:border-gray-700 mt-2">
                     <div>
@@ -1088,6 +1201,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     custom_sni: '',
     ws_path: '',
     is_reverse: false,
+    stealth_domain: '',
+    rate_limit_mbps: '',
+    allowed_ips: '',
+    rate_limit_enabled: false,
+    allowed_ips_enabled: false,
   })
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(createDefaultBackhaulState())
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(createDefaultBackhaulAdvancedState())
@@ -1114,20 +1232,49 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       
       spec.use_ipv6 = formData.use_ipv6 || false
       
-      // Parse comma-separated ports
-      const parsePorts = (portsStr: string): number[] => {
-        return portsStr
+      // Parse comma-separated ports and ranges
+      const parsePortsAndRanges = (portsStr: string): { ports: number[], port_ranges: string[] } => {
+        const ports: number[] = []
+        const port_ranges: string[] = []
+        
+        portsStr.split(',').forEach(p => {
+          const trimmed = p.trim()
+          if (!trimmed) return
+          if (trimmed.includes('-')) {
+            port_ranges.push(trimmed)
+          } else {
+            const num = parseInt(trimmed)
+            if (!isNaN(num) && num > 0 && num <= 65535) {
+              ports.push(num)
+            }
+          }
+        })
+        return { ports, port_ranges }
+      }
+      
+      let ports: number[] = []
+      let port_ranges: string[] = []
+      
+      if (formData.core === 'gost') {
+        const parsed = parsePortsAndRanges(formData.ports)
+        ports = parsed.ports
+        port_ranges = parsed.port_ranges
+        if (ports.length === 0 && port_ranges.length === 0) {
+          alert('Please enter at least one valid port or port range')
+          return
+        }
+      } else {
+        ports = formData.ports
           .split(',')
           .map(p => p.trim())
           .filter(p => p)
           .map(p => parseInt(p))
           .filter(p => !isNaN(p) && p > 0 && p <= 65535)
-      }
-      
-      const ports = parsePorts(formData.ports)
-      if (ports.length === 0) {
-        alert('Please enter at least one valid port')
-        return
+          
+        if (ports.length === 0) {
+          alert('Please enter at least one valid port')
+          return
+        }
       }
       
       if (formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux')) {
@@ -1135,8 +1282,10 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         // For GOST, ports are equal (listen_port = forward_to port)
         spec.remote_ip = remoteIp
         spec.ports = ports  // Store multiple ports
-        spec.listen_port = ports[0]  // Keep first port for backward compatibility
-        spec.remote_port = ports[0]  // Keep first port for backward compatibility
+        spec.port_ranges = port_ranges
+        const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
+        spec.listen_port = fallbackPort  // Keep first port for backward compatibility
+        spec.remote_port = fallbackPort  // Keep first port for backward compatibility
       }
       
       if (formData.core === 'rathole') {
@@ -1249,9 +1398,6 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         name: formData.name,
         core: formData.core,
         type: tunnelType,
-        node_id: formData.node_id || formData.iran_node_id || null,
-        foreign_node_id: formData.foreign_node_id || null,
-        iran_node_id: formData.iran_node_id || formData.node_id || null,
         spec: spec,
         ...(formData.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
@@ -1259,8 +1405,17 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse
-        })
+          is_reverse: formData.is_reverse,
+          stealth_domain: formData.stealth_domain || null,
+          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
+          allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
+            ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
+            : null,
+          port_ranges: port_ranges.length > 0 ? port_ranges : null
+        }),
+        node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
+        foreign_node_id: formData.foreign_node_id || null,
+        iran_node_id: formData.iran_node_id || formData.node_id || null
       }
       await api.post('/tunnels', payload)
       onSuccess()
@@ -1452,7 +1607,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  {t.tunnels.ports}
+                  Ports & Ranges
                 </label>
                 <input
                   type="text"
@@ -1461,11 +1616,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     setFormData({ ...formData, ports: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="8080,8081,8082"
+                  placeholder="8080, 8081, 10000-20000"
                   required
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {t.tunnels.portsDescription}
+                  Ports or ranges (comma-separated, same for panel and target server)
                 </p>
               </div>
             </div>
@@ -1704,6 +1859,77 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     <input type="checkbox" className="sr-only peer" checked={formData.gaming_mode} onChange={(e) => setFormData({...formData, gaming_mode: e.target.checked})} />
                     <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
                   </label>
+                </div>
+
+                {/* Security & Traffic Limits */}
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider text-red-500">Security & Limits</h4>
+                  <div className="space-y-4">
+                    
+                    {/* IP Whitelist Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">IP Whitelist (ACL)</label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Restrict access to specific IPs (One per line)</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={formData.allowed_ips_enabled} onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})} />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    {formData.allowed_ips_enabled && (
+                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
+                        <textarea
+                          value={formData.allowed_ips}
+                          onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                          placeholder="192.168.1.1&#10;10.0.0.0/24"
+                          rows={3}
+                        />
+                      </div>
+                    )}
+
+                    {/* Rate Limit Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Bandwidth Limit (Client-side)</label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Limit speed per connection to save server bandwidth</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={formData.rate_limit_enabled} onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})} />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    {formData.rate_limit_enabled && (
+                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={formData.rate_limit_mbps}
+                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="e.g. 5"
+                            min="0.1"
+                            step="0.1"
+                          />
+                          <span className="text-sm text-gray-600 dark:text-gray-400">Mbps</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stealth Domain */}
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Stealth SNI (TLS Spoofing)</label>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mask your traffic as a legitimate website</p>
+                      <input
+                        type="text"
+                        value={formData.stealth_domain}
+                        onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g. www.google.com"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {formData.cdn_mode && (

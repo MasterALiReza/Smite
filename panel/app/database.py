@@ -72,6 +72,22 @@ async def migrate_db():
             logger.info("Adding is_reverse column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN is_reverse BOOLEAN DEFAULT FALSE"))
 
+        if "port_ranges" not in columns:
+            logger.info("Adding port_ranges column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN port_ranges JSON"))
+
+        if "stealth_domain" not in columns:
+            logger.info("Adding stealth_domain column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN stealth_domain VARCHAR"))
+
+        if "allowed_ips" not in columns:
+            logger.info("Adding allowed_ips column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN allowed_ips JSON"))
+
+        if "rate_limit_mbps" not in columns:
+            logger.info("Adding rate_limit_mbps column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN rate_limit_mbps FLOAT"))
+
 
 async def init_db():
     """Initialize database tables"""

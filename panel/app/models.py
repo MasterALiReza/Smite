@@ -45,6 +45,10 @@ class Tunnel(Base):
     custom_sni = Column(String, nullable=True)
     ws_path = Column(String, nullable=True)
     is_reverse = Column(Boolean, default=False)
+    port_ranges = Column(JSON, nullable=True)
+    stealth_domain = Column(String, nullable=True)
+    allowed_ips = Column(JSON, nullable=True)
+    rate_limit_mbps = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -1106,6 +1106,16 @@ class GostAdapter:
             if listener_metadata:
                 listener["metadata"] = listener_metadata
                 
+            # 1. Access Control (ACL)
+            if spec.get("allowed_ips"):
+                config["admissions"] = [
+                    {
+                        "name": f"adm-{tunnel_id}",
+                        "matchers": spec.get("allowed_ips")
+                    }
+                ]
+                listener["admission"] = f"adm-{tunnel_id}"
+                
             service = {
                 "name": f"gost-server-{tunnel_id}",
                 "addr": bind_addr,
@@ -1128,8 +1138,12 @@ class GostAdapter:
                 if listen_port:
                     ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
             
+            # 4. Port Ranges
+            if spec.get("port_ranges"):
+                ports.extend(spec.get("port_ranges"))
+            
             if not ports:
-                raise ValueError("GOST client requires 'ports' array or 'listen_port' in spec")
+                raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
                 
             server_ip = spec.get('server_ip')
             if not server_ip:
@@ -1147,6 +1161,22 @@ class GostAdapter:
             dialer_tls = {}
             if spec.get("custom_sni"):
                 dialer_tls["serverName"] = spec.get("custom_sni")
+            
+            # 3. Stealth TLS (Overrides custom_sni if both exist, as it's specifically for anti-DPI)
+            if spec.get("stealth_domain"):
+                dialer_tls["serverName"] = spec.get("stealth_domain")
+                
+            # 2. Rate Limit (Limiter)
+            if spec.get("rate_limit_mbps"):
+                rate_bytes = int(spec.get("rate_limit_mbps") * 125000) # Mbps to Bytes/sec
+                config["limiters"] = [
+                    {
+                        "name": f"limiter-{tunnel_id}",
+                        "limits": [
+                            f"{rate_bytes}"
+                        ]
+                    }
+                ]
                 
             dialer_mux = {}
             if spec.get("gaming_mode"):
@@ -1201,6 +1231,12 @@ class GostAdapter:
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"
                 
+                listener_tcp = {"type": "tcp"}
+                listener_udp = {"type": "udp"}
+                if spec.get("rate_limit_mbps"):
+                    listener_tcp["limiter"] = f"limiter-{tunnel_id}"
+                    listener_udp["limiter"] = f"limiter-{tunnel_id}"
+                
                 config["services"].append({
                     "name": f"tcp-in-{port_num}",
                     "addr": listen_addr,
@@ -1208,9 +1244,7 @@ class GostAdapter:
                         "type": "tcp",
                         "chain": f"chain-{tunnel_id}"
                     },
-                    "listener": {
-                        "type": "tcp"
-                    },
+                    "listener": listener_tcp,
                     "forwarder": {
                         "nodes": [
                             {"name": f"target-tcp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
@@ -1224,9 +1258,7 @@ class GostAdapter:
                         "type": "udp",
                         "chain": f"chain-{tunnel_id}"
                     },
-                    "listener": {
-                        "type": "udp"
-                    },
+                    "listener": listener_udp,
                     "forwarder": {
                         "nodes": [
                             {"name": f"target-udp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
