@@ -686,7 +686,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
           is_reverse: formData.is_reverse
-        })
+        }),
+        node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
+        iran_node_id: formData.iran_node_id,
+        foreign_node_id: formData.foreign_node_id
       })
       onSuccess()
     } catch (error) {

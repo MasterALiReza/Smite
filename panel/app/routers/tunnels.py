@@ -114,6 +114,9 @@ class TunnelUpdate(BaseModel):
     custom_sni: str | None = None
     ws_path: str | None = None
     is_reverse: bool | None = None
+    node_id: str | None = None
+    foreign_node_id: str | None = None
+    iran_node_id: str | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -1196,7 +1199,10 @@ async def update_tunnel(
         (tunnel_update.custom_host is not None and tunnel_update.custom_host != tunnel.custom_host) or
         (tunnel_update.custom_sni is not None and tunnel_update.custom_sni != tunnel.custom_sni) or
         (tunnel_update.ws_path is not None and tunnel_update.ws_path != tunnel.ws_path) or
-        (tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse)
+        (tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse) or
+        (tunnel_update.node_id is not None and tunnel_update.node_id != tunnel.node_id) or
+        (tunnel_update.foreign_node_id is not None and tunnel_update.foreign_node_id != tunnel.foreign_node_id) or
+        (tunnel_update.iran_node_id is not None and tunnel_update.iran_node_id != tunnel.iran_node_id)
     )
     
     if tunnel_update.name is not None:
@@ -1220,6 +1226,12 @@ async def update_tunnel(
         tunnel.ws_path = tunnel_update.ws_path
     if tunnel_update.is_reverse is not None:
         tunnel.is_reverse = tunnel_update.is_reverse
+    if tunnel_update.node_id is not None:
+        tunnel.node_id = tunnel_update.node_id if tunnel_update.node_id.strip() else None
+    if tunnel_update.foreign_node_id is not None:
+        tunnel.foreign_node_id = tunnel_update.foreign_node_id if tunnel_update.foreign_node_id.strip() else None
+    if tunnel_update.iran_node_id is not None:
+        tunnel.iran_node_id = tunnel_update.iran_node_id if tunnel_update.iran_node_id.strip() else None
     
     tunnel.revision += 1
     tunnel.updated_at = datetime.utcnow()
@@ -1231,7 +1243,7 @@ async def update_tunnel(
     
     if spec_changed:
         try:
-            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.node_id
+            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.is_reverse and not tunnel.node_id
             needs_rathole_server = tunnel.core == "rathole"
             needs_backhaul_server = tunnel.core == "backhaul"
             needs_chisel_server = tunnel.core == "chisel"
@@ -1275,8 +1287,14 @@ async def update_tunnel(
                     if not forward_to:
                         tunnel.status = "error"
                         tunnel.error_message = "forward_to is required for gost tunnels"
+            else:
+                if tunnel.core == "gost" and hasattr(request.app.state, 'gost_forwarder'):
+                    try:
+                        await request.app.state.gost_forwarder.stop_forward(tunnel.id)
+                    except Exception:
+                        pass
             
-            elif needs_rathole_server:
+            if needs_rathole_server:
                 if hasattr(request.app.state, 'rathole_server_manager'):
                     remote_addr = tunnel.spec.get("remote_addr")
                     token = tunnel.spec.get("token")
