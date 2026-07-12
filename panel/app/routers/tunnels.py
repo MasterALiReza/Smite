@@ -125,12 +125,12 @@ class TunnelResponse(BaseModel):
     foreign_node_id: str | None = None
     iran_node_id: str | None = None
     spec: dict
-    cdn_mode: bool = False
-    gaming_mode: bool = False
+    cdn_mode: bool | None = False
+    gaming_mode: bool | None = False
     custom_host: str | None = None
     custom_sni: str | None = None
     ws_path: str | None = None
-    is_reverse: bool = False
+    is_reverse: bool | None = False
     status: str
     error_message: str | None = None
     revision: int
