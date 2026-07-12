@@ -1210,6 +1210,11 @@ class GostAdapter:
                     },
                     "listener": {
                         "type": "tcp"
+                    },
+                    "forwarder": {
+                        "nodes": [
+                            {"name": f"target-tcp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                        ]
                     }
                 })
                 config["services"].append({
@@ -1221,6 +1226,11 @@ class GostAdapter:
                     },
                     "listener": {
                         "type": "udp"
+                    },
+                    "forwarder": {
+                        "nodes": [
+                            {"name": f"target-udp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                        ]
                     }
                 })
 
