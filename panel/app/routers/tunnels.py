@@ -1231,12 +1231,12 @@ async def update_tunnel(
     
     if spec_changed:
         try:
-            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.is_reverse
+            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.node_id
             needs_rathole_server = tunnel.core == "rathole"
             needs_backhaul_server = tunnel.core == "backhaul"
             needs_chisel_server = tunnel.core == "chisel"
             needs_frp_server = tunnel.core == "frp"
-            needs_node_apply = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (tunnel.core == "gost" and tunnel.is_reverse)
+            needs_node_apply = tunnel.core in {"rathole", "backhaul", "chisel", "frp", "gost"}
             
             if needs_gost_forwarding:
                 listen_port = tunnel.spec.get("listen_port")
@@ -1928,7 +1928,7 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
     
-    needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc"] and tunnel.core == "gost" and not tunnel.is_reverse
+    needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc"] and tunnel.core == "gost" and not tunnel.node_id
     needs_rathole_server = tunnel.core == "rathole"
     needs_backhaul_server = tunnel.core == "backhaul"
     needs_chisel_server = tunnel.core == "chisel"
