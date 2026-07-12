@@ -1565,7 +1565,6 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         client_spec["token"] = token
                 
                 elif tunnel.core == "gost":
-                    from app.utils import parse_ports_from_spec
                     transport = spec.get("transport") or tunnel.spec.get("transport") or "ws"
                     ports = parse_ports_from_spec(tunnel.spec)
                     if not ports:
