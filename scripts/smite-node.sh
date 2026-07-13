@@ -147,8 +147,7 @@ else
         rm -rf "$TEMP_DIR"
     } || true
     if [ -d "$TEMP_DIR/node" ]; then
-        cp -f "$TEMP_DIR/node/docker-compose.yml" docker-compose.yml 2>/dev/null || true
-        cp -f "$TEMP_DIR/node/Dockerfile" Dockerfile 2>/dev/null || true
+        cp -r "$TEMP_DIR/node"/* . 2>/dev/null || true
         rm -rf "$TEMP_DIR"
     fi
 fi
