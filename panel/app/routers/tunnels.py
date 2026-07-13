@@ -196,7 +196,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             tunnel.spec["ports"] = ports
     
     is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
-        tunnel.core == "gost" and tunnel.is_reverse
+        tunnel.core == "gost" and (tunnel.is_reverse or bool(getattr(tunnel, "foreign_node_id", None)))
     )
     foreign_node = None
     iran_node = None
@@ -291,12 +291,15 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     await db.refresh(db_tunnel)
     
     try:
-        needs_gost_forwarding = db_tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and db_tunnel.core == "gost" and not is_reverse_tunnel
+        single_node_id = db_tunnel.node_id or getattr(db_tunnel, "iran_node_id", None)
+        is_panel_tunnel = not single_node_id
+        
+        needs_gost_forwarding = db_tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and db_tunnel.core == "gost" and is_panel_tunnel
         needs_rathole_server = False
         needs_backhaul_server = False
         needs_chisel_server = False
         needs_frp_server = False
-        needs_node_apply = db_tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (db_tunnel.core == "gost" and db_tunnel.is_reverse)
+        needs_node_apply = single_node_id is not None
         
         logger.info(
             "Tunnel %s: gost=%s, rathole=%s, backhaul=%s, chisel=%s, frp=%s",
@@ -1082,133 +1085,54 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 iran_node_id_val = tunnel.iran_node_id if tunnel.iran_node_id and (not isinstance(tunnel.iran_node_id, str) or tunnel.iran_node_id.strip()) else None
                 foreign_node_id_val = tunnel.foreign_node_id if tunnel.foreign_node_id and (not isinstance(tunnel.foreign_node_id, str) or tunnel.foreign_node_id.strip()) else None
                 
-                if iran_node_id_val and foreign_node_id_val:
-                    result = await db.execute(select(Node).where(Node.id == iran_node_id_val))
-                    iran_node = result.scalar_one_or_none()
-                    result = await db.execute(select(Node).where(Node.id == foreign_node_id_val))
-                    foreign_node = result.scalar_one_or_none()
-                    
-                    if not iran_node:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "Iran node not found"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    if not foreign_node:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "Foreign server not found"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    foreign_ip = foreign_node.node_metadata.get("ip_address")
-                    if not foreign_ip:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "Foreign server has no IP address"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    ports = parse_ports_from_spec(db_tunnel.spec)
-                    if not ports:
-                        listen_port = db_tunnel.spec.get("listen_port") or db_tunnel.spec.get("remote_port")
-                        if listen_port:
-                            ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
-                    
-                    if not ports:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "GOST requires ports"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    use_ipv6 = db_tunnel.spec.get("use_ipv6", False)
-                    remote_ip = db_tunnel.spec.get("remote_ip", foreign_ip)
-                    
-                    gost_spec = {
-                        "ports": ports,
-                        "remote_ip": remote_ip,
-                        "type": db_tunnel.type,
-                        "use_ipv6": use_ipv6
-                    }
-                    
-                    client = NodeClient()
-                    if not iran_node.node_metadata.get("api_address"):
-                        iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
-                        await db.commit()
-                    
-                    logger.info(f"Applying GOST forwarding to Iran node {iran_node.id} for tunnel {db_tunnel.id}: {db_tunnel.type} with ports {ports} -> {remote_ip}")
-                    response = await client.send_to_node(
-                        node_id=iran_node.id,
-                        endpoint="/api/agent/tunnels/apply",
-                        data={
-                            "tunnel_id": db_tunnel.id,
-                            "core": "gost",
-                            "type": db_tunnel.type,
-                            "spec": gost_spec
-                        }
-                    )
-                    
-                    if response.get("status") != "success":
-                        error_msg = response.get("message", "Unknown error from Iran node")
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = f"Iran node error: {error_msg}"
-                        logger.error(f"Tunnel {db_tunnel.id}: Iran node error: {error_msg}")
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    logger.info(f"Successfully applied GOST forwarding to Iran node for tunnel {db_tunnel.id}")
-                else:
-                    ports = parse_ports_from_spec(db_tunnel.spec)
-                    if not ports:
-                        listen_port = db_tunnel.spec.get("listen_port")
-                        if listen_port:
-                            ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
-                    
-                    forward_to = db_tunnel.spec.get("forward_to")
-                    remote_ip = db_tunnel.spec.get("remote_ip", "127.0.0.1")
-                    use_ipv6 = db_tunnel.spec.get("use_ipv6", False)
-                    
-                    if not ports:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "GOST requires ports"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    
-                    if ports and hasattr(request.app.state, 'gost_forwarder'):
-                        try:
-                            for port in ports:
-                                port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                                if not forward_to:
-                                    from app.utils import format_address_port
-                                    forward_to_port = format_address_port(remote_ip, port_num)
-                                else:
-                                    forward_to_port = forward_to
-                                
-                                tunnel_id_for_port = f"{db_tunnel.id}_{port_num}" if len(ports) > 1 else db_tunnel.id
-                                logger.info(f"Starting gost forwarding on panel for tunnel {db_tunnel.id}: {db_tunnel.type}://:{port_num} -> {forward_to_port}, use_ipv6={use_ipv6}")
-                                await request.app.state.gost_forwarder.start_forward(
-                                    tunnel_id=tunnel_id_for_port,
-                                    local_port=port_num,
-                                    forward_to=forward_to_port,
-                                    tunnel_type=db_tunnel.type,
-                                    use_ipv6=bool(use_ipv6)
-                                )
+                ports = parse_ports_from_spec(db_tunnel.spec)
+                if not ports:
+                    listen_port = db_tunnel.spec.get("listen_port")
+                    if listen_port:
+                        ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
+                
+                forward_to = db_tunnel.spec.get("forward_to")
+                remote_ip = db_tunnel.spec.get("remote_ip", "127.0.0.1")
+                use_ipv6 = db_tunnel.spec.get("use_ipv6", False)
+                
+                if not ports:
+                    db_tunnel.status = "error"
+                    db_tunnel.error_message = "GOST requires ports"
+                    await db.commit()
+                    await db.refresh(db_tunnel)
+                    return db_tunnel
+                
+                if ports and hasattr(request.app.state, 'gost_forwarder'):
+                    try:
+                        for port in ports:
+                            port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
+                            if not forward_to:
+                                from app.utils import format_address_port
+                                forward_to_port = format_address_port(remote_ip, port_num)
+                            else:
+                                forward_to_port = forward_to
                             
-                            await asyncio.sleep(2)
-                            logger.info(f"Successfully started gost forwarding on panel for tunnel {db_tunnel.id} with {len(ports)} ports")
-                        except Exception as e:
-                            error_msg = str(e)
-                            logger.error(f"Failed to start gost forwarding on panel for tunnel {db_tunnel.id}: {error_msg}", exc_info=True)
-                            db_tunnel.status = "error"
-                            db_tunnel.error_message = f"Gost forwarding error: {error_msg}"
-                            await db.commit()
-                            await db.refresh(db_tunnel)
-                            return db_tunnel
-                    else:
+                            tunnel_id_for_port = f"{db_tunnel.id}_{port_num}" if len(ports) > 1 else db_tunnel.id
+                            logger.info(f"Starting gost forwarding on panel for tunnel {db_tunnel.id}: {db_tunnel.type}://:{port_num} -> {forward_to_port}, use_ipv6={use_ipv6}")
+                            await request.app.state.gost_forwarder.start_forward(
+                                tunnel_id=tunnel_id_for_port,
+                                local_port=port_num,
+                                forward_to=forward_to_port,
+                                tunnel_type=db_tunnel.type,
+                                use_ipv6=bool(use_ipv6)
+                            )
+                        
+                        await asyncio.sleep(2)
+                        logger.info(f"Successfully started gost forwarding on panel for tunnel {db_tunnel.id} with {len(ports)} ports")
+                    except Exception as e:
+                        error_msg = str(e)
+                        logger.error(f"Failed to start gost forwarding on panel for tunnel {db_tunnel.id}: {error_msg}", exc_info=True)
+                        db_tunnel.status = "error"
+                        db_tunnel.error_message = f"Gost forwarding error: {error_msg}"
+                        await db.commit()
+                        await db.refresh(db_tunnel)
+                        return db_tunnel
+                else:
                         missing = []
                         if not ports:
                             missing.append("ports")
@@ -1574,7 +1498,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     client = NodeClient()
     
     is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
-        tunnel.core == "gost" and tunnel.is_reverse
+        tunnel.core == "gost" and (tunnel.is_reverse or bool(getattr(tunnel, "foreign_node_id", None)))
     )
     foreign_node = None
     iran_node = None
@@ -1588,10 +1512,14 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         
         result = await db.execute(select(Node))
         all_nodes = result.scalars().all()
-        foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
-        if not foreign_nodes:
-            raise HTTPException(status_code=404, detail="No foreign node found. Please ensure at least one node has role='foreign' (set NODE_ROLE=foreign on the foreign node).")
-        foreign_node = foreign_nodes[0]
+        if tunnel.foreign_node_id:
+            foreign_node = next((n for n in all_nodes if n.id == tunnel.foreign_node_id), None)
+            
+        if not foreign_node:
+            foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
+            if not foreign_nodes:
+                raise HTTPException(status_code=404, detail="No foreign node found. Please ensure at least one node has role='foreign' (set NODE_ROLE=foreign on the foreign node).")
+            foreign_node = foreign_nodes[0]
         
         if iran_node.node_metadata.get("role") != "iran":
             raise HTTPException(status_code=400, detail=f"Node {iran_node.id} is not an iran node (role={iran_node.node_metadata.get('role')}). Set NODE_ROLE=iran on the Iran node.")
