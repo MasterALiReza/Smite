@@ -1286,7 +1286,17 @@ class GostAdapter:
 
             # Create Local Listeners
             for port in ports:
-                port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
+                if isinstance(port, dict):
+                    local_port = port.get('local_port') or port.get('local')
+                    target_address = port.get('target_address', '127.0.0.1')
+                    target_port = port.get('target_port') or port.get('remote') or local_port
+                    port_num = int(local_port) if isinstance(local_port, (int, str)) and str(local_port).isdigit() else local_port
+                    target_port_num = int(target_port) if isinstance(target_port, (int, str)) and str(target_port).isdigit() else target_port
+                else:
+                    port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
+                    target_address = '127.0.0.1'
+                    target_port_num = port_num
+                    
                 listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
@@ -1295,7 +1305,7 @@ class GostAdapter:
                     
                     if is_reverse:
                         listener_tcp["chain"] = f"chain-{tunnel_id}"
-                        handler_tcp = {"type": "tcp"}
+                        handler_tcp = {"type": "rtcp"}
                     else:
                         handler_tcp = {
                             "type": "tcp",
@@ -1312,7 +1322,7 @@ class GostAdapter:
                         "listener": listener_tcp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-tcp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                                {"name": f"target-tcp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
                     })
@@ -1323,7 +1333,7 @@ class GostAdapter:
                     
                     if is_reverse:
                         listener_udp["chain"] = f"chain-{tunnel_id}"
-                        handler_udp = {"type": "udp"}
+                        handler_udp = {"type": "rudp"}
                     else:
                         handler_udp = {
                             "type": "udp",
@@ -1340,7 +1350,7 @@ class GostAdapter:
                         "listener": listener_udp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-udp-{port_num}", "addr": f"127.0.0.1:{port_num}"}
+                                {"name": f"target-udp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
                     })
