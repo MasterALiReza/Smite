@@ -1135,12 +1135,13 @@ class GostAdapter:
                 handler_metadata["bind"] = True
                 
             handler = {
-                "type": "relay",
-                "auth": {
+                "type": "relay"
+            }
+            if auth_token:
+                handler["auth"] = {
                     "username": auth_token,
                     "password": ""
                 }
-            }
             if handler_metadata:
                 handler["metadata"] = handler_metadata
                 
@@ -1221,25 +1222,29 @@ class GostAdapter:
             dialer = {"type": gost_type}
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if security_type in ["tls", "utls"] or dialer_tls:
-                dialer["tls"] = dialer_tls
+            if security_type in ["tls", "utls"]:
+                if dialer_tls:
+                    dialer["tls"] = dialer_tls
+                else:
+                    dialer["tls"] = {"insecureSkipVerify": True}
             if dialer_mux:
                 dialer["mux"] = dialer_mux
                 
             # Generate node objects for primary and failover IPs
             hop_nodes = []
             
+            connector_primary = {"type": "relay"}
+            if auth_token:
+                connector_primary["auth"] = {
+                    "username": auth_token,
+                    "password": ""
+                }
+            
             # Primary IP node
             hop_nodes.append({
                 "name": f"node-{tunnel_id}-primary",
                 "addr": target_addr,
-                "connector": {
-                    "type": "relay",
-                    "auth": {
-                        "username": auth_token,
-                        "password": ""
-                    }
-                },
+                "connector": connector_primary,
                 "dialer": dialer
             })
             
@@ -1249,16 +1254,17 @@ class GostAdapter:
                 for i, f_ip in enumerate(failover_ips):
                     if not f_ip or not f_ip.strip(): continue
                     f_addr = f"[{f_ip.strip()}]:{control_port}" if ":" in f_ip and not f_ip.startswith("[") else f"{f_ip.strip()}:{control_port}"
+                    connector_failover = {"type": "relay"}
+                    if auth_token:
+                        connector_failover["auth"] = {
+                            "username": auth_token,
+                            "password": ""
+                        }
+
                     hop_nodes.append({
                         "name": f"node-{tunnel_id}-failover-{i+1}",
                         "addr": f_addr,
-                        "connector": {
-                            "type": "relay",
-                            "auth": {
-                                "username": auth_token,
-                                "password": ""
-                            }
-                        },
+                        "connector": connector_failover,
                         "dialer": dialer
                     })
                 
