@@ -177,7 +177,7 @@ const Layout = ({ children }: LayoutProps) => {
               <div className="flex items-center gap-2">
                 <span>{version}</span>
                 <a 
-                  href="https://github.com/zZedix/Smite" 
+                  href="https://github.com/MasterALiReza/Smite" 
                   target="_blank" 
                   rel="noopener noreferrer"
                   className="hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
