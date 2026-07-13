@@ -1194,9 +1194,9 @@ class GostAdapter:
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
                 # When using uTLS/TLS often we don't have valid cert for our own server IP
-                dialer_tls["insecureSkipVerify"] = True
+                dialer_tls["secure"] = False
             elif security_type == "tls":
-                dialer_tls["insecureSkipVerify"] = True
+                dialer_tls["secure"] = False
                 
             # 2. Rate Limit (Limiter)
             if spec.get("rate_limit_mbps"):
@@ -1226,7 +1226,7 @@ class GostAdapter:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
-                    dialer["tls"] = {"insecureSkipVerify": True}
+                    dialer["tls"] = {"secure": False}
             if dialer_mux:
                 dialer["mux"] = dialer_mux
                 
@@ -1285,16 +1285,17 @@ class GostAdapter:
                 tunnel_proto = "tcp"
 
             # Create Local Listeners
+            default_target_address = spec.get('remote_ip', '127.0.0.1')
             for port in ports:
                 if isinstance(port, dict):
                     local_port = port.get('local_port') or port.get('local')
-                    target_address = port.get('target_address', '127.0.0.1')
+                    target_address = port.get('target_address', default_target_address)
                     target_port = port.get('target_port') or port.get('remote') or local_port
                     port_num = int(local_port) if isinstance(local_port, (int, str)) and str(local_port).isdigit() else local_port
                     target_port_num = int(target_port) if isinstance(target_port, (int, str)) and str(target_port).isdigit() else target_port
                 else:
                     port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                    target_address = '127.0.0.1'
+                    target_address = default_target_address
                     target_port_num = port_num
                     
                 listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"

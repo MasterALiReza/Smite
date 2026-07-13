@@ -624,7 +624,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 # Therefore, Foreign Node is the Client (initiates connection) and Iran Node is the Server.
                 # User traffic flows: User -> Iran Node -> (Reverse Port Forwarding) -> Foreign Node -> Internet.
                 
-                if getattr(db_tunnel, "is_reverse_tunnel", False):
+                if getattr(db_tunnel, "is_reverse", False):
                     # Iran Node config (GOST Server - Tunnel Listener)
                     server_spec["mode"] = "server"
                     server_spec["is_reverse"] = True
@@ -1665,7 +1665,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(tunnel, "spec")
                     
-                    if getattr(tunnel, "is_reverse_tunnel", False):
+                    if getattr(tunnel, "is_reverse", False):
                         # Iran Node config (GOST Server - Tunnel Listener)
                         server_spec = spec.copy()
                         server_spec["mode"] = "server"
