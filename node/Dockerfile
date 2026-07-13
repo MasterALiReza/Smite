@@ -29,7 +29,9 @@ RUN set -eux; \
     RATHOLE_BIN="$(find "$TMP_DIR" -type f -name 'rathole' | head -n1)"; \
     install -Dm755 "$RATHOLE_BIN" /usr/local/bin/rathole; \
     rm -rf "$TMP_DIR"; \
-    GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.12.0/gost_2.12.0_linux_${ARCH}.tar.gz"; \
+    GOST_VERSION="v3.0.0-rc10"; \
+    GOST_VERSION_NO_V="${GOST_VERSION#v}"; \
+    GOST_URL="https://github.com/go-gost/gost/releases/download/${GOST_VERSION}/gost_${GOST_VERSION_NO_V}_linux_${ARCH}.tar.gz"; \
     GOST_TMP="$(mktemp -d)"; \
     curl -fsSL "$GOST_URL" -o "$GOST_TMP/gost.tar.gz"; \
     tar -xzf "$GOST_TMP/gost.tar.gz" -C "$GOST_TMP"; \
