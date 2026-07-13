@@ -1168,9 +1168,9 @@ class GostAdapter:
             if not ports:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
                 
-            server_ip = spec.get('server_ip')
+            server_ip = spec.get('server_ip') or spec.get('remote_ip')
             if not server_ip:
-                raise ValueError("GOST client requires 'server_ip' in spec")
+                raise ValueError("GOST client requires 'server_ip' or 'remote_ip' in spec")
                 
             target_addr = f"[{server_ip}]:{control_port}" if ":" in server_ip and not server_ip.startswith("[") else f"{server_ip}:{control_port}"
 
