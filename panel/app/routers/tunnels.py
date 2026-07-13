@@ -671,6 +671,15 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     server_spec["transport"] = transport
                     server_spec["transport_type"] = db_tunnel.transport_type
                     server_spec["security_type"] = db_tunnel.security_type
+                    server_spec["ports"] = ports
+                    server_spec["cdn_mode"] = db_tunnel.cdn_mode or False
+                    server_spec["gaming_mode"] = db_tunnel.gaming_mode or False
+                    server_spec["custom_host"] = db_tunnel.custom_host
+                    server_spec["custom_sni"] = db_tunnel.custom_sni
+                    server_spec["ws_path"] = db_tunnel.ws_path
+                    server_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
+                    server_spec["failover_ips"] = db_tunnel.failover_ips
+                    server_spec["port_ranges"] = db_tunnel.port_ranges
                     
                     # Foreign Node config (GOST Server)
                     client_spec["mode"] = "server"
@@ -678,17 +687,9 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     client_spec["auth_token"] = auth_token
                     client_spec["transport"] = transport
                     client_spec["ports"] = ports
-                    client_spec["cdn_mode"] = db_tunnel.cdn_mode or False
-                    client_spec["gaming_mode"] = db_tunnel.gaming_mode or False
-                    client_spec["custom_host"] = db_tunnel.custom_host
-                    client_spec["custom_sni"] = db_tunnel.custom_sni
                     client_spec["ws_path"] = db_tunnel.ws_path
-                    client_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
                     client_spec["transport_type"] = db_tunnel.transport_type
                     client_spec["security_type"] = db_tunnel.security_type
-                    client_spec["failover_ips"] = db_tunnel.failover_ips
-                    client_spec["allowed_ips"] = db_tunnel.allowed_ips
-                    client_spec["port_ranges"] = db_tunnel.port_ranges
                     
                     if db_tunnel.allowed_ips:
                         allowed_ips_foreign = db_tunnel.allowed_ips.copy()
