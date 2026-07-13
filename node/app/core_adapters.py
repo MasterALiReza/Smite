@@ -1079,6 +1079,7 @@ class GostAdapter:
             logger.info(f"GOST tunnel {tunnel_id} already exists, removing it first")
             self.remove(tunnel_id)
             
+        is_reverse = spec.get('is_reverse', False)
         mode = spec.get('mode', 'client')
         control_port = spec.get('control_port') or spec.get('remote_port')
         if not control_port:
@@ -1130,16 +1131,24 @@ class GostAdapter:
                 ]
                 listener["admission"] = f"adm-{tunnel_id}"
                 
+            handler_metadata = {}
+            if is_reverse:
+                handler_metadata["bind"] = True
+                
+            handler = {
+                "type": "relay",
+                "auth": {
+                    "username": auth_token,
+                    "password": ""
+                }
+            }
+            if handler_metadata:
+                handler["metadata"] = handler_metadata
+                
             service = {
                 "name": f"gost-server-{tunnel_id}",
                 "addr": bind_addr,
-                "handler": {
-                    "type": "relay",
-                    "auth": {
-                        "username": auth_token,
-                        "password": ""
-                    }
-                },
+                "handler": handler,
                 "listener": listener
             }
             config["services"].append(service)
@@ -1284,17 +1293,25 @@ class GostAdapter:
                 listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
-                    listener_tcp = {"type": "tcp"}
+                    listener_type = "rtcp" if is_reverse else "tcp"
+                    listener_tcp = {"type": listener_type}
+                    
+                    if is_reverse:
+                        listener_tcp["chain"] = f"chain-{tunnel_id}"
+                        handler_tcp = {"type": "tcp"}
+                    else:
+                        handler_tcp = {
+                            "type": "tcp",
+                            "chain": f"chain-{tunnel_id}"
+                        }
+                    
                     if spec.get("rate_limit_mbps"):
                         listener_tcp["limiter"] = f"limiter-{tunnel_id}"
                     
                     config["services"].append({
                         "name": f"tcp-in-{port_num}",
-                        "addr": listen_addr,
-                        "handler": {
-                            "type": "tcp",
-                            "chain": f"chain-{tunnel_id}"
-                        },
+                        "addr": f":{port_num}" if is_reverse else listen_addr,
+                        "handler": handler_tcp,
                         "listener": listener_tcp,
                         "forwarder": {
                             "nodes": [
@@ -1304,17 +1321,25 @@ class GostAdapter:
                     })
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
-                    listener_udp = {"type": "udp"}
+                    listener_type = "rudp" if is_reverse else "udp"
+                    listener_udp = {"type": listener_type}
+                    
+                    if is_reverse:
+                        listener_udp["chain"] = f"chain-{tunnel_id}"
+                        handler_udp = {"type": "udp"}
+                    else:
+                        handler_udp = {
+                            "type": "udp",
+                            "chain": f"chain-{tunnel_id}"
+                        }
+                    
                     if spec.get("rate_limit_mbps"):
                         listener_udp["limiter"] = f"limiter-{tunnel_id}"
                     
                     config["services"].append({
                         "name": f"udp-in-{port_num}",
-                        "addr": listen_addr,
-                        "handler": {
-                            "type": "udp",
-                            "chain": f"chain-{tunnel_id}"
-                        },
+                        "addr": f":{port_num}" if is_reverse else listen_addr,
+                        "handler": handler_udp,
                         "listener": listener_udp,
                         "forwarder": {
                             "nodes": [

@@ -610,39 +610,37 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     from sqlalchemy.orm.attributes import flag_modified
                     flag_modified(db_tunnel, "spec")
                 
-                # NOTE: send_to_node hardcodes `server_spec` for Iran Node and `client_spec` for Foreign Node.
-                # In GOST DPI-bypass topology, Iran Node is the Client (initiates connection) and Foreign Node is the Server.
-                # So we put GOST Client config into `server_spec` and GOST Server config into `client_spec`.
+                # In a true Reverse Tunnel, Iran Node cannot reach Foreign Node.
+                # Therefore, Foreign Node is the Client (initiates connection) and Iran Node is the Server.
+                # User traffic flows: User -> Iran Node -> (Reverse Port Forwarding) -> Foreign Node -> Internet.
                 
-                # Iran Node config (GOST Client)
-                server_spec["mode"] = "client"
-                server_spec["server_ip"] = foreign_node_ip
+                # Iran Node config (GOST Server - Tunnel Listener)
+                server_spec["mode"] = "server"
+                server_spec["is_reverse"] = True
                 server_spec["control_port"] = control_port
                 server_spec["auth_token"] = auth_token
                 server_spec["transport"] = transport
-                server_spec["ports"] = ports
-                server_spec["cdn_mode"] = db_tunnel.cdn_mode or False
-                server_spec["gaming_mode"] = db_tunnel.gaming_mode or False
-                server_spec["custom_host"] = db_tunnel.custom_host
-                server_spec["custom_sni"] = db_tunnel.custom_sni
-                server_spec["ws_path"] = db_tunnel.ws_path
-                server_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
                 server_spec["transport_type"] = db_tunnel.transport_type
                 server_spec["security_type"] = db_tunnel.security_type
-                server_spec["failover_ips"] = db_tunnel.failover_ips
-                server_spec["allowed_ips"] = db_tunnel.allowed_ips
-                server_spec["port_ranges"] = db_tunnel.port_ranges
                 
-                # Foreign Node config (GOST Server)
-                client_spec["mode"] = "server"
+                # Foreign Node config (GOST Client - Dialer and Reverse Forwarder)
+                client_spec["mode"] = "client"
+                client_spec["is_reverse"] = True
+                client_spec["server_ip"] = iran_node_ip
                 client_spec["control_port"] = control_port
                 client_spec["auth_token"] = auth_token
                 client_spec["transport"] = transport
-                client_spec["ports"] = ports # Usually relay servers don't need ports, but keep for node adapter reference
+                client_spec["ports"] = ports
+                client_spec["cdn_mode"] = db_tunnel.cdn_mode or False
+                client_spec["gaming_mode"] = db_tunnel.gaming_mode or False
+                client_spec["custom_host"] = db_tunnel.custom_host
+                client_spec["custom_sni"] = db_tunnel.custom_sni
+                client_spec["ws_path"] = db_tunnel.ws_path
                 client_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
                 client_spec["transport_type"] = db_tunnel.transport_type
                 client_spec["security_type"] = db_tunnel.security_type
                 client_spec["failover_ips"] = db_tunnel.failover_ips
+                client_spec["allowed_ips"] = db_tunnel.allowed_ips
                 client_spec["port_ranges"] = db_tunnel.port_ranges
                 
                 # Add Iran Node IP to allowed_ips safely so it isn't blocked
