@@ -229,6 +229,7 @@ def cmd_admin_create(args):
             script_content = f"""import asyncio
 import sys
 import os
+os.chdir('/app')
 sys.path.insert(0, '/app')
 from app.database import AsyncSessionLocal, init_db
 from app.models import Admin
@@ -502,6 +503,7 @@ def cmd_admin_update(args):
             script_content = f"""import asyncio
 import sys
 import os
+os.chdir('/app')
 sys.path.insert(0, '/app')
 from app.database import AsyncSessionLocal, init_db
 from app.models import Admin
