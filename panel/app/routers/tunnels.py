@@ -281,6 +281,9 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         stealth_domain=tunnel.stealth_domain,
         allowed_ips=tunnel.allowed_ips,
         rate_limit_mbps=tunnel.rate_limit_mbps,
+        transport_type=tunnel.transport_type,
+        security_type=tunnel.security_type,
+        failover_ips=tunnel.failover_ips,
         status="pending"
     )
     db.add(db_tunnel)
@@ -1247,7 +1250,14 @@ async def update_tunnel(
         (tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse) or
         (tunnel_update.node_id is not None and tunnel_update.node_id != tunnel.node_id) or
         (tunnel_update.foreign_node_id is not None and tunnel_update.foreign_node_id != tunnel.foreign_node_id) or
-        (tunnel_update.iran_node_id is not None and tunnel_update.iran_node_id != tunnel.iran_node_id)
+        (tunnel_update.iran_node_id is not None and tunnel_update.iran_node_id != tunnel.iran_node_id) or
+        (tunnel_update.port_ranges is not None and tunnel_update.port_ranges != tunnel.port_ranges) or
+        (tunnel_update.stealth_domain is not None and tunnel_update.stealth_domain != tunnel.stealth_domain) or
+        (tunnel_update.allowed_ips is not None and tunnel_update.allowed_ips != tunnel.allowed_ips) or
+        (tunnel_update.rate_limit_mbps is not None and tunnel_update.rate_limit_mbps != tunnel.rate_limit_mbps) or
+        (tunnel_update.transport_type is not None and tunnel_update.transport_type != tunnel.transport_type) or
+        (tunnel_update.security_type is not None and tunnel_update.security_type != tunnel.security_type) or
+        (tunnel_update.failover_ips is not None and tunnel_update.failover_ips != tunnel.failover_ips)
     )
     
     if tunnel_update.name is not None:
@@ -1277,7 +1287,21 @@ async def update_tunnel(
         tunnel.foreign_node_id = tunnel_update.foreign_node_id if tunnel_update.foreign_node_id.strip() else None
     if tunnel_update.iran_node_id is not None:
         tunnel.iran_node_id = tunnel_update.iran_node_id if tunnel_update.iran_node_id.strip() else None
-    
+    if tunnel_update.port_ranges is not None:
+        tunnel.port_ranges = tunnel_update.port_ranges
+    if tunnel_update.stealth_domain is not None:
+        tunnel.stealth_domain = tunnel_update.stealth_domain
+    if tunnel_update.allowed_ips is not None:
+        tunnel.allowed_ips = tunnel_update.allowed_ips
+    if tunnel_update.rate_limit_mbps is not None:
+        tunnel.rate_limit_mbps = tunnel_update.rate_limit_mbps
+    if tunnel_update.transport_type is not None:
+        tunnel.transport_type = tunnel_update.transport_type
+    if tunnel_update.security_type is not None:
+        tunnel.security_type = tunnel_update.security_type
+    if tunnel_update.failover_ips is not None:
+        tunnel.failover_ips = tunnel_update.failover_ips
+        
     tunnel.revision += 1
     tunnel.updated_at = datetime.utcnow()
     
