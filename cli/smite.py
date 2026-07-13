@@ -708,8 +708,22 @@ def cmd_update(args):
         if (project_root / "docker-compose.yml").exists():
             print("docker-compose.yml updated from git")
     
-    run_docker_compose(["pull"])
-    run_docker_compose(["up", "-d", "--force-recreate"])
+    try:
+        run_docker_compose(["pull"], capture_output=True)
+    except SystemExit:
+        pass  # Ignore pull errors if images aren't on registry yet
+    
+    run_docker_compose(["up", "-d", "--force-recreate", "--build"])
+    
+    cli_path = project_root / "cli" / "smite.py"
+    if cli_path.exists():
+        try:
+            shutil.copy2(cli_path, "/usr/local/bin/smite")
+            os.chmod("/usr/local/bin/smite", 0o755)
+            print("CLI updated.")
+        except Exception as e:
+            print(f"Warning: Failed to update CLI: {e}")
+            
     print("Panel updated.")
 
 
