@@ -1,6 +1,6 @@
 services:
   smite-panel:
-    image: ghcr.io/MasterALiReza/smite-panel:${SMITE_VERSION:-latest}
+    image: ghcr.io/masteralireza/smite-panel:${SMITE_VERSION:-latest}
     build:
       context: .
       dockerfile: panel/Dockerfile
