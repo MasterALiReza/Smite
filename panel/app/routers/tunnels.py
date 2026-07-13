@@ -585,6 +585,13 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     await db.commit()
                     await db.refresh(db_tunnel)
                     return db_tunnel
+                iran_node_ip = iran_node.node_metadata.get("ip_address")
+                if not iran_node_ip:
+                    db_tunnel.status = "error"
+                    db_tunnel.error_message = "Iran node has no IP address"
+                    await db.commit()
+                    await db.refresh(db_tunnel)
+                    return db_tunnel
                 
                 foreign_node_ip = foreign_node.node_metadata.get("ip_address")
                 if not foreign_node_ip:
