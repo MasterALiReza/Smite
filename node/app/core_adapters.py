@@ -1098,8 +1098,7 @@ class GostAdapter:
         
         config = {
             "services": [],
-            "chains": [],
-            "bypasses": []
+            "chains": []
         }
         
         if mode == 'server':
@@ -1227,12 +1226,6 @@ class GostAdapter:
             if dialer_mux:
                 dialer["mux"] = dialer_mux
                 
-            # Create a bypass for GeoIP Iran
-            config["bypasses"].append({
-                "name": f"bypass-ir-{tunnel_id}",
-                "matchers": ["geoip:ir"]
-            })
-                
             # Generate node objects for primary and failover IPs
             hop_nodes = []
             
@@ -1247,8 +1240,7 @@ class GostAdapter:
                         "password": ""
                     }
                 },
-                "dialer": dialer,
-                "bypass": f"bypass-ir-{tunnel_id}"
+                "dialer": dialer
             })
             
             # Failover IPs
@@ -1267,8 +1259,7 @@ class GostAdapter:
                                 "password": ""
                             }
                         },
-                        "dialer": dialer,
-                        "bypass": f"bypass-ir-{tunnel_id}"
+                        "dialer": dialer
                     })
                 
             # Create Relay Chain
@@ -1351,8 +1342,6 @@ class GostAdapter:
         # Remove empty blocks
         if not config["chains"]:
             del config["chains"]
-        if not config["bypasses"]:
-            del config["bypasses"]
 
         config_file = self.config_dir / f"{tunnel_id}.json"
         with open(config_file, 'w') as f:
