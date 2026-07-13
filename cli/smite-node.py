@@ -119,17 +119,24 @@ def cmd_update(args):
         if (node_dir / "docker-compose.yml").exists():
             print("docker-compose.yml updated from git")
     else:
-        print("Downloading latest docker-compose.yml...")
+        print("Downloading latest node files from GitHub...")
         try:
             import urllib.request
-            compose_url = "https://raw.githubusercontent.com/MasterALiReza/Smite/main/node/docker-compose.yml"
-            urllib.request.urlretrieve(compose_url, node_dir / "docker-compose.yml")
-            print("docker-compose.yml updated")
+            import zipfile
+            import io
+            
+            zip_url = "https://github.com/MasterALiReza/Smite/archive/refs/heads/main.zip"
+            with urllib.request.urlopen(zip_url) as response:
+                with zipfile.ZipFile(io.BytesIO(response.read())) as z:
+                    for zip_info in z.infolist():
+                        if zip_info.filename.startswith("Smite-main/node/") and not zip_info.is_dir():
+                            zip_info.filename = zip_info.filename.replace("Smite-main/node/", "", 1)
+                            z.extract(zip_info, node_dir)
+            print("Node files updated")
         except Exception as e:
-            print(f"Warning: Could not update docker-compose.yml: {e}")
+            print(f"Warning: Could not update node files: {e}")
     
-    run_docker_compose(["pull"])
-    run_docker_compose(["up", "-d", "--force-recreate"])
+    run_docker_compose(["up", "-d", "--build", "--force-recreate"])
     print("Node updated.")
 
 
