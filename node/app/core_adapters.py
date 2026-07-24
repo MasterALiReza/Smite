@@ -1090,6 +1090,10 @@ class GostAdapter:
         security_type = spec.get('security_type', 'none')
         use_ipv6 = spec.get('use_ipv6', False)
         
+        # CDN Mode Logic
+        if spec.get("cdn_mode") and transport_type in ["tcp", "udp", "tcp+udp"]:
+            transport_type = "ws"
+        
         gost_type = transport_type
         if transport_type == "ws" and security_type in ["tls", "utls"]:
             gost_type = "wss"
@@ -1108,6 +1112,10 @@ class GostAdapter:
             listener_metadata = {}
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
+            if is_reverse:
+                listener_metadata["bind"] = True
+            if spec.get("gaming_mode"):
+                listener_metadata["mux.type"] = "yamux"
                 
             listener = {"type": gost_type}
             if listener_metadata:
@@ -1133,6 +1141,8 @@ class GostAdapter:
             handler_metadata = {}
             if is_reverse:
                 handler_metadata["bind"] = True
+            if spec.get("gaming_mode"):
+                handler_metadata["mux.type"] = "yamux"
                 
             handler = {
                 "type": "relay"
@@ -1163,7 +1173,19 @@ class GostAdapter:
             
             # 4. Port Ranges
             if spec.get("port_ranges"):
-                ports.extend(spec.get("port_ranges"))
+                for port_range in spec.get("port_ranges"):
+                    if isinstance(port_range, str) and '-' in port_range:
+                        try:
+                            start, end = port_range.split('-')
+                            # expand carefully to avoid thousands of ports
+                            if int(end) - int(start) <= 500:
+                                ports.extend(range(int(start), int(end) + 1))
+                            else:
+                                ports.append(port_range) # Fallback to string if too large, though unsupported by pure GOST listeners
+                        except Exception:
+                            ports.append(port_range)
+                    else:
+                        ports.append(port_range)
             
             if not ports:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
@@ -1180,6 +1202,8 @@ class GostAdapter:
                 dialer_metadata["path"] = spec.get("ws_path")
             if spec.get("custom_host"):
                 dialer_metadata["host"] = spec.get("custom_host")
+            elif spec.get("stealth_domain"):
+                dialer_metadata["host"] = spec.get("stealth_domain")
                 
             dialer_tls = {}
             if spec.get("custom_sni"):
@@ -1194,9 +1218,9 @@ class GostAdapter:
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
                 # When using uTLS/TLS often we don't have valid cert for our own server IP
-                dialer_tls["secure"] = False
+                dialer_tls["insecure"] = True
             elif security_type == "tls":
-                dialer_tls["secure"] = False
+                dialer_tls["insecure"] = True
                 
             # 2. Rate Limit (Limiter)
             if spec.get("rate_limit_mbps"):
@@ -1205,33 +1229,37 @@ class GostAdapter:
                     {
                         "name": f"limiter-{tunnel_id}",
                         "limits": [
-                            f"{rate_bytes}"
+                            f"{rate_bytes}B"
                         ]
                     }
                 ]
                 
-            dialer_mux = {}
-            if spec.get("gaming_mode"):
-                dialer_mux = {
-                    "type": "yamux",
-                    "metadata": {
-                        "tcpNoDelay": True
-                    }
-                }
-                
             dialer = {"type": gost_type}
+            
+            # keepalive metadata for stability
+            dialer_metadata["keepAlive"] = "30s"
+            dialer_metadata["keepAliveTimeout"] = "90s"
+            
+            if spec.get("gaming_mode"):
+                dialer_metadata["mux.type"] = "yamux"
+                dialer_metadata["tcpNoDelay"] = "true"
+            
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
             if security_type in ["tls", "utls"]:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
-                    dialer["tls"] = {"secure": False}
-            if dialer_mux:
-                dialer["mux"] = dialer_mux
+                    dialer["tls"] = {"insecure": True}
                 
             # Generate node objects for primary and failover IPs
             hop_nodes = []
+            
+            connector_metadata = {}
+            if spec.get("gaming_mode"):
+                connector_metadata["mux.type"] = "yamux"
+                connector_metadata["tcpNoDelay"] = "true"
+                connector_metadata["keepAlive"] = "true"
             
             connector_primary = {"type": "relay"}
             if auth_token:
@@ -1239,6 +1267,8 @@ class GostAdapter:
                     "username": auth_token,
                     "password": ""
                 }
+            if connector_metadata:
+                connector_primary["metadata"] = connector_metadata
             
             # Primary IP node
             hop_nodes.append({
@@ -1260,6 +1290,8 @@ class GostAdapter:
                             "username": auth_token,
                             "password": ""
                         }
+                    if connector_metadata:
+                        connector_failover["metadata"] = connector_metadata
 
                     hop_nodes.append({
                         "name": f"node-{tunnel_id}-failover-{i+1}",
@@ -1267,7 +1299,7 @@ class GostAdapter:
                         "connector": connector_failover,
                         "dialer": dialer
                     })
-                
+
             # Create Relay Chain
             config["chains"].append({
                 "name": f"chain-{tunnel_id}",
@@ -1285,7 +1317,7 @@ class GostAdapter:
                 tunnel_proto = "tcp"
 
             # Create Local Listeners
-            default_target_address = spec.get('remote_ip', '127.0.0.1')
+            default_target_address = '127.0.0.1'
             for port in ports:
                 if isinstance(port, dict):
                     local_port = port.get('local_port') or port.get('local')
@@ -1305,8 +1337,10 @@ class GostAdapter:
                     listener_tcp = {"type": listener_type}
                     
                     if is_reverse:
-                        listener_tcp["chain"] = f"chain-{tunnel_id}"
-                        handler_tcp = {"type": "rtcp"}
+                        handler_tcp = {
+                            "type": "rtcp",
+                            "chain": f"chain-{tunnel_id}"
+                        }
                     else:
                         handler_tcp = {
                             "type": "tcp",
@@ -1333,8 +1367,10 @@ class GostAdapter:
                     listener_udp = {"type": listener_type}
                     
                     if is_reverse:
-                        listener_udp["chain"] = f"chain-{tunnel_id}"
-                        handler_udp = {"type": "rudp"}
+                        handler_udp = {
+                            "type": "rudp",
+                            "chain": f"chain-{tunnel_id}"
+                        }
                     else:
                         handler_udp = {
                             "type": "udp",
