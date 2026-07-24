@@ -228,7 +228,7 @@ local_addr = "{local_addr}"
             proc = self.processes[tunnel_id]
             try:
                 proc.terminate()
-                await asyncio.wait_for(await proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
             except:
@@ -493,7 +493,7 @@ class BackhaulAdapter:
             proc = self.processes[tunnel_id]
             try:
                 proc.terminate()
-                await asyncio.wait_for(await proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
             except Exception:
@@ -740,7 +740,7 @@ class ChiselAdapter:
             proc = self.processes[tunnel_id]
             try:
                 proc.terminate()
-                await asyncio.wait_for(await proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 await proc.wait()
@@ -993,7 +993,7 @@ serverPort: {server_port}
             proc = self.processes[tunnel_id]
             try:
                 proc.terminate()
-                await asyncio.wait_for(await proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 await proc.wait()
@@ -1186,6 +1186,15 @@ class GostAdapter:
                             ports.append(port_range)
                     else:
                         ports.append(port_range)
+            
+            # Deduplicate ports while preserving order
+            seen = set()
+            unique_ports = []
+            for p in ports:
+                if p not in seen:
+                    seen.add(p)
+                    unique_ports.append(p)
+            ports = unique_ports
             
             if not ports:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
@@ -1446,7 +1455,7 @@ class GostAdapter:
             proc = self.processes[tunnel_id]
             try:
                 proc.terminate()
-                await asyncio.wait_for(await proc.wait(), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 await proc.wait()

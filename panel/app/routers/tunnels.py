@@ -179,6 +179,82 @@ def parse_ports_from_spec(spec: dict) -> list:
     return ports if ports else []
 
 
+def build_gost_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str, control_port: int, auth_token: str, ports: list) -> tuple:
+    """
+    Build server_spec (for iran node) and client_spec (for foreign node) for a GOST tunnel.
+    Propagates all spec fields symmetrically and assigns admission control (allowed_ips) to the server node.
+    """
+    is_reverse = getattr(tunnel, "is_reverse", False) or False
+    cdn_mode = getattr(tunnel, "cdn_mode", False) or False
+    gaming_mode = getattr(tunnel, "gaming_mode", False) or False
+    custom_host = getattr(tunnel, "custom_host", None)
+    custom_sni = getattr(tunnel, "custom_sni", None)
+    ws_path = getattr(tunnel, "ws_path", None)
+    stealth_domain = getattr(tunnel, "stealth_domain", None)
+    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None)
+    transport_type = getattr(tunnel, "transport_type", "tcp") or "tcp"
+    security_type = getattr(tunnel, "security_type", "none") or "none"
+    failover_ips = getattr(tunnel, "failover_ips", None)
+    port_ranges = getattr(tunnel, "port_ranges", None)
+    allowed_ips = getattr(tunnel, "allowed_ips", None)
+
+    base_spec = {
+        "control_port": control_port,
+        "auth_token": auth_token,
+        "transport": transport_type,
+        "transport_type": transport_type,
+        "security_type": security_type,
+        "ports": ports,
+        "cdn_mode": cdn_mode,
+        "gaming_mode": gaming_mode,
+        "custom_host": custom_host,
+        "custom_sni": custom_sni,
+        "ws_path": ws_path,
+        "stealth_domain": stealth_domain,
+        "rate_limit_mbps": rate_limit_mbps,
+        "failover_ips": failover_ips,
+        "port_ranges": port_ranges,
+        "is_reverse": is_reverse,
+    }
+
+    if is_reverse:
+        # Reverse Tunnel: Iran Node is GOST Server, Foreign Node is GOST Client
+        server_spec = base_spec.copy()
+        server_spec["mode"] = "server"
+
+        client_spec = base_spec.copy()
+        client_spec["mode"] = "client"
+        client_spec["server_ip"] = iran_node_ip
+
+        if allowed_ips:
+            allowed_ips_server = allowed_ips.copy()
+            if foreign_node_ip and foreign_node_ip not in allowed_ips_server:
+                allowed_ips_server.append(foreign_node_ip)
+            server_spec["allowed_ips"] = allowed_ips_server
+        else:
+            server_spec["allowed_ips"] = None
+        client_spec["allowed_ips"] = None
+    else:
+        # Direct Tunnel: Iran Node is GOST Client, Foreign Node is GOST Server
+        server_spec = base_spec.copy()
+        server_spec["mode"] = "client"
+        server_spec["server_ip"] = foreign_node_ip
+
+        client_spec = base_spec.copy()
+        client_spec["mode"] = "server"
+
+        if allowed_ips:
+            allowed_ips_foreign = allowed_ips.copy()
+            if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
+                allowed_ips_foreign.append(iran_node_ip)
+            client_spec["allowed_ips"] = allowed_ips_foreign
+        else:
+            client_spec["allowed_ips"] = None
+        server_spec["allowed_ips"] = None
+
+    return server_spec, client_spec
+
+
 @router.post("", response_model=TunnelResponse)
 async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new tunnel and auto-apply it"""
@@ -624,80 +700,14 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 # Therefore, Foreign Node is the Client (initiates connection) and Iran Node is the Server.
                 # User traffic flows: User -> Iran Node -> (Reverse Port Forwarding) -> Foreign Node -> Internet.
                 
-                if getattr(db_tunnel, "is_reverse", False):
-                    # Iran Node config (GOST Server - Tunnel Listener)
-                    server_spec["mode"] = "server"
-                    server_spec["is_reverse"] = True
-                    server_spec["control_port"] = control_port
-                    server_spec["auth_token"] = auth_token
-                    server_spec["transport"] = transport
-                    server_spec["transport_type"] = db_tunnel.transport_type
-                    server_spec["security_type"] = db_tunnel.security_type
-                    
-                    # Foreign Node config (GOST Client - Dialer and Reverse Forwarder)
-                    client_spec["mode"] = "client"
-                    client_spec["is_reverse"] = True
-                    client_spec["server_ip"] = iran_node_ip
-                    client_spec["control_port"] = control_port
-                    client_spec["auth_token"] = auth_token
-                    client_spec["transport"] = transport
-                    client_spec["ports"] = ports
-                    client_spec["cdn_mode"] = db_tunnel.cdn_mode or False
-                    client_spec["gaming_mode"] = db_tunnel.gaming_mode or False
-                    client_spec["custom_host"] = db_tunnel.custom_host
-                    client_spec["custom_sni"] = db_tunnel.custom_sni
-                    client_spec["ws_path"] = db_tunnel.ws_path
-                    client_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
-                    client_spec["transport_type"] = db_tunnel.transport_type
-                    client_spec["security_type"] = db_tunnel.security_type
-                    client_spec["failover_ips"] = db_tunnel.failover_ips
-                    client_spec["allowed_ips"] = db_tunnel.allowed_ips
-                    client_spec["port_ranges"] = db_tunnel.port_ranges
-                    
-                    # Add Iran Node IP to allowed_ips safely so it isn't blocked
-                    if db_tunnel.allowed_ips:
-                        allowed_ips_foreign = db_tunnel.allowed_ips.copy()
-                        if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
-                            allowed_ips_foreign.append(iran_node_ip)
-                        client_spec["allowed_ips"] = allowed_ips_foreign
-                    else:
-                        client_spec["allowed_ips"] = None
-                else:
-                    # Iran Node config (GOST Client)
-                    server_spec["mode"] = "client"
-                    server_spec["server_ip"] = foreign_node_ip
-                    server_spec["control_port"] = control_port
-                    server_spec["auth_token"] = auth_token
-                    server_spec["transport"] = transport
-                    server_spec["transport_type"] = db_tunnel.transport_type
-                    server_spec["security_type"] = db_tunnel.security_type
-                    server_spec["ports"] = ports
-                    server_spec["cdn_mode"] = db_tunnel.cdn_mode or False
-                    server_spec["gaming_mode"] = db_tunnel.gaming_mode or False
-                    server_spec["custom_host"] = db_tunnel.custom_host
-                    server_spec["custom_sni"] = db_tunnel.custom_sni
-                    server_spec["ws_path"] = db_tunnel.ws_path
-                    server_spec["rate_limit_mbps"] = db_tunnel.rate_limit_mbps
-                    server_spec["failover_ips"] = db_tunnel.failover_ips
-                    server_spec["port_ranges"] = db_tunnel.port_ranges
-                    
-                    # Foreign Node config (GOST Server)
-                    client_spec["mode"] = "server"
-                    client_spec["control_port"] = control_port
-                    client_spec["auth_token"] = auth_token
-                    client_spec["transport"] = transport
-                    client_spec["ports"] = ports
-                    client_spec["ws_path"] = db_tunnel.ws_path
-                    client_spec["transport_type"] = db_tunnel.transport_type
-                    client_spec["security_type"] = db_tunnel.security_type
-                    
-                    if db_tunnel.allowed_ips:
-                        allowed_ips_foreign = db_tunnel.allowed_ips.copy()
-                        if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
-                            allowed_ips_foreign.append(iran_node_ip)
-                        client_spec["allowed_ips"] = allowed_ips_foreign
-                    else:
-                        client_spec["allowed_ips"] = None
+                server_spec, client_spec = build_gost_node_specs(
+                    db_tunnel,
+                    iran_node_ip,
+                    foreign_node_ip,
+                    control_port,
+                    auth_token,
+                    ports
+                )
             
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
@@ -1665,86 +1675,14 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(tunnel, "spec")
                     
-                    if getattr(tunnel, "is_reverse", False):
-                        # Iran Node config (GOST Server - Tunnel Listener)
-                        server_spec = spec.copy()
-                        server_spec["mode"] = "server"
-                        server_spec["is_reverse"] = True
-                        server_spec["control_port"] = control_port
-                        server_spec["auth_token"] = auth_token
-                        server_spec["transport"] = transport
-                        server_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
-                        server_spec["security_type"] = getattr(tunnel, "security_type", "none")
-                        
-                        # Foreign Node config (GOST Client - Dialer and Reverse Forwarder)
-                        client_spec = spec.copy()
-                        client_spec["mode"] = "client"
-                        client_spec["is_reverse"] = True
-                        client_spec["server_ip"] = iran_node_ip
-                        client_spec["control_port"] = control_port
-                        client_spec["auth_token"] = auth_token
-                        client_spec["transport"] = transport
-                        client_spec["ports"] = ports
-                        client_spec["cdn_mode"] = getattr(tunnel, "cdn_mode", False)
-                        client_spec["gaming_mode"] = getattr(tunnel, "gaming_mode", False)
-                        client_spec["custom_host"] = getattr(tunnel, "custom_host", None)
-                        client_spec["custom_sni"] = getattr(tunnel, "custom_sni", None)
-                        client_spec["ws_path"] = getattr(tunnel, "ws_path", None)
-                        client_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
-                        client_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
-                        client_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
-                        client_spec["security_type"] = getattr(tunnel, "security_type", "none")
-                        client_spec["failover_ips"] = getattr(tunnel, "failover_ips", None)
-                        client_spec["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
-                        client_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
-                        
-                        allowed_ips = getattr(tunnel, "allowed_ips", None)
-                        if allowed_ips:
-                            allowed_ips_foreign = allowed_ips.copy()
-                            if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
-                                allowed_ips_foreign.append(iran_node_ip)
-                            client_spec["allowed_ips"] = allowed_ips_foreign
-                        else:
-                            client_spec["allowed_ips"] = None
-                    else:
-                        # Iran Node config (GOST Client)
-                        server_spec = spec.copy()
-                        server_spec["mode"] = "client"
-                        server_spec["server_ip"] = foreign_node_ip
-                        server_spec["control_port"] = control_port
-                        server_spec["auth_token"] = auth_token
-                        server_spec["transport"] = transport
-                        server_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
-                        server_spec["security_type"] = getattr(tunnel, "security_type", "none")
-                        
-                        # Foreign Node config (GOST Server)
-                        client_spec = spec.copy()
-                        client_spec["mode"] = "server"
-                        client_spec["control_port"] = control_port
-                        client_spec["auth_token"] = auth_token
-                        client_spec["transport"] = transport
-                        client_spec["ports"] = ports
-                        client_spec["cdn_mode"] = getattr(tunnel, "cdn_mode", False)
-                        client_spec["gaming_mode"] = getattr(tunnel, "gaming_mode", False)
-                        client_spec["custom_host"] = getattr(tunnel, "custom_host", None)
-                        client_spec["custom_sni"] = getattr(tunnel, "custom_sni", None)
-                        client_spec["ws_path"] = getattr(tunnel, "ws_path", None)
-                        client_spec["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
-                        client_spec["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
-                        client_spec["transport_type"] = getattr(tunnel, "transport_type", "tcp")
-                        client_spec["security_type"] = getattr(tunnel, "security_type", "none")
-                        client_spec["failover_ips"] = getattr(tunnel, "failover_ips", None)
-                        client_spec["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
-                        client_spec["port_ranges"] = getattr(tunnel, "port_ranges", None)
-                        
-                        allowed_ips = getattr(tunnel, "allowed_ips", None)
-                        if allowed_ips:
-                            allowed_ips_foreign = allowed_ips.copy()
-                            if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
-                                allowed_ips_foreign.append(iran_node_ip)
-                            client_spec["allowed_ips"] = allowed_ips_foreign
-                        else:
-                            client_spec["allowed_ips"] = None
+                    server_spec, client_spec = build_gost_node_specs(
+                        tunnel,
+                        iran_node_ip,
+                        foreign_node_ip,
+                        control_port,
+                        auth_token,
+                        ports
+                    )
                 
                 elif tunnel.core == "frp":
                     bind_port = spec.get("bind_port")
