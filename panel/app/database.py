@@ -100,6 +100,34 @@ async def migrate_db():
             logger.info("Adding failover_ips column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN failover_ips JSON"))
 
+        if "utls_fingerprint" not in columns:
+            logger.info("Adding utls_fingerprint column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN utls_fingerprint VARCHAR"))
+
+        if "custom_headers" not in columns:
+            logger.info("Adding custom_headers column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN custom_headers JSON"))
+
+        if "obfuscation_type" not in columns:
+            logger.info("Adding obfuscation_type column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN obfuscation_type VARCHAR DEFAULT 'none'"))
+
+        if "mux_type" not in columns:
+            logger.info("Adding mux_type column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN mux_type VARCHAR"))
+
+        if "relay_hops" not in columns:
+            logger.info("Adding relay_hops column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN relay_hops JSON"))
+
+        if "bypass_ips" not in columns:
+            logger.info("Adding bypass_ips column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN bypass_ips JSON"))
+
+        if "dns_resolvers" not in columns:
+            logger.info("Adding dns_resolvers column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN dns_resolvers JSON"))
+
 
 async def init_db():
     """Initialize database tables"""

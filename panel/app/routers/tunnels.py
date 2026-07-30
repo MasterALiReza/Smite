@@ -173,6 +173,9 @@ class TunnelResponse(BaseModel):
     custom_headers: dict | None = None
     obfuscation_type: str | None = None
     mux_type: str | None = None
+    relay_hops: list[dict] | None = None
+    bypass_ips: list[str] | None = None
+    dns_resolvers: list[str] | None = None
     status: str
     error_message: str | None = None
     revision: int
