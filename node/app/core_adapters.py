@@ -94,7 +94,7 @@ class RatholeAdapter:
             bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
             token = spec.get('token', '').strip()
             
-            ports = spec.get('ports', [])
+            ports = spec.get('ports') or []
             if not ports:
                 proxy_port = spec.get('proxy_port') or spec.get('remote_port') or spec.get('listen_port')
                 if proxy_port:
@@ -152,7 +152,7 @@ bind_addr = "0.0.0.0:{port_num}"
             token = spec.get('token', '').strip()
             
             # Support multiple ports
-            ports = spec.get('ports', [])
+            ports = spec.get('ports') or []
             if not ports:
                 # Fallback to single port for backward compatibility
                 local_addr = spec.get('local_addr', '127.0.0.1:8080')
@@ -652,7 +652,7 @@ class ChiselAdapter:
             server_url = spec.get('server_url', '').strip()
             
             # Support multiple ports
-            ports = spec.get('ports', [])
+            ports = spec.get('ports') or []
             if not ports:
                 # Fallback to single port for backward compatibility
                 reverse_port = spec.get('reverse_port') or spec.get('remote_port') or spec.get('listen_port') or spec.get('server_port')
@@ -888,7 +888,7 @@ class FrpAdapter:
             tunnel_type = spec.get('type', 'tcp').lower()
             local_ip = spec.get('local_ip', '127.0.0.1')
             
-            ports = spec.get('ports', [])
+            ports = spec.get('ports') or []
             if not ports:
                 local_port = spec.get('local_port')
                 remote_port = spec.get('remote_port') or spec.get('listen_port')
@@ -1196,7 +1196,7 @@ class GostAdapter:
             
         else:
             # 2. Client Configuration (Iran Node)
-            ports = spec.get('ports', [])
+            ports = spec.get('ports') or []
             if not ports:
                 listen_port = spec.get('listen_port')
                 if listen_port:
@@ -1343,7 +1343,7 @@ class GostAdapter:
             })
             
             # Failover IPs
-            failover_ips = spec.get("failover_ips", [])
+            failover_ips = spec.get("failover_ips") or []
             if failover_ips:
                 for i, f_ip in enumerate(failover_ips):
                     if not f_ip or not f_ip.strip(): continue
@@ -1379,7 +1379,7 @@ class GostAdapter:
             chain_hops = []
             
             # Prepend multi-hop relays before the final node
-            relay_hops = spec.get("relay_hops", [])
+            relay_hops = spec.get("relay_hops") or []
             for idx, hop_cfg in enumerate(relay_hops):
                 if isinstance(hop_cfg, str):
                     h_addr = hop_cfg
