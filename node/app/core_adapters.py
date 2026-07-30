@@ -1104,6 +1104,8 @@ class GostAdapter:
             gost_type = "wss"
         elif transport_type == "mws" and security_type in ["tls", "utls"]:
             gost_type = "mwss"
+        elif transport_type == "tcp" and security_type in ["tls", "utls"]:
+            gost_type = "tls"
         
         config = {
             "services": [],
@@ -1139,21 +1141,33 @@ class GostAdapter:
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
             if is_reverse:
-                listener_metadata["bind"] = "true"
+                listener_metadata["bind"] = True
             if spec.get("gaming_mode") or spec.get("multiplex"):
                 listener_metadata["mux.type"] = mux_type
-                listener_metadata["nodelay"] = "true"
+                listener_metadata["nodelay"] = True
                 
             listener = {"type": gost_type}
             if listener_metadata:
                 listener["metadata"] = listener_metadata
             
-            if security_type == "tls":
-                # Basic TLS doesn't require specific config on server unless we provide certs
-                pass
-            elif security_type == "utls":
-                # Server side doesn't do uTLS actively, it just accepts TLS
-                pass
+            if security_type in ["tls", "utls"] and gost_type not in ["tcp", "udp", "rtcp", "rudp"]:
+                cert_path = self.config_dir / "dummy_cert.pem"
+                key_path = self.config_dir / "dummy_key.pem"
+                if not cert_path.exists() or not key_path.exists():
+                    try:
+                        subprocess.run([
+                            "openssl", "req", "-new", "-newkey", "rsa:2048", "-days", "3650",
+                            "-nodes", "-x509", "-subj", "/O=Smite/CN=smite.node",
+                            "-keyout", str(key_path), "-out", str(cert_path)
+                        ], check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    except Exception as e:
+                        logger.error(f"Failed to generate self-signed cert: {e}")
+                
+                if cert_path.exists() and key_path.exists():
+                    listener["tls"] = {
+                        "certFile": str(cert_path),
+                        "keyFile": str(key_path)
+                    }
                 
             # 1. Access Control (ACL)
             adm_name = None
@@ -1168,10 +1182,10 @@ class GostAdapter:
                 
             handler_metadata = {}
             if is_reverse:
-                handler_metadata["bind"] = "true"
+                handler_metadata["bind"] = True
             if spec.get("gaming_mode") or spec.get("multiplex"):
                 handler_metadata["mux.type"] = mux_type
-                handler_metadata["nodelay"] = "true"
+                handler_metadata["nodelay"] = True
                 
             handler = {
                 "type": handler_type
@@ -1311,13 +1325,13 @@ class GostAdapter:
                 dialer["resolver"] = f"resolver-{tunnel_id}"
             
             # keepalive metadata for stability
-            dialer_metadata["keepAlive"] = "true"
+            dialer_metadata["keepAlive"] = True
             dialer_metadata["timeout"] = "15s"
             
             mux_type = spec.get("mux_type") or "yamux"
             if spec.get("gaming_mode") or spec.get("multiplex"):
                 dialer_metadata["mux.type"] = mux_type
-                dialer_metadata["nodelay"] = "true"
+                dialer_metadata["nodelay"] = True
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
@@ -1333,8 +1347,8 @@ class GostAdapter:
             connector_metadata = {}
             if spec.get("gaming_mode") or spec.get("multiplex"):
                 connector_metadata["mux.type"] = mux_type
-                connector_metadata["nodelay"] = "true"
-                connector_metadata["keepAlive"] = "true"
+                connector_metadata["nodelay"] = True
+                connector_metadata["keepAlive"] = True
             
             connector_type = spec.get("connector_type") or spec.get("handler_type") or "relay"
             connector_primary = {"type": connector_type}
