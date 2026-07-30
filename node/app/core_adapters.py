@@ -1094,6 +1094,11 @@ class GostAdapter:
         if spec.get("cdn_mode") and transport_type in ["tcp", "tcp+udp"]:
             transport_type = "ws"
         
+        if transport_type == "websocket":
+            transport_type = "ws"
+        elif transport_type in ["multiplex ws", "multiplex_ws"]:
+            transport_type = "mws"
+
         gost_type = transport_type
         if transport_type == "ws" and security_type in ["tls", "utls"]:
             gost_type = "wss"
@@ -1270,7 +1275,14 @@ class GostAdapter:
             if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
                 headers_dict = {}
                 if spec.get("custom_headers"):
-                    headers_dict.update(spec.get("custom_headers"))
+                    ch = spec.get("custom_headers")
+                    if isinstance(ch, dict):
+                        headers_dict.update(ch)
+                    elif isinstance(ch, str):
+                        for h in ch.split(','):
+                            if ':' in h:
+                                k, v = h.split(':', 1)
+                                headers_dict[k.strip()] = v.strip()
                 
                 # Default User-Agent if not specified
                 user_agent = spec.get("user_agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -1437,9 +1449,9 @@ class GostAdapter:
                     listener_tcp = {"type": listener_type}
                     
                     if is_reverse:
+                        listener_tcp["chain"] = f"chain-{tunnel_id}"
                         handler_tcp = {
-                            "type": "rtcp",
-                            "chain": f"chain-{tunnel_id}"
+                            "type": "tcp"
                         }
                     else:
                         handler_tcp = {
@@ -1468,9 +1480,9 @@ class GostAdapter:
                     listener_udp = {"type": listener_type}
                     
                     if is_reverse:
+                        listener_udp["chain"] = f"chain-{tunnel_id}"
                         handler_udp = {
-                            "type": "rudp",
-                            "chain": f"chain-{tunnel_id}"
+                            "type": "udp"
                         }
                     else:
                         handler_udp = {
