@@ -43,31 +43,52 @@ class GostForwarder:
             else:
                 listen_addr = f"0.0.0.0:{local_port}"
             
-            if tunnel_type == "tcp":
-                cmd = ["/usr/local/bin/gost", f"-L=tcp://{listen_addr}/{target_addr}"]
-            elif tunnel_type == "udp":
-                cmd = ["/usr/local/bin/gost", f"-L=udp://{listen_addr}/{target_addr}"]
-            elif tunnel_type == "ws":
-                import socket
-                try:
-                    if use_ipv6:
-                        s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-                        s.connect(("2001:4860:4860::8888", 80))
-                        bind_ip = s.getsockname()[0]
-                    else:
-                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        s.connect(("8.8.8.8", 80))
-                        bind_ip = s.getsockname()[0]
-                    s.close()
-                except Exception:
-                    bind_ip = "[::]" if use_ipv6 else "0.0.0.0"
-                cmd = ["/usr/local/bin/gost", f"-L=ws://{bind_ip}:{local_port}/tcp://{target_addr}"]
-            elif tunnel_type == "grpc":
-                cmd = ["/usr/local/bin/gost", f"-L=grpc://{listen_addr}/{target_addr}"]
-            elif tunnel_type == "tcpmux":
-                cmd = ["/usr/local/bin/gost", f"-L=tcpmux://{listen_addr}/{target_addr}"]
+            import json
+            services = []
+            if tunnel_type == "tcp+udp":
+                for proto in ["tcp", "udp"]:
+                    services.append({
+                        "name": f"forward-{tunnel_id}-{proto}",
+                        "addr": listen_addr,
+                        "handler": {"type": proto},
+                        "listener": {"type": proto},
+                        "forwarder": {
+                            "nodes": [
+                                {"name": f"target-{tunnel_id}-{proto}", "addr": target_addr}
+                            ]
+                        }
+                    })
             else:
-                raise ValueError(f"Unsupported tunnel type: {tunnel_type}")
+                listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux"] else "tcp"
+                handler_type = "udp" if tunnel_type == "udp" else "tcp"
+                
+                listener_obj = {"type": listener_type}
+                if path and tunnel_type == "ws":
+                    listener_obj["metadata"] = {"path": path}
+
+                services.append({
+                    "name": f"forward-{tunnel_id}",
+                    "addr": listen_addr,
+                    "handler": {"type": handler_type},
+                    "listener": listener_obj,
+                    "forwarder": {
+                        "nodes": [
+                            {"name": f"target-{tunnel_id}", "addr": target_addr}
+                        ]
+                    }
+                })
+            
+            config = {
+                "services": services
+            }
+            
+            config_file = self.config_dir / f"gost_{tunnel_id}.json"
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            try:
+                os.chmod(config_file, 0o600)
+            except Exception:
+                pass
             
             gost_binary = "/usr/local/bin/gost"
             if not os.path.exists(gost_binary):
@@ -77,8 +98,8 @@ class GostForwarder:
             elif not os.access(gost_binary, os.X_OK):
                 raise RuntimeError(f"gost binary at {gost_binary} is not executable")
             
-            cmd[0] = gost_binary
-            logger.info(f"Starting gost: {' '.join(cmd)}")
+            cmd = [gost_binary, "-C", str(config_file)]
+            logger.info(f"Starting gost v3: {' '.join(cmd)}")
             
             log_file = self.config_dir / f"gost_{tunnel_id}.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +180,20 @@ class GostForwarder:
                 pass
             del self.log_files[tunnel_id]
         
+        config_file = self.config_dir / f"gost_{tunnel_id}.json"
+        if config_file.exists():
+            try:
+                config_file.unlink()
+            except Exception:
+                pass
+
+        log_file = self.config_dir / f"gost_{tunnel_id}.log"
+        if log_file.exists():
+            try:
+                log_file.unlink()
+            except Exception:
+                pass
+
         if tunnel_id in self.forward_configs:
             del self.forward_configs[tunnel_id]
     

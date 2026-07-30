@@ -110,6 +110,13 @@ class TunnelCreate(BaseModel):
     transport_type: str | None = "tcp"
     security_type: str | None = "none"
     failover_ips: list[str] | None = None
+    utls_fingerprint: str | None = None
+    custom_headers: dict | None = None
+    obfuscation_type: str | None = "none"
+    mux_type: str | None = None
+    relay_hops: list[dict] | None = None
+    bypass_ips: list[str] | None = None
+    dns_resolvers: list[str] | None = None
 
 
 class TunnelUpdate(BaseModel):
@@ -131,6 +138,13 @@ class TunnelUpdate(BaseModel):
     transport_type: str | None = None
     security_type: str | None = None
     failover_ips: list[str] | None = None
+    utls_fingerprint: str | None = None
+    custom_headers: dict | None = None
+    obfuscation_type: str | None = None
+    mux_type: str | None = None
+    relay_hops: list[dict] | None = None
+    bypass_ips: list[str] | None = None
+    dns_resolvers: list[str] | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -155,6 +169,10 @@ class TunnelResponse(BaseModel):
     transport_type: str | None = "tcp"
     security_type: str | None = "none"
     failover_ips: list[str] | None = None
+    utls_fingerprint: str | None = None
+    custom_headers: dict | None = None
+    obfuscation_type: str | None = None
+    mux_type: str | None = None
     status: str
     error_message: str | None = None
     revision: int
@@ -215,7 +233,19 @@ def build_gost_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str, contr
         "failover_ips": failover_ips,
         "port_ranges": port_ranges,
         "is_reverse": is_reverse,
+        "utls_fingerprint": getattr(tunnel, "utls_fingerprint", None),
+        "custom_headers": getattr(tunnel, "custom_headers", None),
+        "obfuscation_type": getattr(tunnel, "obfuscation_type", None),
+        "mux_type": getattr(tunnel, "mux_type", None),
+        "relay_hops": getattr(tunnel, "relay_hops", None),
+        "bypass_ips": getattr(tunnel, "bypass_ips", None),
+        "dns_resolvers": getattr(tunnel, "dns_resolvers", None),
     }
+
+    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex"]:
+            if k in tunnel.spec:
+                base_spec[k] = tunnel.spec[k]
 
     if is_reverse:
         # Reverse Tunnel: Iran Node is GOST Server, Foreign Node is GOST Client
@@ -360,6 +390,13 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         transport_type=tunnel.transport_type,
         security_type=tunnel.security_type,
         failover_ips=tunnel.failover_ips,
+        utls_fingerprint=tunnel.utls_fingerprint,
+        custom_headers=tunnel.custom_headers,
+        obfuscation_type=tunnel.obfuscation_type,
+        mux_type=tunnel.mux_type,
+        relay_hops=tunnel.relay_hops,
+        bypass_ips=tunnel.bypass_ips,
+        dns_resolvers=tunnel.dns_resolvers,
         status="pending"
     )
     db.add(db_tunnel)
@@ -1233,7 +1270,14 @@ async def update_tunnel(
         (tunnel_update.rate_limit_mbps is not None and tunnel_update.rate_limit_mbps != tunnel.rate_limit_mbps) or
         (tunnel_update.transport_type is not None and tunnel_update.transport_type != tunnel.transport_type) or
         (tunnel_update.security_type is not None and tunnel_update.security_type != tunnel.security_type) or
-        (tunnel_update.failover_ips is not None and tunnel_update.failover_ips != tunnel.failover_ips)
+        (tunnel_update.failover_ips is not None and tunnel_update.failover_ips != tunnel.failover_ips) or
+        (tunnel_update.utls_fingerprint is not None and tunnel_update.utls_fingerprint != tunnel.utls_fingerprint) or
+        (tunnel_update.custom_headers is not None and tunnel_update.custom_headers != tunnel.custom_headers) or
+        (tunnel_update.obfuscation_type is not None and tunnel_update.obfuscation_type != tunnel.obfuscation_type) or
+        (tunnel_update.mux_type is not None and tunnel_update.mux_type != tunnel.mux_type) or
+        (tunnel_update.relay_hops is not None and tunnel_update.relay_hops != tunnel.relay_hops) or
+        (tunnel_update.bypass_ips is not None and tunnel_update.bypass_ips != tunnel.bypass_ips) or
+        (tunnel_update.dns_resolvers is not None and tunnel_update.dns_resolvers != tunnel.dns_resolvers)
     )
     
     if tunnel_update.name is not None:
@@ -1277,12 +1321,35 @@ async def update_tunnel(
         tunnel.security_type = tunnel_update.security_type
     if tunnel_update.failover_ips is not None:
         tunnel.failover_ips = tunnel_update.failover_ips
+    if tunnel_update.utls_fingerprint is not None:
+        tunnel.utls_fingerprint = tunnel_update.utls_fingerprint
+    if tunnel_update.custom_headers is not None:
+        tunnel.custom_headers = tunnel_update.custom_headers
+    if tunnel_update.obfuscation_type is not None:
+        tunnel.obfuscation_type = tunnel_update.obfuscation_type
+    if tunnel_update.mux_type is not None:
+        tunnel.mux_type = tunnel_update.mux_type
+    if tunnel_update.relay_hops is not None:
+        tunnel.relay_hops = tunnel_update.relay_hops
+    if tunnel_update.bypass_ips is not None:
+        tunnel.bypass_ips = tunnel_update.bypass_ips
+    if tunnel_update.dns_resolvers is not None:
+        tunnel.dns_resolvers = tunnel_update.dns_resolvers
         
     tunnel.revision += 1
     tunnel.updated_at = datetime.utcnow()
     
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(tunnel, "spec")
+    if tunnel_update.relay_hops is not None:
+        flag_modified(tunnel, "relay_hops")
+    if tunnel_update.bypass_ips is not None:
+        flag_modified(tunnel, "bypass_ips")
+    if tunnel_update.dns_resolvers is not None:
+        flag_modified(tunnel, "dns_resolvers")
+    if tunnel_update.custom_headers is not None:
+        flag_modified(tunnel, "custom_headers")
+
     await db.commit()
     await db.refresh(tunnel)
     

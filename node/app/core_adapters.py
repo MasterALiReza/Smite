@@ -1091,7 +1091,7 @@ class GostAdapter:
         use_ipv6 = spec.get('use_ipv6', False)
         
         # CDN Mode Logic
-        if spec.get("cdn_mode") and transport_type in ["tcp", "udp", "tcp+udp"]:
+        if spec.get("cdn_mode") and transport_type in ["tcp", "tcp+udp"]:
             transport_type = "ws"
         
         gost_type = transport_type
@@ -1105,17 +1105,39 @@ class GostAdapter:
             "chains": []
         }
         
+        # Add Resolvers if specified
+        if spec.get("dns_resolvers") and isinstance(spec.get("dns_resolvers"), list):
+            resolver_nodes = []
+            for i, res in enumerate(spec.get("dns_resolvers")):
+                resolver_nodes.append({"name": f"dns-{tunnel_id}-{i}", "addr": res})
+            config["resolvers"] = [{
+                "name": f"resolver-{tunnel_id}",
+                "nodes": resolver_nodes
+            }]
+            
+        # Add Bypasses if specified
+        if spec.get("bypass_ips") and isinstance(spec.get("bypass_ips"), list):
+            config["bypasses"] = [{
+                "name": f"bypass-{tunnel_id}",
+                "matchers": spec.get("bypass_ips")
+            }]
+        
         if mode == 'server':
             # 1. Server Configuration (Foreign Node)
             bind_addr = f"[::]:{control_port}" if use_ipv6 else f"0.0.0.0:{control_port}"
+            
+            # Handler & Protocol Selection
+            handler_type = spec.get("handler_type") or "relay"
+            mux_type = spec.get("mux_type") or "yamux"
             
             listener_metadata = {}
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
             if is_reverse:
-                listener_metadata["bind"] = True
-            if spec.get("gaming_mode"):
-                listener_metadata["mux.type"] = "yamux"
+                listener_metadata["bind"] = "true"
+            if spec.get("gaming_mode") or spec.get("multiplex"):
+                listener_metadata["mux.type"] = mux_type
+                listener_metadata["nodelay"] = "true"
                 
             listener = {"type": gost_type}
             if listener_metadata:
@@ -1129,23 +1151,25 @@ class GostAdapter:
                 pass
                 
             # 1. Access Control (ACL)
+            adm_name = None
             if spec.get("allowed_ips"):
+                adm_name = f"adm-{tunnel_id}"
                 config["admissions"] = [
                     {
-                        "name": f"adm-{tunnel_id}",
+                        "name": adm_name,
                         "matchers": spec.get("allowed_ips")
                     }
                 ]
-                listener["admission"] = f"adm-{tunnel_id}"
                 
             handler_metadata = {}
             if is_reverse:
-                handler_metadata["bind"] = True
-            if spec.get("gaming_mode"):
-                handler_metadata["mux.type"] = "yamux"
+                handler_metadata["bind"] = "true"
+            if spec.get("gaming_mode") or spec.get("multiplex"):
+                handler_metadata["mux.type"] = mux_type
+                handler_metadata["nodelay"] = "true"
                 
             handler = {
-                "type": "relay"
+                "type": handler_type
             }
             if auth_token:
                 handler["auth"] = {
@@ -1154,6 +1178,10 @@ class GostAdapter:
                 }
             if handler_metadata:
                 handler["metadata"] = handler_metadata
+            if spec.get("bypass_ips"):
+                handler["bypass"] = f"bypass-{tunnel_id}"
+            if spec.get("dns_resolvers"):
+                handler["resolver"] = f"resolver-{tunnel_id}"
                 
             service = {
                 "name": f"gost-server-{tunnel_id}",
@@ -1161,6 +1189,9 @@ class GostAdapter:
                 "handler": handler,
                 "listener": listener
             }
+            if adm_name:
+                service["admission"] = adm_name
+
             config["services"].append(service)
             
         else:
@@ -1222,8 +1253,12 @@ class GostAdapter:
                 dialer_tls["serverName"] = spec.get("stealth_domain")
                 
             if security_type == "utls":
-                # Provide uTLS config
-                dialer_tls["utls"] = {"client": "chrome"}
+                # Dynamic uTLS fingerprint support
+                utls_client = spec.get("utls_client") or spec.get("utls_fingerprint") or "chrome"
+                if utls_client in ["random", "randomized"]:
+                    import random
+                    utls_client = random.choice(["chrome", "firefox", "ios", "android", "edge", "safari"])
+                dialer_tls["utls"] = {"client": utls_client}
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
                 # When using uTLS/TLS often we don't have valid cert for our own server IP
@@ -1231,6 +1266,20 @@ class GostAdapter:
             elif security_type == "tls":
                 dialer_tls["insecure"] = True
                 
+            # Anti-DPI custom headers for WebSocket/HTTP
+            if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
+                headers_dict = {}
+                if spec.get("custom_headers"):
+                    headers_dict.update(spec.get("custom_headers"))
+                
+                # Default User-Agent if not specified
+                user_agent = spec.get("user_agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                has_ua = any(k.lower() == "user-agent" for k in headers_dict.keys())
+                if not has_ua:
+                    headers_dict["User-Agent"] = user_agent
+                
+                dialer_metadata["header"] = headers_dict
+
             # 2. Rate Limit (Limiter)
             if spec.get("rate_limit_mbps"):
                 rate_bytes = int(spec.get("rate_limit_mbps") * 125000) # Mbps to Bytes/sec
@@ -1244,18 +1293,23 @@ class GostAdapter:
                 ]
                 
             dialer = {"type": gost_type}
+            if spec.get("bypass_ips"):
+                dialer["bypass"] = f"bypass-{tunnel_id}"
+            if spec.get("dns_resolvers"):
+                dialer["resolver"] = f"resolver-{tunnel_id}"
             
             # keepalive metadata for stability
-            dialer_metadata["keepAlive"] = "30s"
-            dialer_metadata["keepAliveTimeout"] = "90s"
+            dialer_metadata["keepAlive"] = "true"
+            dialer_metadata["timeout"] = "15s"
             
-            if spec.get("gaming_mode"):
-                dialer_metadata["mux.type"] = "yamux"
-                dialer_metadata["tcpNoDelay"] = "true"
+            mux_type = spec.get("mux_type") or "yamux"
+            if spec.get("gaming_mode") or spec.get("multiplex"):
+                dialer_metadata["mux.type"] = mux_type
+                dialer_metadata["nodelay"] = "true"
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if security_type in ["tls", "utls"]:
+            if security_type in ["tls", "utls"] and gost_type not in ["udp"]:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
@@ -1265,12 +1319,13 @@ class GostAdapter:
             hop_nodes = []
             
             connector_metadata = {}
-            if spec.get("gaming_mode"):
-                connector_metadata["mux.type"] = "yamux"
-                connector_metadata["tcpNoDelay"] = "true"
+            if spec.get("gaming_mode") or spec.get("multiplex"):
+                connector_metadata["mux.type"] = mux_type
+                connector_metadata["nodelay"] = "true"
                 connector_metadata["keepAlive"] = "true"
             
-            connector_primary = {"type": "relay"}
+            connector_type = spec.get("connector_type") or spec.get("handler_type") or "relay"
+            connector_primary = {"type": connector_type}
             if auth_token:
                 connector_primary["auth"] = {
                     "username": auth_token,
@@ -1293,7 +1348,7 @@ class GostAdapter:
                 for i, f_ip in enumerate(failover_ips):
                     if not f_ip or not f_ip.strip(): continue
                     f_addr = f"[{f_ip.strip()}]:{control_port}" if ":" in f_ip and not f_ip.startswith("[") else f"{f_ip.strip()}:{control_port}"
-                    connector_failover = {"type": "relay"}
+                    connector_failover = {"type": connector_type}
                     if auth_token:
                         connector_failover["auth"] = {
                             "username": auth_token,
@@ -1309,15 +1364,51 @@ class GostAdapter:
                         "dialer": dialer
                     })
 
-            # Create Relay Chain
+            # Create Relay Chain with HA failover selector if failover_ips provided
+            hop_obj = {
+                "name": f"hop-{tunnel_id}",
+                "nodes": hop_nodes
+            }
+            if failover_ips:
+                hop_obj["selector"] = {
+                    "strategy": "fifo",
+                    "maxFails": 1,
+                    "failTimeout": "10s"
+                }
+
+            chain_hops = []
+            
+            # Prepend multi-hop relays before the final node
+            relay_hops = spec.get("relay_hops", [])
+            for idx, hop_cfg in enumerate(relay_hops):
+                if isinstance(hop_cfg, str):
+                    h_addr = hop_cfg
+                    h_dialer = {"type": "tcp"}
+                    h_connector = {"type": "relay"}
+                elif isinstance(hop_cfg, dict):
+                    h_addr = hop_cfg.get("addr", "")
+                    h_dialer = {"type": hop_cfg.get("transport_type", "tcp")}
+                    h_connector = {"type": "relay"}
+                else:
+                    continue
+                    
+                chain_hops.append({
+                    "name": f"hop-{tunnel_id}-relay-{idx}",
+                    "nodes": [
+                        {
+                            "name": f"node-{tunnel_id}-relay-{idx}",
+                            "addr": h_addr,
+                            "connector": h_connector,
+                            "dialer": h_dialer
+                        }
+                    ]
+                })
+
+            chain_hops.append(hop_obj)
+
             config["chains"].append({
                 "name": f"chain-{tunnel_id}",
-                "hops": [
-                    {
-                        "name": f"hop-{tunnel_id}",
-                        "nodes": hop_nodes
-                    }
-                ]
+                "hops": chain_hops
             })
             
             tunnel_proto = spec.get("type", "tcp").lower()
@@ -1356,10 +1447,7 @@ class GostAdapter:
                             "chain": f"chain-{tunnel_id}"
                         }
                     
-                    if spec.get("rate_limit_mbps"):
-                        listener_tcp["limiter"] = f"limiter-{tunnel_id}"
-                    
-                    config["services"].append({
+                    service_tcp = {
                         "name": f"tcp-in-{port_num}",
                         "addr": f":{port_num}" if is_reverse else listen_addr,
                         "handler": handler_tcp,
@@ -1369,7 +1457,11 @@ class GostAdapter:
                                 {"name": f"target-tcp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
-                    })
+                    }
+                    if spec.get("rate_limit_mbps"):
+                        service_tcp["limiter"] = f"limiter-{tunnel_id}"
+                    
+                    config["services"].append(service_tcp)
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
                     listener_type = "rudp" if is_reverse else "udp"
@@ -1386,10 +1478,7 @@ class GostAdapter:
                             "chain": f"chain-{tunnel_id}"
                         }
                     
-                    if spec.get("rate_limit_mbps"):
-                        listener_udp["limiter"] = f"limiter-{tunnel_id}"
-                    
-                    config["services"].append({
+                    service_udp = {
                         "name": f"udp-in-{port_num}",
                         "addr": f":{port_num}" if is_reverse else listen_addr,
                         "handler": handler_udp,
@@ -1399,7 +1488,11 @@ class GostAdapter:
                                 {"name": f"target-udp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
-                    })
+                    }
+                    if spec.get("rate_limit_mbps"):
+                        service_udp["limiter"] = f"limiter-{tunnel_id}"
+                    
+                    config["services"].append(service_udp)
 
         # Remove empty blocks
         if not config["chains"]:
@@ -1408,6 +1501,10 @@ class GostAdapter:
         config_file = self.config_dir / f"{tunnel_id}.json"
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
+        try:
+            os.chmod(config_file, 0o600)
+        except Exception:
+            pass
 
         binary_path = self._resolve_binary_path()
         cmd = [str(binary_path), "-C", str(config_file)]
@@ -1456,11 +1553,12 @@ class GostAdapter:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                await proc.wait()
-            except:
-                pass
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             del self.processes[tunnel_id]
         
         if tunnel_id in self.log_handles:
@@ -1470,6 +1568,20 @@ class GostAdapter:
                 pass
             del self.log_handles[tunnel_id]
         
+        config_file = self.config_dir / f"{tunnel_id}.json"
+        if config_file.exists():
+            try:
+                config_file.unlink()
+            except Exception:
+                pass
+
+        log_file = self.config_dir / f"{tunnel_id}.log"
+        if log_file.exists():
+            try:
+                log_file.unlink()
+            except Exception:
+                pass
+
         try:
             kill_proc = await asyncio.create_subprocess_exec(*["pkill", "-f", f"gost.*{tunnel_id}"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             await kill_proc.wait()

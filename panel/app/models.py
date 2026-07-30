@@ -52,6 +52,17 @@ class Tunnel(Base):
     transport_type = Column(String, default="tcp")
     security_type = Column(String, default="none")
     failover_ips = Column(JSON, nullable=True)
+    
+    # Advanced GOST v3 Features (Stealth & Stability)
+    utls_fingerprint = Column(String, nullable=True)  # e.g., 'chrome', 'firefox', 'randomized'
+    custom_headers = Column(JSON, nullable=True)      # e.g., {"User-Agent": "...", "Host": "..."}
+    obfuscation_type = Column(String, default="none") # e.g., 'none', 'shadowsocks', 'trojan'
+    mux_type = Column(String, nullable=True)          # e.g., 'yamux', 'smux'
+    
+    relay_hops = Column(JSON, nullable=True)          # List of hop configurations
+    bypass_ips = Column(JSON, nullable=True)          # List of IPs/CIDRs to bypass
+    dns_resolvers = Column(JSON, nullable=True)       # Custom DNS resolvers
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
