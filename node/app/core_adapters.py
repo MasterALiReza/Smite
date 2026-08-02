@@ -1142,7 +1142,7 @@ class GostAdapter:
                 listener_metadata["path"] = spec.get("ws_path")
             if is_reverse:
                 listener_metadata["bind"] = True
-            if spec.get("gaming_mode") or spec.get("multiplex"):
+            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
                 listener_metadata["mux.type"] = mux_type
                 listener_metadata["nodelay"] = True
                 
@@ -1281,9 +1281,9 @@ class GostAdapter:
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
                 # When using uTLS/TLS often we don't have valid cert for our own server IP
-                dialer_tls["insecure"] = True
+                dialer_tls["secure"] = False
             elif security_type == "tls":
-                dialer_tls["insecure"] = True
+                dialer_tls["secure"] = False
                 
             # Anti-DPI custom headers for WebSocket/HTTP
             if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
@@ -1329,7 +1329,7 @@ class GostAdapter:
             dialer_metadata["timeout"] = "15s"
             
             mux_type = spec.get("mux_type") or "yamux"
-            if spec.get("gaming_mode") or spec.get("multiplex"):
+            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
                 dialer_metadata["mux.type"] = mux_type
                 dialer_metadata["nodelay"] = True
             
@@ -1339,13 +1339,13 @@ class GostAdapter:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
-                    dialer["tls"] = {"insecure": True}
+                    dialer["tls"] = {"secure": False}
                 
             # Generate node objects for primary and failover IPs
             hop_nodes = []
             
             connector_metadata = {}
-            if spec.get("gaming_mode") or spec.get("multiplex"):
+            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
                 connector_metadata["mux.type"] = mux_type
                 connector_metadata["nodelay"] = True
                 connector_metadata["keepAlive"] = True
@@ -1465,7 +1465,7 @@ class GostAdapter:
                     if is_reverse:
                         listener_tcp["chain"] = f"chain-{tunnel_id}"
                         handler_tcp = {
-                            "type": "tcp"
+                            "type": "rtcp"
                         }
                     else:
                         handler_tcp = {
@@ -1496,7 +1496,7 @@ class GostAdapter:
                     if is_reverse:
                         listener_udp["chain"] = f"chain-{tunnel_id}"
                         handler_udp = {
-                            "type": "udp"
+                            "type": "rudp"
                         }
                     else:
                         handler_udp = {
