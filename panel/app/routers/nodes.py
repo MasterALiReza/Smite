@@ -84,7 +84,16 @@ async def create_node(node: NodeCreate, db: AsyncSession = Depends(get_db)):
         result = await db.execute(select(Settings).where(Settings.key == "frp"))
         frp_setting = result.scalar_one_or_none()
         if frp_setting and frp_setting.value and frp_setting.value.get("enabled"):
-            panel_host = node.metadata.get("panel_address", "").split(":")[0] if node.metadata else ""
+            panel_address = node.metadata.get("panel_address", "") if node.metadata else ""
+            if panel_address:
+                if "://" in panel_address:
+                    from urllib.parse import urlparse
+                    panel_host = urlparse(panel_address).hostname or ""
+                else:
+                    panel_host = panel_address.split(":")[0]
+            else:
+                panel_host = ""
+            
             if not panel_host or panel_host == "panel.example.com":
                 import socket
                 try:
@@ -127,7 +136,16 @@ async def create_node(node: NodeCreate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.key == "frp"))
     frp_setting = result.scalar_one_or_none()
     if frp_setting and frp_setting.value and frp_setting.value.get("enabled"):
-        panel_host = node.metadata.get("panel_address", "").split(":")[0] if node.metadata else ""
+        panel_address = node.metadata.get("panel_address", "") if node.metadata else ""
+        if panel_address:
+            if "://" in panel_address:
+                from urllib.parse import urlparse
+                panel_host = urlparse(panel_address).hostname or ""
+            else:
+                panel_host = panel_address.split(":")[0]
+        else:
+            panel_host = ""
+            
         if not panel_host or panel_host == "panel.example.com":
             import socket
             try:
