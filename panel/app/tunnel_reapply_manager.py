@@ -258,6 +258,19 @@ class TunnelReapplyManager:
                                 client_spec["transport"] = transport
                                 client_spec["token"] = token
                             
+                            elif tunnel.core == "gost":
+                                from app.routers.tunnels import build_gost_node_specs
+                                control_port = server_spec.get("control_port")
+                                auth_token = server_spec.get("auth_token") or server_spec.get("token")
+                                ports = server_spec.get("ports", [])
+                                iran_node_ip = iran_node.node_metadata.get("ip_address")
+                                foreign_node_ip = foreign_node.node_metadata.get("ip_address")
+                                if not iran_node_ip or not foreign_node_ip:
+                                    continue
+                                server_spec, client_spec = build_gost_node_specs(
+                                    tunnel, iran_node_ip, foreign_node_ip, control_port, auth_token, ports
+                                )
+
                             elif tunnel.core == "backhaul":
                                 transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
                                 control_port = server_spec.get("control_port") or server_spec.get("public_port") or server_spec.get("listen_port") or 3080
