@@ -1183,7 +1183,7 @@ class GostAdapter:
             handler_metadata = {}
             if is_reverse:
                 handler_metadata["bind"] = True
-            if spec.get("gaming_mode") or spec.get("multiplex"):
+            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
                 handler_metadata["mux.type"] = mux_type
                 handler_metadata["nodelay"] = True
                 
@@ -1283,6 +1283,8 @@ class GostAdapter:
                 # When using uTLS/TLS often we don't have valid cert for our own server IP
                 dialer_tls["secure"] = False
             elif security_type == "tls":
+                if not dialer_tls.get("serverName"):
+                    dialer_tls["serverName"] = "www.google.com"
                 dialer_tls["secure"] = False
                 
             # Anti-DPI custom headers for WebSocket/HTTP
@@ -1456,7 +1458,7 @@ class GostAdapter:
                     target_address = default_target_address
                     target_port_num = port_num
                     
-                listen_addr = f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}"
+                listen_addr = f":{port_num}" if is_reverse else (f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}")
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
                     listener_type = "rtcp" if is_reverse else "tcp"
