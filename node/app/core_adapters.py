@@ -113,6 +113,7 @@ class RatholeAdapter:
             config = f"""[server]
 bind_addr = "{bind_host}:{bind_port}"
 default_token = "{token}"
+heartbeat_interval = 20
 """
             
             if use_websocket:
@@ -177,6 +178,7 @@ bind_addr = "0.0.0.0:{port_num}"
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
+heartbeat_interval = 20
 """
             
             if use_websocket:
@@ -449,6 +451,10 @@ class BackhaulAdapter:
                 config_dict["retry_interval"] = 3
             if "dial_timeout" not in config_dict:
                 config_dict["dial_timeout"] = 10
+            if "keepalive_period" not in config_dict:
+                config_dict["keepalive_period"] = 30
+            if "heartbeat" not in config_dict:
+                config_dict["heartbeat"] = 20
 
             if spec.get("accept_udp") and transport in {"tcp", "tcpmux"}:
                 config_dict["accept_udp"] = True
@@ -917,6 +923,9 @@ class FrpAdapter:
             config_file = self.config_dir / f"frpc_{tunnel_id}.yaml"
             config_content = f"""serverAddr: "{server_addr}"
 serverPort: {server_port}
+transport:
+  heartbeatInterval: 20
+  heartbeatTimeout: 60
 """
             if token:
                 config_content += f"""auth:

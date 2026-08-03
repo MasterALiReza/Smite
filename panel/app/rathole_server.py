@@ -42,6 +42,7 @@ class RatholeServerManager:
             config = f"""[server]
 bind_addr = "{bind_addr}"
 default_token = "{token}"
+heartbeat_interval = 20
 
 [server.services.{tunnel_id}]
 bind_addr = "{proxy_bind_addr}"
