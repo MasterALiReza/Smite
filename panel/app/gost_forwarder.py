@@ -50,8 +50,8 @@ class GostForwarder:
                     services.append({
                         "name": f"forward-{tunnel_id}-{proto}",
                         "addr": listen_addr,
-                        "handler": {"type": proto},
-                        "listener": {"type": proto},
+                        "handler": {"type": proto, "metadata": {"keepAlive": True}},
+                        "listener": {"type": proto, "metadata": {"keepAlive": True, "keepAliveInterval": "25s"}},
                         "forwarder": {
                             "nodes": [
                                 {"name": f"target-{tunnel_id}-{proto}", "addr": target_addr}
@@ -62,14 +62,16 @@ class GostForwarder:
                 listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux"] else "tcp"
                 handler_type = "udp" if tunnel_type == "udp" else "tcp"
                 
-                listener_obj = {"type": listener_type}
+                listener_metadata = {"keepAlive": True, "keepAliveInterval": "25s"}
                 if path and tunnel_type == "ws":
-                    listener_obj["metadata"] = {"path": path}
+                    listener_metadata["path"] = path
+
+                listener_obj = {"type": listener_type, "metadata": listener_metadata}
 
                 services.append({
                     "name": f"forward-{tunnel_id}",
                     "addr": listen_addr,
-                    "handler": {"type": handler_type},
+                    "handler": {"type": handler_type, "metadata": {"keepAlive": True}},
                     "listener": listener_obj,
                     "forwarder": {
                         "nodes": [
@@ -237,8 +239,37 @@ class GostForwarder:
                     del self.log_files[tunnel_id]
         return active
     
+    async def _health_monitor_loop(self):
+        """Background health monitor checking active forwards and auto-restarting dead processes every 30s"""
+        logger.info("GostForwarder health monitor loop started (interval: 30s)")
+        while True:
+            try:
+                await asyncio.sleep(30)
+                for tunnel_id in list(self.forward_configs.keys()):
+                    try:
+                        await self.is_forwarding(tunnel_id)
+                    except Exception as e:
+                        logger.error(f"Error in GostForwarder health check for tunnel {tunnel_id}: {e}")
+            except asyncio.CancelledError:
+                logger.info("GostForwarder health monitor loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error in GostForwarder health monitor loop: {e}", exc_info=True)
+
+    def start_monitor(self):
+        """Start the background health monitor task"""
+        if not hasattr(self, '_monitor_task') or self._monitor_task is None or self._monitor_task.done():
+            self._monitor_task = asyncio.create_task(self._health_monitor_loop())
+            logger.info("GostForwarder health monitor task created")
+
+    def stop_monitor(self):
+        """Stop the background health monitor task"""
+        if hasattr(self, '_monitor_task') and self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+
     async def cleanup_all(self):
-        """Stop all forwarding"""
+        """Stop all forwarding and health monitor"""
+        self.stop_monitor()
         tunnel_ids = list(self.active_forwards.keys())
         for tunnel_id in tunnel_ids:
             await self.stop_forward(tunnel_id)

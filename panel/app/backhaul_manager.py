@@ -200,6 +200,10 @@ class BackhaulManager:
         if tls_key:
             server_config["tls_key"] = tls_key
 
+        server_config.setdefault("keepalive_period", 20)
+        server_config.setdefault("heartbeat", 20)
+        server_config.setdefault("nodelay", True)
+
         return self._render_toml({"server": server_config})
 
     def _build_ports(self, spec: dict) -> List[str]:

@@ -82,7 +82,7 @@ class RatholeAdapter:
         """Apply Rathole tunnel - supports both server and client modes"""
         if tunnel_id in self.processes:
             logger.info(f"Rathole tunnel {tunnel_id} already exists, removing it first")
-            self.remove(tunnel_id)
+            await self.remove(tunnel_id)
         
         mode = spec.get('mode', 'client')
         
@@ -175,10 +175,11 @@ bind_addr = "0.0.0.0:{port_num}"
                 remote_addr = remote_addr[6:]
                 websocket_tls = True
             
+            heartbeat_interval = int(spec.get('heartbeat_interval', 20))
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
-heartbeat_interval = 20
+heartbeat_interval = {heartbeat_interval}
 """
             
             if use_websocket:
@@ -231,10 +232,12 @@ local_addr = "{local_addr}"
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            except:
-                pass
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             del self.processes[tunnel_id]
         
         try:
@@ -316,7 +319,7 @@ class BackhaulAdapter:
         """Apply Backhaul tunnel - supports both server and client modes"""
         if tunnel_id in self.processes:
             logger.info(f"Backhaul tunnel {tunnel_id} already exists, removing it first")
-            self.remove(tunnel_id)
+            await self.remove(tunnel_id)
         
         mode = spec.get('mode', 'client')
         
@@ -393,6 +396,10 @@ class BackhaulAdapter:
                 if value is not None and value != "":
                     server_config[key] = value
             
+            server_config.setdefault("keepalive_period", 20)
+            server_config.setdefault("heartbeat", 20)
+            server_config.setdefault("nodelay", True)
+            
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"server": server_config}), encoding="utf-8")
             
@@ -446,15 +453,17 @@ class BackhaulAdapter:
                 config_dict[key] = value
 
             if "connection_pool" not in config_dict:
-                config_dict["connection_pool"] = 4
+                config_dict["connection_pool"] = 8
             if "retry_interval" not in config_dict:
                 config_dict["retry_interval"] = 3
             if "dial_timeout" not in config_dict:
                 config_dict["dial_timeout"] = 10
             if "keepalive_period" not in config_dict:
-                config_dict["keepalive_period"] = 30
+                config_dict["keepalive_period"] = 20
             if "heartbeat" not in config_dict:
                 config_dict["heartbeat"] = 20
+            if "aggressive_pool" not in config_dict:
+                config_dict["aggressive_pool"] = True
 
             if spec.get("accept_udp") and transport in {"tcp", "tcpmux"}:
                 config_dict["accept_udp"] = True
@@ -500,10 +509,12 @@ class BackhaulAdapter:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            except Exception:
-                pass
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             del self.processes[tunnel_id]
         if tunnel_id in self.log_handles:
             try:
@@ -607,7 +618,7 @@ class ChiselAdapter:
         """Apply Chisel tunnel - supports both server and client modes"""
         if tunnel_id in self.processes:
             logger.info(f"Chisel tunnel {tunnel_id} already exists, removing it first")
-            self.remove(tunnel_id)
+            await self.remove(tunnel_id)
         
         mode = spec.get('mode', 'client')
         
@@ -627,7 +638,8 @@ class ChiselAdapter:
                 "server",
                 "--host", host,
                 "--port", str(server_port),
-                "--reverse"
+                "--reverse",
+                "--keepalive", "25s"
             ]
             
             auth = spec.get('auth')
@@ -673,7 +685,10 @@ class ChiselAdapter:
             binary_path = self._resolve_binary_path()
             cmd = [
                 str(binary_path),
-                "client"
+                "client",
+                "--keepalive", "25s",
+                "--max-retry-count", "5",
+                "--max-retry-interval", "30s"
             ]
             
             auth = spec.get('auth')
@@ -747,11 +762,12 @@ class ChiselAdapter:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                await proc.wait()
-            except:
-                pass
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             del self.processes[tunnel_id]
         
         if tunnel_id in self.log_handles:
@@ -821,7 +837,7 @@ class FrpAdapter:
         """Apply FRP tunnel - supports both server and client modes"""
         if tunnel_id in self.processes:
             logger.info(f"FRP tunnel {tunnel_id} already exists, removing it first")
-            self.remove(tunnel_id)
+            await self.remove(tunnel_id)
         
         mode = spec.get('mode', 'client')
         
@@ -831,6 +847,11 @@ class FrpAdapter:
             
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"""bindPort: {bind_port}
+transport:
+  maxPoolCount: 5
+  heartbeatTimeout: 90
+  tcpMux: true
+  tcpMuxKeepaliveInterval: 30
 """
             if token:
                 config_content += f"""auth:
@@ -924,8 +945,11 @@ class FrpAdapter:
             config_content = f"""serverAddr: "{server_addr}"
 serverPort: {server_port}
 transport:
-  heartbeatInterval: 20
-  heartbeatTimeout: 60
+  heartbeatInterval: 30
+  heartbeatTimeout: 90
+  tcpMux: true
+  tcpMuxKeepaliveInterval: 30
+  dialServerTimeout: 10
 """
             if token:
                 config_content += f"""auth:
@@ -1003,11 +1027,12 @@ transport:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                await proc.wait()
-            except:
-                pass
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             del self.processes[tunnel_id]
         
         if tunnel_id in self.log_handles:
@@ -1086,7 +1111,7 @@ class GostAdapter:
         
         if tunnel_id in self.processes:
             logger.info(f"GOST tunnel {tunnel_id} already exists, removing it first")
-            self.remove(tunnel_id)
+            await self.remove(tunnel_id)
             
         is_reverse = spec.get('is_reverse', False)
         mode = spec.get('mode', 'client')
@@ -1146,7 +1171,12 @@ class GostAdapter:
             handler_type = spec.get("handler_type") or "relay"
             mux_type = spec.get("mux_type") or "yamux"
             
-            listener_metadata = {}
+            listener_metadata = {
+                "keepAlive": True,
+                "keepAliveInterval": "25s",
+                "keepAliveTimeout": "120s",
+                "idleTimeout": "0s",
+            }
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
             if is_reverse:
@@ -1189,7 +1219,9 @@ class GostAdapter:
                     }
                 ]
                 
-            handler_metadata = {}
+            handler_metadata = {
+                "keepAlive": True,
+            }
             if is_reverse:
                 handler_metadata["bind"] = True
             if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
@@ -1337,7 +1369,10 @@ class GostAdapter:
             
             # keepalive metadata for stability
             dialer_metadata["keepAlive"] = True
-            dialer_metadata["timeout"] = "15s"
+            dialer_metadata["keepAliveInterval"] = "25s"
+            dialer_metadata["keepAliveTimeout"] = "120s"
+            dialer_metadata["timeout"] = "30s"
+            dialer_metadata["idleTimeout"] = "0s"
             
             mux_type = spec.get("mux_type") or "yamux"
             if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
@@ -1787,6 +1822,59 @@ class AdapterManager:
                 failed += 1
         
         logger.info(f"Tunnel restoration completed: {restored} restored, {failed} failed")
+        self.start_watchdog()
+
+    async def _watchdog_loop(self):
+        """Monitor active tunnels, restart dead processes with exponential backoff"""
+        logger.info("AdapterManager watchdog loop started (interval: 30s)")
+        backoff: Dict[str, int] = {}
+        while True:
+            try:
+                await asyncio.sleep(30)
+                for tunnel_id in list(self.tunnel_configs.keys()):
+                    config = self.tunnel_configs.get(tunnel_id, {})
+                    tunnel_core = config.get("core")
+                    spec = config.get("spec", {})
+                    if not tunnel_core or not spec:
+                        continue
+                    
+                    adapter = self.get_adapter(tunnel_core)
+                    if not adapter:
+                        continue
+                    
+                    status = adapter.status(tunnel_id)
+                    is_running = status.get("process_running", False) or status.get("active", False)
+                    
+                    if not is_running:
+                        current_delay = backoff.get(tunnel_id, 5)
+                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) process is dead! Restarting in {current_delay}s...")
+                        await asyncio.sleep(current_delay)
+                        try:
+                            await adapter.apply(tunnel_id, spec)
+                            self.active_tunnels[tunnel_id] = adapter
+                            backoff.pop(tunnel_id, None)
+                            logger.info(f"Watchdog: successfully restarted tunnel {tunnel_id} ({tunnel_core})")
+                        except Exception as e:
+                            logger.error(f"Watchdog: failed to restart tunnel {tunnel_id}: {e}")
+                            backoff[tunnel_id] = min(current_delay * 2, 300)
+                    else:
+                        backoff.pop(tunnel_id, None)
+            except asyncio.CancelledError:
+                logger.info("AdapterManager watchdog loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error in AdapterManager watchdog loop: {e}", exc_info=True)
+
+    def start_watchdog(self):
+        """Start watchdog background task"""
+        if not hasattr(self, '_watchdog_task') or self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+            logger.info("AdapterManager watchdog task created")
+
+    def stop_watchdog(self):
+        """Stop watchdog background task"""
+        if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
     
     async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
         """Apply tunnel using appropriate adapter"""
@@ -1836,6 +1924,7 @@ class AdapterManager:
     
     async def cleanup(self):
         """Cleanup all tunnels"""
+        self.stop_watchdog()
         for tunnel_id in list(self.active_tunnels.keys()):
             await self.remove_tunnel(tunnel_id)
 

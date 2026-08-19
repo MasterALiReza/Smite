@@ -91,6 +91,8 @@ async def lifespan(app: FastAPI):
     
     await _restore_node_tunnels()
     
+    gost_forwarder.start_monitor()
+    
     reset_task = asyncio.create_task(_auto_reset_scheduler(app))
     app.state.reset_task = reset_task
     

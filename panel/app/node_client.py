@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models import Node, Settings
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +90,19 @@ class NodeClient:
                             await asyncio.sleep(2.0)  # Longer delay for FRP retries
                             logger.info(f"[FRP] Retry {attempt + 1}/{max_retries} for node {node_id} via FRP tunnel")
                         
+                        verify_val = False
+                        try:
+                            cert_file = Path(settings.node_cert_path)
+                            if not cert_file.is_absolute():
+                                cert_file = Path.cwd() / cert_file
+                            if cert_file.exists() and cert_file.stat().st_size > 0:
+                                verify_val = str(cert_file)
+                        except Exception:
+                            verify_val = False
+
                         async with httpx.AsyncClient(
                             timeout=self.timeout, 
-                            verify=False,
+                            verify=verify_val,
                             limits=httpx.Limits(max_keepalive_connections=0 if using_frp else 5)  # Disable keep-alive for FRP
                         ) as client:
                             response = await client.post(url, json=data)

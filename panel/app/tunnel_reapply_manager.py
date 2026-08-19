@@ -120,7 +120,7 @@ class TunnelReapplyManager:
             
             for tunnel in tunnels:
                 try:
-                    is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
+                    is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (tunnel.core == "gost" and (tunnel.foreign_node_id or tunnel.iran_node_id))
                     
                     if is_reverse_tunnel:
                         iran_node_id = tunnel.iran_node_id or tunnel.node_id
@@ -137,7 +137,14 @@ class TunnelReapplyManager:
                         foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
                         if not foreign_nodes:
                             continue
-                        foreign_node = foreign_nodes[0]
+                        
+                        foreign_node = None
+                        if tunnel.foreign_node_id:
+                            matched = [n for n in all_nodes if n.id == tunnel.foreign_node_id]
+                            if matched:
+                                foreign_node = matched[0]
+                        if not foreign_node:
+                            foreign_node = foreign_nodes[0]
                         
                         spec = tunnel.spec.copy() if tunnel.spec else {}
                         
