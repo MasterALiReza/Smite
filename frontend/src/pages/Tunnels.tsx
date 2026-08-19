@@ -580,6 +580,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     frp_bind_port: tunnel.spec?.bind_port ? tunnel.spec.bind_port.toString() : '7000',
     frp_token: tunnel.spec?.token || '',
     frp_local_ip: tunnel.spec?.local_ip || '127.0.0.1',
+    frp_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
+    frp_security: tunnel.spec?.security_type || 'tls',
+    frp_sni: tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
+    frp_encryption: tunnel.spec?.use_encryption !== false,
+    frp_compression: tunnel.spec?.use_compression !== false,
     node_ipv6: tunnel.spec?.node_ipv6 || '',
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
@@ -701,6 +706,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         updatedSpec.local_ip = formData.frp_local_ip || '127.0.0.1'
         updatedSpec.local_port = ports[0]  // Keep for backward compatibility
         updatedSpec.type = tunnel.type === 'udp' ? 'udp' : 'tcp'
+        updatedSpec.transport_type = formData.frp_transport || 'tcp'
+        updatedSpec.security_type = formData.frp_security || 'tls'
+        updatedSpec.custom_sni = formData.frp_sni || ''
+        updatedSpec.use_encryption = formData.frp_encryption
+        updatedSpec.use_compression = formData.frp_compression
       } else if (tunnel.core === 'backhaul') {
         updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, tunnel.type as BackhaulTransport)
         // Override ports if provided
@@ -979,6 +989,67 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   </p>
                 </div>
               </div>
+
+              {/* Advanced FRP & Anti-DPI Settings */}
+              <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 space-y-4">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-cyan-500"></span>
+                  Advanced FRP & Anti-DPI Settings
+                </h4>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Transport Protocol
+                    </label>
+                    <select
+                      value={formData.frp_transport}
+                      onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="tcp">TCP (with TLS & Zero-Byte Signature)</option>
+                      <option value="kcp">KCP (Fast UDP - Resilient to Packet Loss)</option>
+                      <option value="quic">QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)</option>
+                      <option value="websocket">WebSocket (Plain WS)</option>
+                      <option value="wss">WSS (Secure WebSocket - CDN Capable)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Stealth SNI / Camouflage Domain
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.frp_sni}
+                      onChange={(e) => setFormData({ ...formData, frp_sni: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                      placeholder="e.g. speedtest.net or domain.com"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-6 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.frp_encryption}
+                      onChange={(e) => setFormData({ ...formData, frp_encryption: e.target.checked })}
+                      className="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                    Payload Encryption (AES/ChaCha20)
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.frp_compression}
+                      onChange={(e) => setFormData({ ...formData, frp_compression: e.target.checked })}
+                      className="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                    Snappy Compression (Packet Entropy Scrambling)
+                  </label>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Token (Optional - Auto-generated if empty)
@@ -1244,6 +1315,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     frp_bind_port: '7000',
     frp_token: '',
     frp_local_ip: '127.0.0.1',
+    frp_transport: 'tcp',
+    frp_security: 'tls',
+    frp_sni: '',
+    frp_encryption: true,
+    frp_compression: true,
     use_ipv6: false,
     node_ipv6: '',  // Optional IPv6 address for node (Rathole/Chisel)
     spec: {} as Record<string, any>,
@@ -1442,6 +1518,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         spec.local_port = ports[0]
         spec.type = formData.type === 'udp' ? 'udp' : 'tcp'
         tunnelType = formData.type === 'udp' ? 'udp' : 'tcp'
+        spec.transport_type = formData.frp_transport || 'tcp'
+        spec.security_type = formData.frp_security || 'tls'
+        spec.custom_sni = formData.frp_sni || ''
+        spec.use_encryption = formData.frp_encryption
+        spec.use_compression = formData.frp_compression
       }
       
       if (formData.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
@@ -1841,6 +1922,67 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                   </p>
                 </div>
               </div>
+
+              {/* Advanced FRP & Anti-DPI Settings */}
+              <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 space-y-4">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-cyan-500"></span>
+                  Advanced FRP & Anti-DPI Settings
+                </h4>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Transport Protocol
+                    </label>
+                    <select
+                      value={formData.frp_transport}
+                      onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="tcp">TCP (with TLS & Zero-Byte Signature)</option>
+                      <option value="kcp">KCP (Fast UDP - Resilient to Packet Loss)</option>
+                      <option value="quic">QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)</option>
+                      <option value="websocket">WebSocket (Plain WS)</option>
+                      <option value="wss">WSS (Secure WebSocket - CDN Capable)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Stealth SNI / Camouflage Domain
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.frp_sni}
+                      onChange={(e) => setFormData({ ...formData, frp_sni: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                      placeholder="e.g. speedtest.net or domain.com"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-6 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.frp_encryption}
+                      onChange={(e) => setFormData({ ...formData, frp_encryption: e.target.checked })}
+                      className="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                    Payload Encryption (AES/ChaCha20)
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.frp_compression}
+                      onChange={(e) => setFormData({ ...formData, frp_compression: e.target.checked })}
+                      className="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                    Snappy Compression (Packet Entropy Scrambling)
+                  </label>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Token (Optional - Auto-generated if empty)

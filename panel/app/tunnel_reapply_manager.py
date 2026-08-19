@@ -158,9 +158,17 @@ class TunnelReapplyManager:
                                 failed += 1
                                 continue
                             
+                            transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
+                            security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "tls"
+                            custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or spec.get("custom_sni") or spec.get("stealth_domain")
+                            use_encryption = spec.get("use_encryption", True)
+                            use_compression = spec.get("use_compression", True)
+                            
                             spec_for_iran = spec.copy()
                             spec_for_iran["mode"] = "server"
                             spec_for_iran["bind_port"] = bind_port
+                            spec_for_iran["transport_type"] = transport_type
+                            spec_for_iran["security_type"] = security_type
                             if token:
                                 spec_for_iran["token"] = token
                             
@@ -168,12 +176,19 @@ class TunnelReapplyManager:
                             spec_for_foreign["mode"] = "client"
                             spec_for_foreign["server_addr"] = iran_node_ip
                             spec_for_foreign["server_port"] = bind_port
+                            spec_for_foreign["transport_type"] = transport_type
+                            spec_for_foreign["security_type"] = security_type
+                            spec_for_foreign["custom_sni"] = custom_sni
+                            spec_for_foreign["use_encryption"] = use_encryption
+                            spec_for_foreign["use_compression"] = use_compression
                             if token:
                                 spec_for_foreign["token"] = token
                             tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
                             if tunnel_type not in ["tcp", "udp"]:
                                 tunnel_type = "tcp"
                             spec_for_foreign["type"] = tunnel_type
+                            local_ip = spec.get("local_ip") or "127.0.0.1"
+                            spec_for_foreign["local_ip"] = local_ip
                             
                             ports = spec.get("ports", [])
                             if not ports:

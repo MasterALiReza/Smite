@@ -564,6 +564,16 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 server_spec["bind_port"] = bind_port
                 server_spec["token"] = token
                 
+                # Propagate advanced transport & stealth fields
+                transport_type = getattr(db_tunnel, "transport_type", None) or db_tunnel.spec.get("transport_type") or db_tunnel.spec.get("transport") or "tcp"
+                security_type = getattr(db_tunnel, "security_type", None) or db_tunnel.spec.get("security_type") or "tls"
+                custom_sni = getattr(db_tunnel, "custom_sni", None) or getattr(db_tunnel, "stealth_domain", None) or db_tunnel.spec.get("custom_sni") or db_tunnel.spec.get("stealth_domain")
+                use_encryption = db_tunnel.spec.get("use_encryption", True)
+                use_compression = db_tunnel.spec.get("use_compression", True)
+                
+                server_spec["transport_type"] = transport_type
+                server_spec["security_type"] = security_type
+                
                 iran_node_ip = iran_node.node_metadata.get("ip_address")
                 if not iran_node_ip:
                     db_tunnel.status = "error"
@@ -574,11 +584,17 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 client_spec["server_addr"] = iran_node_ip
                 client_spec["server_port"] = bind_port
                 client_spec["token"] = token
+                client_spec["transport_type"] = transport_type
+                client_spec["security_type"] = security_type
+                client_spec["custom_sni"] = custom_sni
+                client_spec["use_encryption"] = use_encryption
+                client_spec["use_compression"] = use_compression
+                
                 tunnel_type = db_tunnel.type.lower() if db_tunnel.type else "tcp"
                 if tunnel_type not in ["tcp", "udp"]:
                     tunnel_type = "tcp"  # Default to tcp if invalid
                 client_spec["type"] = tunnel_type
-                local_ip = client_spec.get("local_ip") or iran_node_ip
+                local_ip = client_spec.get("local_ip") or "127.0.0.1"
                 
                 ports = parse_ports_from_spec(db_tunnel.spec)
                 if ports:
@@ -1780,20 +1796,36 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         await db.commit()
                         raise HTTPException(status_code=400, detail="Iran node has no IP address")
                     
+                    transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
+                    security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "tls"
+                    custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or spec.get("custom_sni") or spec.get("stealth_domain")
+                    use_encryption = spec.get("use_encryption", True)
+                    use_compression = spec.get("use_compression", True)
+                    
                     server_spec = spec.copy()
                     server_spec["mode"] = "server"
                     server_spec["bind_port"] = bind_port
                     server_spec["token"] = token
+                    server_spec["transport_type"] = transport_type
+                    server_spec["security_type"] = security_type
                     
                     client_spec = spec.copy()
                     client_spec["mode"] = "client"
                     client_spec["server_addr"] = iran_node_ip
                     client_spec["server_port"] = bind_port
                     client_spec["token"] = token
+                    client_spec["transport_type"] = transport_type
+                    client_spec["security_type"] = security_type
+                    client_spec["custom_sni"] = custom_sni
+                    client_spec["use_encryption"] = use_encryption
+                    client_spec["use_compression"] = use_compression
+                    
                     tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
                     if tunnel_type not in ["tcp", "udp"]:
                         tunnel_type = "tcp"
                     client_spec["type"] = tunnel_type
+                    local_ip = spec.get("local_ip") or "127.0.0.1"
+                    client_spec["local_ip"] = local_ip
                     
                     ports = spec.get("ports", [])
                     if not ports:

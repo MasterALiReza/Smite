@@ -844,14 +844,19 @@ class FrpAdapter:
         if mode == 'server':
             bind_port = spec.get('bind_port', 7000)
             token = spec.get('token')
+            force_tls = spec.get('force_tls', False) or (spec.get('security_type') == 'force_tls')
             
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"""bindPort: {bind_port}
+kcpBindPort: {bind_port}
+quicBindPort: {bind_port}
 transport:
-  maxPoolCount: 5
+  maxPoolCount: 8
   heartbeatTimeout: 90
   tcpMux: true
-  tcpMuxKeepaliveInterval: 30
+  tcpMuxKeepaliveInterval: 25
+  tls:
+    force: {'true' if force_tls else 'false'}
 """
             if token:
                 config_content += f"""auth:
@@ -915,6 +920,31 @@ transport:
             tunnel_type = spec.get('type', 'tcp').lower()
             local_ip = spec.get('local_ip', '127.0.0.1')
             
+            # Transport protocol selection (tcp, kcp, quic, websocket, wss)
+            transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
+            if transport_proto in ['websocket', 'ws']:
+                transport_proto = 'websocket'
+            elif transport_proto == 'wss':
+                transport_proto = 'wss'
+            elif transport_proto == 'quic':
+                transport_proto = 'quic'
+            elif transport_proto == 'kcp':
+                transport_proto = 'kcp'
+            else:
+                transport_proto = 'tcp'
+            
+            # Stealth TLS & SNI configuration
+            security_type = spec.get('security_type', 'tls')
+            tls_enable = spec.get('tls_enable', True) if security_type != 'none' else False
+            if transport_proto in ['wss', 'quic']:
+                tls_enable = True
+            
+            custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('server_name') or 'speedtest.net'
+            
+            # Layer-2 proxy payload encryption & compression
+            use_encryption = spec.get('use_encryption', True)
+            use_compression = spec.get('use_compression', True)
+            
             ports = spec.get('ports') or []
             if not ports:
                 local_port = spec.get('local_port')
@@ -926,7 +956,19 @@ transport:
                 elif local_port:
                     ports = [{'local': local_port, 'remote': local_port}]
             
-            logger.info(f"FRP tunnel {tunnel_id} parsed: server_addr='{server_addr}', server_port={server_port}, token={'set' if token else 'none'}, ports={len(ports)}")
+            # Expand port ranges if provided
+            if spec.get("port_ranges"):
+                for port_range in spec.get("port_ranges"):
+                    if isinstance(port_range, str) and '-' in port_range:
+                        try:
+                            start, end = port_range.split('-')
+                            if int(end) - int(start) <= 200:
+                                for p in range(int(start), int(end) + 1):
+                                    ports.append({'local': p, 'remote': p})
+                        except Exception:
+                            pass
+            
+            logger.info(f"FRP tunnel {tunnel_id} parsed: server_addr='{server_addr}', server_port={server_port}, proto={transport_proto}, tls={tls_enable}, sni={custom_sni}, ports={len(ports)}")
             
             if not server_addr:
                 raise ValueError("FRP client requires 'server_addr' (foreign server address) in spec")
@@ -945,12 +987,20 @@ transport:
             config_content = f"""serverAddr: "{server_addr}"
 serverPort: {server_port}
 transport:
-  heartbeatInterval: 30
+  protocol: "{transport_proto}"
+  heartbeatInterval: 25
   heartbeatTimeout: 90
   tcpMux: true
-  tcpMuxKeepaliveInterval: 30
-  dialServerTimeout: 10
+  tcpMuxKeepaliveInterval: 25
+  dialServerTimeout: 15
 """
+            if tls_enable:
+                config_content += f"""  tls:
+    enable: true
+    disableCustomTLSFirstByte: true
+    serverName: "{custom_sni}"
+"""
+
             if token:
                 config_content += f"""auth:
   method: token
@@ -971,12 +1021,15 @@ transport:
     localIP: {local_ip}
     localPort: {local_port}
     remotePort: {remote_port}
+    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if use_compression else 'false'}
 """
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
-            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, local={local_ip}:{local_port}, remote={remote_port}, server={server_addr}:{server_port}")
+            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={server_addr}:{server_port}")
             
             binary_path = self._resolve_binary_path()
             config_file_abs = config_file.resolve()
