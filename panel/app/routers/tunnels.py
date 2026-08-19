@@ -222,6 +222,7 @@ def build_gost_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str, contr
     base_spec = {
         "control_port": control_port,
         "auth_token": auth_token,
+        "type": getattr(tunnel, "type", "tcp") or "tcp",
         "transport": transport_type,
         "transport_type": transport_type,
         "security_type": security_type,
