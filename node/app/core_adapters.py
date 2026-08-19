@@ -845,12 +845,17 @@ class FrpAdapter:
             bind_port = spec.get('bind_port', 7000)
             token = spec.get('token')
             force_tls = spec.get('force_tls', False) or (spec.get('security_type') == 'force_tls')
+            transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
             
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"""bindPort: {bind_port}
-kcpBindPort: {bind_port}
-quicBindPort: {bind_port}
-transport:
+"""
+            if transport_proto == 'kcp':
+                config_content += f"kcpBindPort: {bind_port}\n"
+            elif transport_proto == 'quic':
+                config_content += f"quicBindPort: {bind_port}\n"
+
+            config_content += f"""transport:
   maxPoolCount: 8
   heartbeatTimeout: 90
   tcpMux: true
