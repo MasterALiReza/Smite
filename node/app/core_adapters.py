@@ -12,9 +12,15 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-async def free_port(port: Optional[int]) -> None:
+async def free_port(port: Optional[Any]) -> None:
     """Safely and aggressively terminate any process holding the specified port."""
-    if not port or not isinstance(port, int) or port <= 0:
+    if not port:
+        return
+    try:
+        port_num = int(port)
+    except (ValueError, TypeError):
+        return
+    if port_num <= 0:
         return
     
     current_pid = os.getpid()
@@ -23,9 +29,9 @@ async def free_port(port: Optional[int]) -> None:
             if p.pid == current_pid:
                 continue
             try:
-                for conn in p.net_connections(kind='inet'):
-                    if conn.laddr and conn.laddr.port == port:
-                        logger.warning(f"Terminating process {p.pid} ({p.name()}) holding port {port}")
+                for conn in p.net_connections(kind='all'):
+                    if conn.laddr and conn.laddr.port == port_num:
+                        logger.warning(f"Terminating process {p.pid} ({p.name()}) holding port {port_num}")
                         p.kill()
                         try:
                             p.wait(timeout=1.0)
@@ -36,15 +42,25 @@ async def free_port(port: Optional[int]) -> None:
             except Exception:
                 pass
     except Exception as e:
-        logger.debug(f"Error freeing port {port}: {e}")
+        logger.debug(f"Error freeing port {port_num}: {e}")
 
     try:
         fuser_proc = await asyncio.create_subprocess_exec(
-            "fuser", "-k", "-9", f"{port}/tcp",
+            "fuser", "-k", "-9", f"{port_num}/tcp",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
         await asyncio.wait_for(fuser_proc.wait(), timeout=1.0)
+    except Exception:
+        pass
+
+    try:
+        fuser_udp = await asyncio.create_subprocess_exec(
+            "fuser", "-k", "-9", f"{port_num}/udp",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        await asyncio.wait_for(fuser_udp.wait(), timeout=1.0)
     except Exception:
         pass
 
@@ -253,6 +269,15 @@ bind_addr = "0.0.0.0:{port_num}"
             with open(config_path, "w") as f:
                 f.write(config)
             
+            # Free ports before launching rathole server
+            await free_port(bind_port)
+            for port in ports:
+                try:
+                    p_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
+                    await free_port(p_num)
+                except Exception:
+                    pass
+
             try:
                 proc = await asyncio.create_subprocess_exec(*["/usr/local/bin/rathole", "-s", str(config_path)],
                     stdout=subprocess.PIPE,
@@ -504,6 +529,20 @@ class BackhaulAdapter:
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"server": server_config}), encoding="utf-8")
             
+            # Free ports before starting Backhaul server
+            try:
+                _, b_port, _ = parse_address_port(bind_addr)
+                if b_port:
+                    await free_port(b_port)
+            except Exception:
+                pass
+            for p in ports:
+                try:
+                    p_str = str(p).split('=')[0].strip()
+                    await free_port(int(p_str))
+                except Exception:
+                    pass
+
             binary_path = self._resolve_binary_path()
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
             log_fh = log_path.open("w", buffering=1)
@@ -1708,6 +1747,18 @@ class GostAdapter:
             os.chmod(config_file, 0o600)
         except Exception:
             pass
+
+        # Free all listening ports before starting GOST
+        if mode == 'server':
+            await free_port(control_port)
+        else:
+            for p in ports:
+                try:
+                    await free_port(int(p))
+                except Exception:
+                    pass
+            if is_reverse:
+                await free_port(control_port)
 
         binary_path = self._resolve_binary_path()
         cmd = [str(binary_path), "-C", str(config_file)]
