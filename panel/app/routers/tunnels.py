@@ -972,11 +972,15 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             
             if bind_port and hasattr(request.app.state, 'frp_server_manager'):
                 try:
-                    logger.info(f"Starting FRP server for tunnel {db_tunnel.id}: bind_port={bind_port}, token={'set' if token else 'none'}")
+                    transport_type = getattr(db_tunnel, "transport_type", None) or db_tunnel.spec.get("transport_type") or db_tunnel.spec.get("transport") or "tcp"
+                    security_type = getattr(db_tunnel, "security_type", None) or db_tunnel.spec.get("security_type") or "tls"
+                    force_tls = bool(db_tunnel.spec.get("force_tls")) or (security_type in ["tls", "force_tls"])
                     await request.app.state.frp_server_manager.start_server(
                         tunnel_id=db_tunnel.id,
                         bind_port=int(bind_port),
-                        token=token
+                        token=token,
+                        transport_proto=transport_type.lower(),
+                        force_tls=force_tls
                     )
                     await asyncio.sleep(1.0)
                     if not await request.app.state.frp_server_manager.is_running(db_tunnel.id):
@@ -1496,10 +1500,15 @@ async def update_tunnel(
                     if bind_port:
                         try:
                             await request.app.state.frp_server_manager.stop_server(tunnel.id)
+                            transport_type = getattr(tunnel, "transport_type", None) or tunnel.spec.get("transport_type") or tunnel.spec.get("transport") or "tcp"
+                            security_type = getattr(tunnel, "security_type", None) or tunnel.spec.get("security_type") or "tls"
+                            force_tls = bool(tunnel.spec.get("force_tls")) or (security_type in ["tls", "force_tls"])
                             await request.app.state.frp_server_manager.start_server(
                                 tunnel_id=tunnel.id,
                                 bind_port=int(bind_port),
-                                token=token
+                                token=token,
+                                transport_proto=transport_type.lower(),
+                                force_tls=force_tls
                             )
                             await asyncio.sleep(1.0)
                             if not await request.app.state.frp_server_manager.is_running(tunnel.id):
