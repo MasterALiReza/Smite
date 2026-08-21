@@ -114,12 +114,25 @@ class NodeClient:
                             if not using_frp:
                                 await asyncio.sleep(0.5)
                             continue
-                        else:
-                            error_msg = f"Network error: {str(e)}"
-                            if using_frp:
-                                remote_port = url.split(":")[-1].split("/")[0] if ":" in url else "unknown"
-                                error_msg += f" (FRP tunnel connection failed after {max_retries} attempts. The panel may not be able to reach FRP server on 127.0.0.1:{remote_port}. Check if panel and FRP server are in the same network namespace, or check FRP server logs.)"
-                            return {"status": "error", "message": error_msg}
+                        elif using_frp and node.node_metadata:
+                            # Fallback to direct HTTP if FRP connection fails
+                            direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
+                            if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
+                                logger.warning(f"[FRP->HTTP Fallback] FRP connection failed for node {node_id}, falling back to direct {direct_addr}")
+                                try:
+                                    direct_url = f"{direct_addr.rstrip('/')}{endpoint}"
+                                    async with httpx.AsyncClient(timeout=self.timeout, verify=False) as direct_client:
+                                        direct_resp = await direct_client.post(direct_url, json=data)
+                                        direct_resp.raise_for_status()
+                                        return direct_resp.json()
+                                except Exception as fallback_err:
+                                    logger.warning(f"[FRP->HTTP Fallback] Direct connection to {direct_addr} also failed: {fallback_err}")
+                        
+                        error_msg = f"Network error: {str(e)}"
+                        if using_frp:
+                            remote_port = url.split(":")[-1].split("/")[0] if ":" in url else "unknown"
+                            error_msg += f" (FRP tunnel connection failed after {max_retries} attempts. The panel may not be able to reach FRP server on 127.0.0.1:{remote_port}. Check if panel and FRP server are in the same network namespace, or check FRP server logs.)"
+                        return {"status": "error", "message": error_msg}
                 
                 # Should not reach here, but just in case
                 return {"status": "error", "message": f"Network error: {str(last_error)}"}
@@ -154,6 +167,17 @@ class NodeClient:
                     response.raise_for_status()
                     return response.json()
             except httpx.RequestError as e:
+                if using_frp and node.node_metadata:
+                    direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
+                    if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
+                        try:
+                            direct_url = f"{direct_addr.rstrip('/')}/api/agent/status"
+                            async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
+                                direct_resp = await direct_client.get(direct_url)
+                                direct_resp.raise_for_status()
+                                return direct_resp.json()
+                        except Exception:
+                            pass
                 return {"status": "error", "message": f"Network error: {str(e)}"}
             except httpx.HTTPStatusError as e:
                 try:
