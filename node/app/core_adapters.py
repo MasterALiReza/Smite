@@ -1,5 +1,6 @@
 """Core adapters for different tunnel types"""
 from typing import Protocol, Dict, Any, Optional, List
+from pathlib import Path
 import subprocess
 import asyncio
 import os
