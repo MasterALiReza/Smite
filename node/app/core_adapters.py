@@ -1112,6 +1112,7 @@ class FrpAdapter:
             config_file = self.config_dir / f"frpc_{tunnel_id}.yaml"
             config_content = f"""serverAddr: "{server_addr}"
 serverPort: {server_port}
+loginFailExit: false
 transport:
   protocol: "{transport_proto}"
   heartbeatInterval: 25
