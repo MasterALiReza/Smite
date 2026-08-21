@@ -15,6 +15,8 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
+      - ./app:/app/app
+      - ./main.py:/app/main.py
       - ./certs:/etc/smite-node/certs:ro
       - ./config:/etc/smite-node
       - node-data:/var/lib/smite-node
