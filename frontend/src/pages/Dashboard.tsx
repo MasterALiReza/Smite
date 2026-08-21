@@ -51,37 +51,37 @@ const Dashboard = () => {
   if (loading || !status) {
     return (
       <div className="w-full max-w-7xl mx-auto animate-pulse">
-        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-1/4 mb-4"></div>
-        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/3 mb-8"></div>
+        <div className="h-8 bg-[#DBE2EF] dark:bg-[#27496D] rounded-xl w-1/4 mb-4"></div>
+        <div className="h-4 bg-[#DBE2EF] dark:bg-[#27496D] rounded-xl w-1/3 mb-8"></div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-32 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+            <div key={i} className="h-36 bg-[#DBE2EF]/70 dark:bg-[#27496D] rounded-2xl"></div>
           ))}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
-          <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+          <div className="h-64 bg-[#DBE2EF]/70 dark:bg-[#27496D] rounded-2xl"></div>
+          <div className="h-64 bg-[#DBE2EF]/70 dark:bg-[#27496D] rounded-2xl"></div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
+    <div className="w-full max-w-7xl mx-auto space-y-8">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.dashboard.title}</h1>
-        <p className="text-gray-500 dark:text-gray-400">{t.dashboard.subtitle}</p>
+      <div>
+        <h1 className="text-3xl font-black tracking-tight text-[#112D4E] dark:text-[#F9F7F7] mb-2">{t.dashboard.title}</h1>
+        <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">{t.dashboard.subtitle}</p>
       </div>
 
       {/* Stats Grid */}
       <motion.div 
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
         initial="hidden"
         animate="show"
         variants={{
           hidden: { opacity: 0 },
-          show: { opacity: 1, transition: { staggerChildren: 0.1 } }
+          show: { opacity: 1, transition: { staggerChildren: 0.08 } }
         }}
       >
         <StatCard
@@ -90,7 +90,7 @@ const Dashboard = () => {
           subtitle={`${status.nodes.active} ${t.dashboard.active}`}
           icon={Server}
           color="blue"
-          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
+          variants={{ hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.totalTunnels}
@@ -98,76 +98,79 @@ const Dashboard = () => {
           subtitle={`${status.tunnels.active} ${t.dashboard.active}`}
           icon={Network}
           color="green"
-          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
+          variants={{ hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.cpuUsage}
           value={`${status.system.cpu_percent.toFixed(1)}%`}
           subtitle={t.dashboard.currentUsage}
           icon={Cpu}
-          color="purple"
-          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
+          color="cyan"
+          variants={{ hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.memoryUsage}
           value={`${status.system.memory_used_gb.toFixed(1)} GB`}
           subtitle={`${status.system.memory_percent.toFixed(1)}% of ${status.system.memory_total_gb.toFixed(1)} GB`}
           icon={MemoryStick}
-          color="orange"
-          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
+          color="teal"
+          variants={{ hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
       </motion.div>
 
       {/* Bottom Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* System Resources Card */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 transition-shadow hover:shadow-md">
+        <div className="bg-white dark:bg-[#27496D] rounded-2xl shadow-sm border border-[#DBE2EF] dark:border-[#142850] p-6 transition-all duration-300 hover:shadow-lg dark:hover:shadow-black/25">
           <div className="flex items-center gap-3 mb-6">
-            <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-              <ActivityIcon className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="p-2.5 bg-[#3F72AF]/10 dark:bg-[#00A8CC]/20 rounded-xl text-[#3F72AF] dark:text-[#00A8CC]">
+              <ActivityIcon className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.dashboard.systemResources}</h2>
+            <h2 className="text-lg font-bold text-[#112D4E] dark:text-[#F9F7F7]">{t.dashboard.systemResources}</h2>
           </div>
-          <div className="space-y-5">
+          <div className="space-y-6">
             <ProgressBar
               label="CPU"
               value={status.system.cpu_percent}
-              color="purple"
+              color="cyan"
             />
             <ProgressBar
               label="Memory"
               value={status.system.memory_percent}
-              color="orange"
+              color="teal"
             />
           </div>
         </div>
 
         {/* Quick Actions Card */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 transition-shadow hover:shadow-md">
+        <div className="bg-white dark:bg-[#27496D] rounded-2xl shadow-sm border border-[#DBE2EF] dark:border-[#142850] p-6 transition-all duration-300 hover:shadow-lg dark:hover:shadow-black/25">
           <div className="flex items-center gap-3 mb-6">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-              <Plus className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <div className="p-2.5 bg-[#3F72AF]/10 dark:bg-[#00A8CC]/20 rounded-xl text-[#3F72AF] dark:text-[#00A8CC]">
+              <Plus className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.dashboard.quickActions}</h2>
+            <h2 className="text-lg font-bold text-[#112D4E] dark:text-[#F9F7F7]">{t.dashboard.quickActions}</h2>
           </div>
           <div className="space-y-3">
             <button 
               onClick={() => navigate('/tunnels?create=true')}
-              className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md"
+              className="w-full px-5 py-3 bg-[#3F72AF] hover:bg-[#3F72AF]/90 dark:bg-gradient-to-r dark:from-[#0C7B93] dark:to-[#00A8CC] text-white rounded-xl transition-all duration-200 font-bold text-sm shadow-md shadow-[#3F72AF]/20 dark:shadow-[#00A8CC]/20 hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
             >
-              {t.dashboard.createNewTunnel}
+              <Plus size={18} />
+              <span>{t.dashboard.createNewTunnel}</span>
             </button>
             <button 
               onClick={() => navigate('/nodes?add=true')}
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600"
+              className="w-full px-5 py-3 bg-[#F9F7F7] dark:bg-[#142850] text-[#112D4E] dark:text-[#DBE2EF] rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/80 transition-all duration-200 font-semibold text-sm border border-[#DBE2EF] dark:border-[#0C7B93]/30 flex items-center justify-center gap-2"
             >
-              {t.dashboard.addNode}
+              <Server size={18} className="text-[#3F72AF] dark:text-[#00A8CC]" />
+              <span>{t.dashboard.addNode}</span>
             </button>
             <button 
               onClick={() => navigate('/servers?add=true')}
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600"
+              className="w-full px-5 py-3 bg-[#F9F7F7] dark:bg-[#142850] text-[#112D4E] dark:text-[#DBE2EF] rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/80 transition-all duration-200 font-semibold text-sm border border-[#DBE2EF] dark:border-[#0C7B93]/30 flex items-center justify-center gap-2"
             >
-              {t.dashboard.addServer}
+              <Network size={18} className="text-[#3F72AF] dark:text-[#00A8CC]" />
+              <span>{t.dashboard.addServer}</span>
             </button>
           </div>
         </div>
@@ -181,30 +184,26 @@ interface StatCardProps {
   value: string | number
   subtitle: string
   icon: LucideIcon
-  color: 'blue' | 'green' | 'purple' | 'orange'
+  color: 'blue' | 'green' | 'cyan' | 'teal'
 }
 
 const StatCard = ({ title, value, subtitle, icon: Icon, color, ...props }: StatCardProps & HTMLMotionProps<"div">) => {
   const colorClasses = {
     blue: {
-      bg: 'bg-blue-50 dark:bg-blue-900/20',
-      icon: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
-      accent: 'bg-blue-500'
+      icon: 'bg-[#3F72AF]/10 text-[#3F72AF] dark:bg-[#00A8CC]/20 dark:text-[#00A8CC]',
+      accent: 'bg-[#3F72AF] dark:bg-[#00A8CC]'
     },
     green: {
-      bg: 'bg-green-50 dark:bg-green-900/20',
-      icon: 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
-      accent: 'bg-green-500'
+      icon: 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300',
+      accent: 'bg-emerald-500'
     },
-    purple: {
-      bg: 'bg-purple-50 dark:bg-purple-900/20',
-      icon: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400',
-      accent: 'bg-purple-500'
+    cyan: {
+      icon: 'bg-[#0C7B93]/15 text-[#0C7B93] dark:bg-[#00A8CC]/20 dark:text-[#00A8CC]',
+      accent: 'bg-[#0C7B93] dark:bg-[#00A8CC]'
     },
-    orange: {
-      bg: 'bg-orange-50 dark:bg-orange-900/20',
-      icon: 'bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400',
-      accent: 'bg-orange-500'
+    teal: {
+      icon: 'bg-[#112D4E]/10 text-[#112D4E] dark:bg-[#0C7B93]/30 dark:text-[#DBE2EF]',
+      accent: 'bg-[#112D4E] dark:bg-[#0C7B93]'
     },
   }
 
@@ -212,20 +211,20 @@ const StatCard = ({ title, value, subtitle, icon: Icon, color, ...props }: StatC
 
   return (
     <motion.div 
-      className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 transition-colors duration-200 hover:shadow-md ${colors.bg}`}
+      className="relative bg-white dark:bg-[#27496D] rounded-2xl shadow-sm border border-[#DBE2EF] dark:border-[#142850] p-5 transition-all duration-300 hover:shadow-lg dark:hover:shadow-black/30 overflow-hidden"
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
       {...props}
     >
       <div className="flex items-start justify-between mb-3">
-        <div className={`p-3 rounded-lg ${colors.icon} transition-transform hover:scale-110`}>
-          <Icon className="w-6 h-6" />
+        <div className={`p-3 rounded-xl ${colors.icon} transition-transform hover:scale-105 shadow-sm`}>
+          <Icon className="w-5 h-5" />
         </div>
       </div>
-      <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">{title}</h3>
-      <p className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{value}</p>
-      <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
-      <div className={`absolute bottom-0 left-0 right-0 h-1 ${colors.accent} rounded-b-xl`}></div>
+      <h3 className="text-xs font-bold uppercase tracking-wider text-[#112D4E]/70 dark:text-[#DBE2EF]/70 mb-1">{title}</h3>
+      <p className="text-2xl font-black text-[#112D4E] dark:text-[#F9F7F7] mb-1 tracking-tight">{value}</p>
+      <p className="text-xs font-medium text-[#112D4E]/60 dark:text-[#DBE2EF]/80">{subtitle}</p>
+      <div className={`absolute bottom-0 left-0 right-0 h-1 ${colors.accent} rounded-b-2xl opacity-90`}></div>
     </motion.div>
   )
 }
@@ -233,33 +232,27 @@ const StatCard = ({ title, value, subtitle, icon: Icon, color, ...props }: StatC
 interface ProgressBarProps {
   label: string
   value: number
-  color: 'purple' | 'orange'
+  color: 'cyan' | 'teal'
 }
 
 const ProgressBar = ({ label, value, color }: ProgressBarProps) => {
   const colorClasses = {
-    purple: {
-      bg: 'bg-purple-600 dark:bg-purple-500',
-      gradient: 'from-purple-500 to-purple-600'
-    },
-    orange: {
-      bg: 'bg-orange-600 dark:bg-orange-500',
-      gradient: 'from-orange-500 to-orange-600'
-    },
+    cyan: 'from-[#3F72AF] to-[#112D4E] dark:from-[#0C7B93] dark:to-[#00A8CC]',
+    teal: 'from-[#3F72AF] to-[#00A8CC] dark:from-[#00A8CC] dark:to-[#F9F7F7]',
   }
 
-  const colors = colorClasses[color]
+  const gradient = colorClasses[color]
   const percentage = Math.min(value, 100)
 
   return (
     <div>
-      <div className="flex justify-between items-center text-sm mb-2.5">
-        <span className="font-medium text-gray-700 dark:text-gray-300">{label}</span>
-        <span className="font-semibold text-gray-900 dark:text-white">{value.toFixed(1)}%</span>
+      <div className="flex justify-between items-center text-xs mb-2">
+        <span className="font-bold text-[#112D4E] dark:text-[#F9F7F7]">{label}</span>
+        <span className="font-mono font-bold text-[#3F72AF] dark:text-[#00A8CC]">{value.toFixed(1)}%</span>
       </div>
-      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+      <div className="w-full bg-[#DBE2EF] dark:bg-[#142850] rounded-full h-2.5 overflow-hidden p-0.5 shadow-inner">
         <div
-          className={`h-2.5 rounded-full bg-gradient-to-r ${colors.gradient} transition-all duration-500 ease-out`}
+          className={`h-full rounded-full bg-gradient-to-r ${gradient} transition-all duration-500 ease-out shadow-sm`}
           style={{ width: `${percentage}%` }}
         />
       </div>

@@ -331,42 +331,42 @@ const Tunnels = () => {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4"></div>
-          <p className="text-gray-500 dark:text-gray-400">{t.tunnels.loadingTunnels}</p>
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#3F72AF] dark:border-[#00A8CC] mb-4"></div>
+          <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">{t.tunnels.loadingTunnels}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
+    <div className="w-full max-w-7xl mx-auto space-y-8">
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.tunnels.title}</h1>
-          <p className="text-gray-500 dark:text-gray-400">{t.tunnels.subtitle}</p>
+          <h1 className="text-3xl font-black tracking-tight text-[#112D4E] dark:text-[#F9F7F7] mb-2">{t.tunnels.title}</h1>
+          <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">{t.tunnels.subtitle}</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleReapplyAll}
             disabled={!!reapplyAllProgress && !reapplyAllDone}
-            className="px-5 py-2.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white rounded-xl transition-all duration-200 font-semibold text-sm shadow-sm hover:shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RotateCw size={20} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-            {t.tunnels.reapplyAll}
+            <RotateCw size={18} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+            <span>{t.tunnels.reapplyAll}</span>
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2"
+            className="px-5 py-2.5 bg-[#3F72AF] hover:bg-[#3F72AF]/90 dark:bg-gradient-to-r dark:from-[#0C7B93] dark:to-[#00A8CC] text-white rounded-xl transition-all duration-200 font-bold text-sm shadow-md shadow-[#3F72AF]/20 dark:shadow-[#00A8CC]/20 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
           >
-            <Plus size={20} />
-            {t.tunnels.createTunnel}
+            <Plus size={19} />
+            <span>{t.tunnels.createTunnel}</span>
           </button>
         </div>
       </div>
 
       {/* ── Tunnel Cards ────────────────────────────────────── */}
-      <div className="space-y-3">
+      <div className="space-y-4">
         {tunnels.length === 0 && (
           <EmptyState
             icon={<Network size={32} />}
@@ -398,18 +398,12 @@ const Tunnels = () => {
             return port ? port.toString() : 'N/A'
           }
 
-          const getCoreBadge = () => {
-            const coreColors: Record<string, { bg: string; text: string; border: string }> = {
-              rathole: { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-800 dark:text-purple-200', border: 'border-purple-300 dark:border-purple-700' },
-              backhaul: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-800 dark:text-blue-200', border: 'border-blue-300 dark:border-blue-700' },
-              chisel: { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-800 dark:text-orange-200', border: 'border-orange-300 dark:border-orange-700' },
-              frp: { bg: 'bg-cyan-100 dark:bg-cyan-900/30', text: 'text-cyan-800 dark:text-cyan-200', border: 'border-cyan-300 dark:border-cyan-700' },
-              gost: { bg: 'bg-indigo-100 dark:bg-indigo-900/30', text: 'text-indigo-800 dark:text-indigo-200', border: 'border-indigo-300 dark:border-indigo-700' },
-            }
-            return coreColors[tunnel.core] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-800 dark:text-gray-200', border: 'border-gray-300 dark:border-gray-600' }
+          const coreBadge = {
+            bg: 'bg-[#DBE2EF]/60 dark:bg-[#142850]',
+            text: 'text-[#3F72AF] dark:text-[#00A8CC]',
+            border: 'border-[#DBE2EF] dark:border-[#0C7B93]/40'
           }
 
-          const coreBadge = getCoreBadge()
           const ports = getPorts()
           const iranNode = nodes.find(n => n.id === tunnel.iran_node_id || n.id === tunnel.node_id)
           const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
@@ -417,106 +411,60 @@ const Tunnels = () => {
           return (
             <div
               key={tunnel.id}
-              className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border transition-all ${
+              className={`relative bg-white dark:bg-[#27496D] rounded-2xl border transition-all duration-300 ${
                 isReapplying
-                  ? 'border-green-400 dark:border-green-600 shadow-green-100 dark:shadow-none'
-                  : 'border-gray-200 dark:border-gray-700 hover:shadow-lg hover:border-gray-300 dark:hover:border-gray-600'
+                  ? 'border-emerald-500 shadow-lg shadow-emerald-500/20'
+                  : 'border-[#DBE2EF] dark:border-[#142850] hover:shadow-xl dark:hover:shadow-black/30'
               }`}
             >
               {/* ── Per-card loading overlay ── */}
               {isReapplying && (
-                <div className="absolute inset-0 bg-white/70 dark:bg-gray-800/70 rounded-xl z-10 flex items-center justify-center backdrop-blur-[2px]">
-                  <div className="flex items-center gap-3 px-4 py-2 bg-white dark:bg-gray-900 rounded-lg shadow-lg border border-green-200 dark:border-green-800">
-                    <Loader2 size={18} className="animate-spin text-green-600 dark:text-green-400" />
-                    <span className="text-sm font-medium text-green-700 dark:text-green-300">Applying...</span>
+                <div className="absolute inset-0 bg-white/80 dark:bg-[#27496D]/85 rounded-2xl z-10 flex items-center justify-center backdrop-blur-sm">
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#142850] rounded-xl shadow-xl border border-emerald-500/30">
+                    <Loader2 size={18} className="animate-spin text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Applying Tunnel...</span>
                   </div>
                 </div>
               )}
 
-              <div className="p-5">
+              <div className="p-5 sm:p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4 flex-1 min-w-0">
                     {/* Status Badge */}
                     <span
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
+                      className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 ${
                         tunnel.status === 'active'
-                          ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                          ? 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30'
                           : tunnel.status === 'error'
-                          ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                          ? 'bg-rose-500/10 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/30'
+                          : 'bg-[#DBE2EF]/60 dark:bg-[#142850] text-[#112D4E] dark:text-[#DBE2EF] border border-[#DBE2EF] dark:border-[#0C7B93]/30'
                       }`}
                     >
                       {tunnel.status}
                     </span>
 
+                    {/* Tunnel Details */}
                     <div className="flex-1 min-w-0">
-                      {/* Name, Core Badge, Transmission Badge, Ports */}
-                      <div className="flex items-center gap-3 mb-2 flex-wrap">
-                        <h3 className="text-base font-semibold text-gray-900 dark:text-white truncate">{tunnel.name}</h3>
-                        <span
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
-                        >
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <h3 className="text-base font-bold text-[#112D4E] dark:text-[#F9F7F7] truncate">{tunnel.name}</h3>
+                        <span className={`px-2.5 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wider border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border}`}>
                           {tunnel.core}
                         </span>
-                        {(() => {
-                          let transmissionType = null
-                          if (tunnel.core === 'chisel') {
-                            transmissionType = 'TCP'
-                          } else if (tunnel.core === 'rathole') {
-                            const transport = tunnel.spec?.transport || (tunnel.type && tunnel.type !== 'rathole' ? tunnel.type : 'tcp')
-                            transmissionType = transport.toUpperCase()
-                          } else if (tunnel.type && tunnel.type.toLowerCase() !== tunnel.core.toLowerCase()) {
-                            transmissionType = tunnel.type.toUpperCase()
-                          }
-                          
-                          if (!transmissionType) return null
-                          
-                          const getTransmissionBadge = () => {
-                            const typeColors: Record<string, { bg: string; text: string; border: string }> = {
-                              TCP: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-800 dark:text-green-200', border: 'border-green-300 dark:border-green-700' },
-                              UDP: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-800 dark:text-yellow-200', border: 'border-yellow-300 dark:border-yellow-700' },
-                              WS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
-                              WSS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
-                              GRPC: { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-800 dark:text-teal-200', border: 'border-teal-300 dark:border-teal-700' },
-                              TCPMUX: { bg: 'bg-violet-100 dark:bg-violet-900/30', text: 'text-violet-800 dark:text-violet-200', border: 'border-violet-300 dark:border-violet-700' },
-                            }
-                            return typeColors[transmissionType] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-800 dark:text-gray-200', border: 'border-gray-300 dark:border-gray-600' }
-                          }
-                          
-                          const transmissionBadge = getTransmissionBadge()
-                          return (
-                            <span
-                              className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
-                            >
-                              {transmissionType}
-                            </span>
-                          )
-                        })()}
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Ports:</span>
-                          <span className="text-sm font-mono font-semibold text-gray-700 dark:text-gray-300">{ports}</span>
-                        </div>
+                        {tunnel.mode && (
+                          <span className="text-xs text-[#112D4E]/60 dark:text-[#DBE2EF]/60 font-medium capitalize">
+                            ({tunnel.mode})
+                          </span>
+                        )}
                       </div>
 
-                      {/* Core Port, Node and Server Info */}
-                      <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs text-[#112D4E]/70 dark:text-[#DBE2EF]/80 mt-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-[#112D4E] dark:text-[#F9F7F7]">Ports:</span>
+                          <span className="font-mono text-[#3F72AF] dark:text-[#00A8CC] font-bold">{ports}</span>
+                        </div>
                         {(() => {
-                          let corePort = null
+                          let corePort: string | undefined
                           if (tunnel.core === 'rathole') {
-                            if (tunnel.spec?.bind_addr) {
-                              const match = tunnel.spec.bind_addr.match(/:(\d+)$/)
-                              if (match) corePort = match[1]
-                            }
-                            if (!corePort && tunnel.spec?.control_port) {
-                              corePort = tunnel.spec.control_port
-                            }
-                            if (!corePort) {
-                              const remoteAddr = tunnel.spec?.remote_addr || ''
-                              const match = remoteAddr.match(/:(\d+)$/)
-                              if (match) corePort = match[1]
-                            }
-                            if (!corePort) corePort = '23333'
-                          } else if (tunnel.core === 'chisel') {
                             corePort = tunnel.spec?.control_port || tunnel.spec?.server_port
                           } else if (tunnel.core === 'backhaul') {
                             corePort = tunnel.spec?.control_port || tunnel.spec?.public_port || '3080'
@@ -525,28 +473,28 @@ const Tunnels = () => {
                           }
                           return corePort ? (
                             <div className="flex items-center gap-1.5">
-                              <span className="font-medium">Core Port:</span>
-                              <span className="text-gray-700 dark:text-gray-300 font-mono">{corePort}</span>
+                              <span className="font-bold text-[#112D4E] dark:text-[#F9F7F7]">Core Port:</span>
+                              <span className="text-[#3F72AF] dark:text-[#00A8CC] font-mono font-bold">{corePort}</span>
                             </div>
                           ) : null
                         })()}
                         {iranNode && (
                           <div className="flex items-center gap-1.5">
-                            <span className="font-medium">Node:</span>
-                            <span className="text-gray-700 dark:text-gray-300">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                            <span className="font-bold text-[#112D4E] dark:text-[#F9F7F7]">Node:</span>
+                            <span className="text-[#112D4E]/80 dark:text-[#DBE2EF]">{iranNode.name || iranNode.id.substring(0, 8)}</span>
                           </div>
                         )}
                         {foreignServer && (
                           <div className="flex items-center gap-1.5">
-                            <span className="font-medium">Server:</span>
-                            <span className="text-gray-700 dark:text-gray-300">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                            <span className="font-bold text-[#112D4E] dark:text-[#F9F7F7]">Server:</span>
+                            <span className="text-[#112D4E]/80 dark:text-[#DBE2EF]">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
                           </div>
                         )}
                       </div>
 
                       {/* Error Message */}
                       {tunnel.status === 'error' && tunnel.error_message && (
-                        <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+                        <div className="mt-2.5 text-xs text-rose-600 dark:text-rose-400 font-medium">
                           {tunnel.error_message}
                         </div>
                       )}
@@ -558,7 +506,7 @@ const Tunnels = () => {
                     <button
                       onClick={() => reapplyTunnel(tunnel)}
                       disabled={isReapplying || !!reapplyingTunnelId}
-                      className="p-2 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      className="p-2 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[38px] min-h-[38px] flex items-center justify-center"
                       title="Reapply tunnel"
                       aria-label="Reapply tunnel"
                     >
@@ -571,7 +519,7 @@ const Tunnels = () => {
                     <button
                       onClick={() => setEditingTunnel(tunnel)}
                       disabled={isReapplying}
-                      className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      className="p-2 text-[#3F72AF] hover:bg-[#3F72AF]/10 dark:text-[#00A8CC] rounded-xl transition-colors disabled:opacity-40 min-w-[38px] min-h-[38px] flex items-center justify-center"
                       title="Edit tunnel"
                       aria-label="Edit tunnel"
                     >
@@ -580,7 +528,7 @@ const Tunnels = () => {
                     <button
                       onClick={() => deleteTunnel(tunnel.id)}
                       disabled={isReapplying}
-                      className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      className="p-2 text-rose-600 hover:bg-rose-500/10 dark:text-rose-400 rounded-xl transition-colors disabled:opacity-40 min-w-[38px] min-h-[38px] flex items-center justify-center"
                       title="Delete tunnel"
                       aria-label="Delete tunnel"
                     >
@@ -596,24 +544,24 @@ const Tunnels = () => {
 
       {/* ── Reapply All — Confirm Dialog ─────────────────────── */}
       {showConfirmReapplyAll && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-sm">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        <div className="fixed inset-0 bg-[#112D4E]/60 dark:bg-black/70 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-[#27496D] rounded-2xl shadow-2xl border border-[#DBE2EF] dark:border-[#142850] p-6 w-full max-w-sm animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-[#112D4E] dark:text-[#F9F7F7] mb-2">
               {t.tunnels.reapplyAll}
             </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+            <p className="text-xs font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80 mb-6">
               {t.tunnels.confirmReapplyAll || 'Are you sure you want to reapply all tunnels? This will restart all active connections.'}
             </p>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setShowConfirmReapplyAll(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                className="px-4 py-2 text-xs font-semibold text-[#112D4E] dark:text-[#DBE2EF] bg-[#DBE2EF]/60 dark:bg-[#142850] hover:bg-[#DBE2EF] dark:hover:bg-[#142850]/80 rounded-xl transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={startReapplyAll}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md transition-colors"
               >
                 Yes, Reapply All
               </button>
@@ -624,15 +572,15 @@ const Tunnels = () => {
 
       {/* ── Reapply All — Progress Modal ─────────────────────── */}
       {reapplyAllProgress && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200/80 dark:border-gray-700/80 w-full max-w-md max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-[#112D4E]/60 dark:bg-black/70 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-[#27496D] rounded-2xl shadow-2xl border border-[#DBE2EF] dark:border-[#142850] w-full max-w-md max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
             {/* Modal header */}
-            <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between p-5 border-b border-[#DBE2EF] dark:border-[#142850]">
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-xl flex items-center justify-center ${
+                <div className={`p-2.5 rounded-xl flex items-center justify-center ${
                   reapplyAllDone 
-                    ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' 
-                    : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' 
+                    : 'bg-[#3F72AF]/15 text-[#3F72AF] dark:text-[#00A8CC]'
                 }`}>
                   {reapplyAllDone ? (
                     <CheckCircle2 size={22} />
@@ -641,10 +589,10 @@ const Tunnels = () => {
                   )}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                  <h3 className="text-base font-bold text-[#112D4E] dark:text-[#F9F7F7]">
                     {reapplyAllDone ? 'Reapply Complete' : 'Applying Tunnels...'}
                   </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
+                  <p className="text-xs text-[#112D4E]/60 dark:text-[#DBE2EF]/70 mt-0.5 font-medium">
                     {reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} of {reapplyAllProgress.length} tunnels processed
                   </p>
                 </div>
@@ -652,7 +600,7 @@ const Tunnels = () => {
               {reapplyAllDone && (
                 <button
                   onClick={closeReapplyAllModal}
-                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  className="p-1.5 text-[#112D4E]/60 hover:text-[#112D4E] dark:text-[#DBE2EF]/60 dark:hover:text-white rounded-lg transition-colors"
                   aria-label="Close modal"
                 >
                   <X size={18} />
@@ -662,9 +610,9 @@ const Tunnels = () => {
 
             {/* Progress bar */}
             <div className="px-5 pt-4">
-              <div className="w-full bg-gray-100 dark:bg-gray-700/80 rounded-full h-2 overflow-hidden shadow-inner">
+              <div className="w-full bg-[#DBE2EF] dark:bg-[#142850] rounded-full h-2 overflow-hidden shadow-inner">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 transition-all duration-300 ease-out"
+                  className="h-full rounded-full bg-gradient-to-r from-[#3F72AF] via-[#00A8CC] to-emerald-500 transition-all duration-300 ease-out"
                   style={{
                     width: `${(reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length / reapplyAllProgress.length) * 100}%`
                   }}
@@ -679,46 +627,46 @@ const Tunnels = () => {
                   key={item.id}
                   className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all duration-200 ${
                     item.status === 'running'
-                      ? 'bg-blue-50/80 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 shadow-sm'
+                      ? 'bg-[#3F72AF]/10 dark:bg-[#00A8CC]/10 border-[#3F72AF]/30 dark:border-[#00A8CC]/30 shadow-sm'
                       : item.status === 'success'
-                      ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60'
+                      ? 'bg-emerald-500/10 border-emerald-500/30'
                       : item.status === 'error'
-                      ? 'bg-red-50/80 dark:bg-red-950/30 border-red-200 dark:border-red-800/60'
-                      : 'bg-gray-50/50 dark:bg-gray-700/30 border-gray-200/70 dark:border-gray-700/50'
+                      ? 'bg-rose-500/10 border-rose-500/30'
+                      : 'bg-[#F9F7F7] dark:bg-[#142850]/50 border-[#DBE2EF] dark:border-[#142850]'
                   }`}
                 >
                   {/* Status icon */}
                   <div className="shrink-0">
-                    {item.status === 'pending' && <Clock size={18} className="text-gray-400" />}
-                    {item.status === 'running' && <Loader2 size={18} className="animate-spin text-blue-600 dark:text-blue-400" />}
+                    {item.status === 'pending' && <Clock size={18} className="text-[#112D4E]/40 dark:text-[#DBE2EF]/40" />}
+                    {item.status === 'running' && <Loader2 size={18} className="animate-spin text-[#3F72AF] dark:text-[#00A8CC]" />}
                     {item.status === 'success' && <CheckCircle2 size={18} className="text-emerald-600 dark:text-emerald-400" />}
-                    {item.status === 'error' && <XCircle size={18} className="text-red-600 dark:text-red-400" />}
+                    {item.status === 'error' && <XCircle size={18} className="text-rose-600 dark:text-rose-400" />}
                   </div>
 
                   {/* Tunnel info */}
                   <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-semibold truncate ${
-                      item.status === 'running' ? 'text-blue-900 dark:text-blue-200' :
-                      item.status === 'success' ? 'text-emerald-900 dark:text-emerald-200' :
-                      item.status === 'error' ? 'text-red-900 dark:text-red-200' :
-                      'text-gray-700 dark:text-gray-300'
+                    <p className={`text-sm font-bold truncate ${
+                      item.status === 'running' ? 'text-[#3F72AF] dark:text-[#00A8CC]' :
+                      item.status === 'success' ? 'text-emerald-700 dark:text-emerald-300' :
+                      item.status === 'error' ? 'text-rose-700 dark:text-rose-300' :
+                      'text-[#112D4E] dark:text-[#F9F7F7]'
                     }`}>
                       {item.name}
                     </p>
                     {item.status === 'error' && item.error && (
-                      <p className="text-xs text-red-600 dark:text-red-400 truncate mt-0.5" title={item.error}>{item.error}</p>
+                      <p className="text-xs text-rose-600 dark:text-rose-400 truncate mt-0.5" title={item.error}>{item.error}</p>
                     )}
                     {item.status === 'running' && (
-                      <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5 animate-pulse">Applying configuration...</p>
+                      <p className="text-xs text-[#3F72AF] dark:text-[#00A8CC] mt-0.5 animate-pulse">Applying configuration...</p>
                     )}
                   </div>
 
                   {/* Status badge */}
-                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0 tracking-wide ${
-                    item.status === 'pending' ? 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400' :
-                    item.status === 'running' ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300' :
-                    item.status === 'success' ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' :
-                    'bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-300'
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 tracking-wide ${
+                    item.status === 'pending' ? 'bg-[#DBE2EF]/60 dark:bg-[#142850] text-[#112D4E]/60 dark:text-[#DBE2EF]/60' :
+                    item.status === 'running' ? 'bg-[#3F72AF]/20 text-[#3F72AF] dark:text-[#00A8CC]' :
+                    item.status === 'success' ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' :
+                    'bg-rose-500/20 text-rose-700 dark:text-rose-300'
                   }`}>
                     {item.status === 'pending' ? 'Waiting' :
                      item.status === 'running' ? 'Running' :
@@ -730,14 +678,14 @@ const Tunnels = () => {
 
             {/* Footer */}
             {reapplyAllDone && (
-              <div className="p-5 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-2xl">
-                <div className="flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">
+              <div className="p-5 border-t border-[#DBE2EF] dark:border-[#142850] bg-[#F9F7F7]/60 dark:bg-[#142850]/40 rounded-b-2xl">
+                <div className="flex items-center justify-between text-xs font-bold text-[#112D4E]/70 dark:text-[#DBE2EF]/70 mb-3">
                   <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
                     <CheckCircle2 size={15} />
                     {reapplyAllProgress.filter(i => i.status === 'success').length} succeeded
                   </span>
                   {reapplyAllProgress.filter(i => i.status === 'error').length > 0 && (
-                    <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
+                    <span className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400">
                       <XCircle size={15} />
                       {reapplyAllProgress.filter(i => i.status === 'error').length} failed
                     </span>
@@ -745,7 +693,7 @@ const Tunnels = () => {
                 </div>
                 <button
                   onClick={closeReapplyAllModal}
-                  className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-medium text-sm shadow-md hover:shadow-lg active:scale-[0.99]"
+                  className="w-full px-5 py-2.5 bg-[#3F72AF] hover:bg-[#3F72AF]/90 dark:bg-gradient-to-r dark:from-[#0C7B93] dark:to-[#00A8CC] text-white rounded-xl transition-all font-bold text-sm shadow-md"
                 >
                   Done
                 </button>

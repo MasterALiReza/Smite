@@ -41,6 +41,17 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // Color Hunt Palette Specific Tokens
+        brand: {
+          darkBg: "#142850",
+          darkCard: "#27496D",
+          darkTeal: "#0C7B93",
+          darkCyan: "#00A8CC",
+          lightBg: "#F9F7F7",
+          lightSurface: "#DBE2EF",
+          lightPrimary: "#3F72AF",
+          lightNavy: "#112D4E",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

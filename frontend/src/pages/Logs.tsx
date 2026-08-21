@@ -55,13 +55,13 @@ const Logs = () => {
 
   const getLevelColor = (level: string, dark = false): string => {
     const colors: Record<string, { light: string; dark: string }> = {
-      error: { light: 'text-red-600', dark: 'text-red-400' },
-      warning: { light: 'text-yellow-600', dark: 'text-yellow-300' },
-      warn: { light: 'text-yellow-600', dark: 'text-yellow-300' },
-      info: { light: 'text-blue-600', dark: 'text-blue-300' },
-      debug: { light: 'text-gray-500', dark: 'text-gray-400' },
+      error: { light: 'text-rose-400 font-bold', dark: 'text-rose-400 font-bold' },
+      warning: { light: 'text-amber-400 font-bold', dark: 'text-amber-400 font-bold' },
+      warn: { light: 'text-amber-400 font-bold', dark: 'text-amber-400 font-bold' },
+      info: { light: 'text-[#00A8CC] font-bold', dark: 'text-[#00A8CC] font-bold' },
+      debug: { light: 'text-[#DBE2EF]/60', dark: 'text-[#DBE2EF]/60' },
     }
-    const c = colors[level.toLowerCase()] ?? { light: 'text-gray-700', dark: 'text-gray-300' }
+    const c = colors[level.toLowerCase()] ?? { light: 'text-[#DBE2EF]', dark: 'text-[#DBE2EF]' }
     return dark ? c.dark : c.light
   }
 
@@ -69,8 +69,8 @@ const Logs = () => {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4"></div>
-          <p className="text-gray-500 dark:text-gray-400">Loading logs...</p>
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#3F72AF] dark:border-[#00A8CC] mb-4"></div>
+          <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">Loading logs...</p>
         </div>
       </div>
     )
@@ -81,19 +81,19 @@ const Logs = () => {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
+    <div className="w-full max-w-7xl mx-auto space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.logs.title}</h1>
-          <p className="text-gray-500 dark:text-gray-400">{t.logs.subtitle}</p>
+          <h1 className="text-3xl font-black tracking-tight text-[#112D4E] dark:text-[#F9F7F7] mb-2">{t.logs.title}</h1>
+          <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">{t.logs.subtitle}</p>
         </div>
-        <div className="flex gap-3">
-          <span className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium border border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-3">
+          <span className="px-3.5 py-2 bg-[#DBE2EF]/60 dark:bg-[#142850] text-[#112D4E] dark:text-[#00A8CC] rounded-xl text-xs font-mono font-bold border border-[#DBE2EF] dark:border-[#0C7B93]/30">
             {logs.length} entries
           </span>
           <button
             onClick={handleClearDisplay}
-            className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-[#DBE2EF]/60 hover:bg-[#DBE2EF] dark:bg-[#142850] dark:hover:bg-[#142850]/80 text-[#112D4E] dark:text-[#DBE2EF] rounded-xl text-xs font-bold transition-colors border border-[#DBE2EF] dark:border-[#0C7B93]/30"
           >
             Clear display
           </button>
@@ -102,17 +102,17 @@ const Logs = () => {
 
       <div 
         ref={logContainerRef}
-        className="bg-gray-900 dark:bg-black rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 font-mono text-sm overflow-auto" 
+        className="bg-[#142850] rounded-2xl border border-[#DBE2EF] dark:border-[#0C7B93]/40 shadow-2xl p-6 font-mono text-xs overflow-auto text-[#DBE2EF]" 
         style={{ maxHeight: '70vh' }}
       >
         {logs.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">No logs available</div>
+          <div className="text-center py-12 text-[#DBE2EF]/50 font-medium">No logs available</div>
         ) : (
           logs.map((log, index) => (
-            <div key={index} className="mb-1 hover:bg-gray-800/50 px-2 py-1 rounded">
-              <span className="text-gray-500 dark:text-gray-400">[{log.timestamp}]</span>{' '}
+            <div key={index} className="mb-1.5 hover:bg-[#27496D]/50 px-2.5 py-1 rounded-lg transition-colors leading-relaxed">
+              <span className="text-[#DBE2EF]/50">[{log.timestamp}]</span>{' '}
               <span className={`${getLevelColor(log.level, true)}`}>[{log.level.toUpperCase()}]</span>{' '}
-              <span className="text-gray-300 dark:text-gray-200">{log.message}</span>
+              <span className="text-[#F9F7F7]">{log.message}</span>
             </div>
           ))
         )}

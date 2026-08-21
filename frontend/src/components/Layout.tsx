@@ -48,12 +48,12 @@ const Layout = ({ children }: LayoutProps) => {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900" dir={language === 'fa' ? 'rtl' : 'ltr'}>
-      <div className="flex h-screen">
+    <div className="min-h-screen bg-[#F9F7F7] dark:bg-[#142850] text-[#112D4E] dark:text-[#F9F7F7]" dir={language === 'fa' ? 'rtl' : 'ltr'}>
+      <div className="flex h-screen overflow-hidden">
         {/* Mobile Sidebar Overlay */}
         {sidebarOpen && (
           <div
-            className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+            className="fixed inset-0 bg-[#112D4E]/60 dark:bg-black/70 backdrop-blur-sm z-40 lg:hidden transition-opacity"
             onClick={() => setSidebarOpen(false)}
           />
         )}
@@ -61,42 +61,46 @@ const Layout = ({ children }: LayoutProps) => {
         {/* Sidebar */}
         <aside
           dir={language === 'fa' ? 'rtl' : 'ltr'}
-          className={`fixed lg:static inset-y-0 ${language === 'fa' ? 'right-0 border-l' : 'left-0 border-r'} w-64 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 flex flex-col z-50 transform transition-transform duration-300 ease-in-out ${
+          className={`fixed lg:static inset-y-0 ${language === 'fa' ? 'right-0 border-l' : 'left-0 border-r'} w-64 bg-white dark:bg-[#27496D] border-[#DBE2EF] dark:border-[#142850] flex flex-col z-50 transform transition-transform duration-300 ease-out shadow-lg lg:shadow-none ${
             sidebarOpen ? 'translate-x-0' : (language === 'fa' ? 'translate-x-full lg:translate-x-0' : '-translate-x-full lg:translate-x-0')
           }`}
         >
           {/* Sidebar Header */}
-          <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="p-6 border-b border-[#DBE2EF] dark:border-[#142850]/70">
             <div className="flex items-center justify-end lg:hidden mb-2">
               <button
                 onClick={() => setSidebarOpen(false)}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                className="p-2 rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-[#112D4E] dark:text-[#DBE2EF] min-w-[40px] min-h-[40px] flex items-center justify-center transition-colors"
                 aria-label="Close sidebar"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="flex flex-col items-center gap-4">
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-500/20 dark:bg-blue-400/20 rounded-full blur-xl"></div>
+            <div className="flex flex-col items-center gap-3">
+              <div className="relative group">
+                <div className="absolute inset-0 bg-[#3F72AF]/20 dark:bg-[#00A8CC]/25 rounded-full blur-xl transition-all group-hover:blur-2xl"></div>
                 <img 
                   src={darkMode ? SmiteLogoDark : SmiteLogoLight} 
                   alt="Smite Logo" 
-                  className="relative h-24 w-24"
+                  className="relative h-20 w-20 drop-shadow-md transition-transform duration-300 group-hover:scale-105"
                 />
               </div>
               <div className="text-center">
-                <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">Smite</h1>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Control Panel</p>
+                <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-[#112D4E] via-[#3F72AF] to-[#3F72AF] dark:from-[#00A8CC] dark:via-[#F9F7F7] dark:to-[#00A8CC] bg-clip-text text-transparent">
+                  Smite
+                </h1>
+                <p className="text-xs font-semibold text-[#3F72AF] dark:text-[#00A8CC]/90 tracking-wide mt-0.5 uppercase">Control Panel</p>
                 {username && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">{username}</p>
+                  <p className="text-xs font-medium text-[#112D4E] dark:text-[#F9F7F7] mt-2 px-3 py-1 bg-[#DBE2EF]/70 dark:bg-[#142850]/80 rounded-full border border-[#DBE2EF] dark:border-[#0C7B93]/30 inline-block shadow-sm">
+                    {username}
+                  </p>
                 )}
               </div>
             </div>
           </div>
           
           {/* Navigation */}
-          <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          <nav className="flex-1 p-3.5 space-y-1.5 overflow-y-auto">
             {navItems.map((item) => {
               const Icon = item.icon
               const isActive = location.pathname === item.path
@@ -104,54 +108,54 @@ const Layout = ({ children }: LayoutProps) => {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                  className={`flex items-center gap-3.5 px-4 py-2.5 rounded-xl transition-all duration-200 ${
                     isActive
-                      ? 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 text-blue-600 dark:text-blue-400 shadow-sm'
-                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                      ? 'bg-[#3F72AF] text-white shadow-md shadow-[#3F72AF]/25 dark:bg-gradient-to-r dark:from-[#0C7B93] dark:to-[#00A8CC] dark:text-white dark:shadow-[#00A8CC]/20 font-semibold scale-[1.01]'
+                      : 'text-[#112D4E]/80 dark:text-[#DBE2EF]/80 hover:bg-[#DBE2EF]/50 dark:hover:bg-[#142850]/50 hover:text-[#112D4E] dark:hover:text-white font-medium'
                   }`}
                 >
-                  <Icon size={20} className={isActive ? 'text-blue-600 dark:text-blue-400' : ''} />
-                  <span className="font-medium">{item.label}</span>
+                  <Icon size={19} className={isActive ? 'text-white' : 'text-[#3F72AF] dark:text-[#00A8CC]'} />
+                  <span className="text-sm">{item.label}</span>
                 </Link>
               )
             })}
           </nav>
           
           {/* Sidebar Footer */}
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
+          <div className="p-4 border-t border-[#DBE2EF] dark:border-[#142850]/70 space-y-2.5 bg-[#F9F7F7]/60 dark:bg-[#142850]/30">
             <div className="space-y-2">
-              <div className="flex items-center justify-between px-4 py-2">
+              <div className="flex items-center justify-between px-2 py-1">
                 <button
                   onClick={toggleDarkMode}
-                  className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-[#112D4E] dark:text-[#DBE2EF] transition-colors"
                 >
-                  {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-                  <span className="text-sm font-medium">{darkMode ? t.navigation.light : t.navigation.dark}</span>
+                  {darkMode ? <Sun size={17} className="text-[#00A8CC]" /> : <Moon size={17} className="text-[#3F72AF]" />}
+                  <span className="text-xs font-semibold">{darkMode ? t.navigation.light : t.navigation.dark}</span>
                 </button>
                 <button
                   onClick={() => setLanguage(language === 'en' ? 'fa' : 'en')}
-                  className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-[#112D4E] dark:text-[#DBE2EF] transition-colors font-bold text-xs"
                   title={language === 'en' ? 'Switch to Farsi' : 'Switch to English'}
                 >
-                  <Languages size={18} />
-                  <span className="text-sm font-medium">{language === 'en' ? 'EN' : 'FA'}</span>
+                  <Languages size={17} className="text-[#3F72AF] dark:text-[#00A8CC]" />
+                  <span>{language === 'en' ? 'FA' : 'EN'}</span>
                 </button>
               </div>
-              <div className="px-4">
+              <div className="px-2">
                 <button
                   onClick={() => {
                     logout()
                     navigate('/login')
                   }}
-                  className="w-full flex items-center justify-center gap-2 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors"
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors text-xs font-semibold"
                 >
-                  <LogOut size={18} />
-                  <span className="text-sm font-medium">{t.navigation.logout}</span>
+                  <LogOut size={16} />
+                  <span>{t.navigation.logout}</span>
                 </button>
               </div>
             </div>
-            <div className="flex flex-col items-center gap-2 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
-              <div className="flex items-center gap-1 flex-wrap justify-center">
+            <div className="flex flex-col items-center gap-1.5 text-[11px] text-[#112D4E]/60 dark:text-[#DBE2EF]/60 pt-2 border-t border-[#DBE2EF] dark:border-[#142850]/50">
+              <div className="flex items-center gap-1 flex-wrap justify-center font-medium">
                 <span>Made with</span>
                 <span className="text-red-500">❤️</span>
                 <span>by</span>
@@ -159,21 +163,21 @@ const Layout = ({ children }: LayoutProps) => {
                   href="https://github.com/zZedix" 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-[#3F72AF] dark:text-[#00A8CC] font-semibold hover:underline"
                 >
                   zZedix
                 </a>
               </div>
               <div className="flex items-center gap-2">
-                <span>{version}</span>
+                <span className="font-mono">{version}</span>
                 <a 
                   href="https://github.com/MasterALiReza/Smite" 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  className="hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                  className="text-[#112D4E]/60 dark:text-[#DBE2EF]/60 hover:text-[#3F72AF] dark:hover:text-[#00A8CC] transition-colors"
                   title="GitHub Repository"
                 >
-                  <Github size={14} />
+                  <Github size={13} />
                 </a>
               </div>
             </div>
@@ -181,28 +185,28 @@ const Layout = ({ children }: LayoutProps) => {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-900" dir={language === 'fa' ? 'rtl' : 'ltr'}>
+        <main className="flex-1 overflow-auto bg-[#F9F7F7] dark:bg-[#142850]" dir={language === 'fa' ? 'rtl' : 'ltr'}>
           {/* Mobile Header */}
-          <div className="lg:hidden sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-2.5 flex items-center justify-between shadow-sm">
+          <div className="lg:hidden sticky top-0 z-30 bg-white/90 dark:bg-[#27496D]/90 backdrop-blur-md border-b border-[#DBE2EF] dark:border-[#142850] px-4 py-2.5 flex items-center justify-between shadow-sm">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center"
+              className="p-2 rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-[#112D4E] dark:text-[#DBE2EF] min-w-[44px] min-h-[44px] flex items-center justify-center"
               aria-label="Open navigation menu"
             >
               <Menu size={22} />
             </button>
-            <h1 className="text-base font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">Smite</h1>
+            <h1 className="text-base font-black tracking-tight bg-gradient-to-r from-[#112D4E] to-[#3F72AF] dark:from-[#00A8CC] dark:to-white bg-clip-text text-transparent">Smite</h1>
             <div className="flex items-center gap-1">
               <button
                 onClick={toggleDarkMode}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                className="p-2 rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-[#112D4E] dark:text-[#DBE2EF] min-w-[44px] min-h-[44px] flex items-center justify-center"
                 aria-label="Toggle dark mode"
               >
-                {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+                {darkMode ? <Sun size={18} className="text-[#00A8CC]" /> : <Moon size={18} className="text-[#3F72AF]" />}
               </button>
               <button
                 onClick={() => setLanguage(language === 'en' ? 'fa' : 'en')}
-                className="px-2 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-semibold text-gray-600 dark:text-gray-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                className="px-2 py-1 rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850]/60 text-xs font-bold text-[#112D4E] dark:text-[#DBE2EF] min-h-[44px] min-w-[44px] flex items-center justify-center"
                 aria-label="Toggle language"
               >
                 {language === 'en' ? 'FA' : 'EN'}
@@ -210,7 +214,7 @@ const Layout = ({ children }: LayoutProps) => {
             </div>
           </div>
           
-          <div className="p-4 sm:p-6 lg:p-8">
+          <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
             {children}
           </div>
         </main>
