@@ -257,7 +257,8 @@ const Tunnels = () => {
     setReapplyingTunnelId(tunnel.id)
     try {
       const response = await api.post(`/tunnels/${tunnel.id}/apply`)
-      if (response.data && response.data.status === 'success') {
+      const isSuccess = response.data && (response.data.status === 'success' || response.data.status === 'applied' || !response.data.status)
+      if (isSuccess) {
         showToast('success', 'Tunnel Reapplied', `${tunnel.name} reapplied successfully`)
         fetchData()
       } else {
@@ -300,7 +301,8 @@ const Tunnels = () => {
 
       try {
         const response = await api.post(`/tunnels/${tunnel.id}/apply`)
-        if (response.data && response.data.status === 'success') {
+        const isSuccess = response.data && (response.data.status === 'success' || response.data.status === 'applied' || !response.data.status)
+        if (isSuccess) {
           current = current.map((item, idx) =>
             idx === i ? { ...item, status: 'success' } : item
           )
@@ -622,29 +624,36 @@ const Tunnels = () => {
 
       {/* ── Reapply All — Progress Modal ─────────────────────── */}
       {reapplyAllProgress && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200/80 dark:border-gray-700/80 w-full max-w-md max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
             {/* Modal header */}
             <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
               <div className="flex items-center gap-3">
-                {reapplyAllDone ? (
-                  <CheckCircle2 size={20} className="text-green-500" />
-                ) : (
-                  <Loader2 size={20} className="animate-spin text-blue-500" />
-                )}
+                <div className={`p-2 rounded-xl flex items-center justify-center ${
+                  reapplyAllDone 
+                    ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' 
+                    : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'
+                }`}>
+                  {reapplyAllDone ? (
+                    <CheckCircle2 size={22} />
+                  ) : (
+                    <Loader2 size={22} className="animate-spin" />
+                  )}
+                </div>
                 <div>
-                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
                     {reapplyAllDone ? 'Reapply Complete' : 'Applying Tunnels...'}
                   </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    {reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} / {reapplyAllProgress.length} done
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
+                    {reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} of {reapplyAllProgress.length} tunnels processed
                   </p>
                 </div>
               </div>
               {reapplyAllDone && (
                 <button
                   onClick={closeReapplyAllModal}
-                  className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  aria-label="Close modal"
                 >
                   <X size={18} />
                 </button>
@@ -653,9 +662,9 @@ const Tunnels = () => {
 
             {/* Progress bar */}
             <div className="px-5 pt-4">
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+              <div className="w-full bg-gray-100 dark:bg-gray-700/80 rounded-full h-2 overflow-hidden shadow-inner">
                 <div
-                  className="h-1.5 rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-500 ease-out"
+                  className="h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 transition-all duration-300 ease-out"
                   style={{
                     width: `${(reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length / reapplyAllProgress.length) * 100}%`
                   }}
@@ -664,52 +673,52 @@ const Tunnels = () => {
             </div>
 
             {/* Tunnel list */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-2 mt-2">
+            <div className="flex-1 overflow-y-auto p-5 space-y-2 mt-1">
               {reapplyAllProgress.map((item) => (
                 <div
                   key={item.id}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                  className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all duration-200 ${
                     item.status === 'running'
-                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+                      ? 'bg-blue-50/80 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 shadow-sm'
                       : item.status === 'success'
-                      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60'
                       : item.status === 'error'
-                      ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                      : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700'
+                      ? 'bg-red-50/80 dark:bg-red-950/30 border-red-200 dark:border-red-800/60'
+                      : 'bg-gray-50/50 dark:bg-gray-700/30 border-gray-200/70 dark:border-gray-700/50'
                   }`}
                 >
                   {/* Status icon */}
                   <div className="shrink-0">
-                    {item.status === 'pending' && <Clock size={16} className="text-gray-400" />}
-                    {item.status === 'running' && <Loader2 size={16} className="animate-spin text-blue-500" />}
-                    {item.status === 'success' && <CheckCircle2 size={16} className="text-green-500" />}
-                    {item.status === 'error' && <XCircle size={16} className="text-red-500" />}
+                    {item.status === 'pending' && <Clock size={18} className="text-gray-400" />}
+                    {item.status === 'running' && <Loader2 size={18} className="animate-spin text-blue-600 dark:text-blue-400" />}
+                    {item.status === 'success' && <CheckCircle2 size={18} className="text-emerald-600 dark:text-emerald-400" />}
+                    {item.status === 'error' && <XCircle size={18} className="text-red-600 dark:text-red-400" />}
                   </div>
 
                   {/* Tunnel info */}
                   <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${
-                      item.status === 'running' ? 'text-blue-700 dark:text-blue-300' :
-                      item.status === 'success' ? 'text-green-700 dark:text-green-300' :
-                      item.status === 'error' ? 'text-red-700 dark:text-red-300' :
-                      'text-gray-600 dark:text-gray-400'
+                    <p className={`text-sm font-semibold truncate ${
+                      item.status === 'running' ? 'text-blue-900 dark:text-blue-200' :
+                      item.status === 'success' ? 'text-emerald-900 dark:text-emerald-200' :
+                      item.status === 'error' ? 'text-red-900 dark:text-red-200' :
+                      'text-gray-700 dark:text-gray-300'
                     }`}>
                       {item.name}
                     </p>
                     {item.status === 'error' && item.error && (
-                      <p className="text-xs text-red-500 dark:text-red-400 truncate mt-0.5">{item.error}</p>
+                      <p className="text-xs text-red-600 dark:text-red-400 truncate mt-0.5" title={item.error}>{item.error}</p>
                     )}
                     {item.status === 'running' && (
-                      <p className="text-xs text-blue-500 mt-0.5">Applying...</p>
+                      <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5 animate-pulse">Applying configuration...</p>
                     )}
                   </div>
 
-                  {/* Status label */}
-                  <span className={`text-xs font-medium shrink-0 ${
-                    item.status === 'pending' ? 'text-gray-400' :
-                    item.status === 'running' ? 'text-blue-500' :
-                    item.status === 'success' ? 'text-green-600' :
-                    'text-red-600'
+                  {/* Status badge */}
+                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0 tracking-wide ${
+                    item.status === 'pending' ? 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400' :
+                    item.status === 'running' ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300' :
+                    item.status === 'success' ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' :
+                    'bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-300'
                   }`}>
                     {item.status === 'pending' ? 'Waiting' :
                      item.status === 'running' ? 'Running' :
@@ -721,24 +730,24 @@ const Tunnels = () => {
 
             {/* Footer */}
             {reapplyAllDone && (
-              <div className="p-5 border-t border-gray-200 dark:border-gray-700">
-                <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle2 size={14} className="text-green-500" />
+              <div className="p-5 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-2xl">
+                <div className="flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">
+                  <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 size={15} />
                     {reapplyAllProgress.filter(i => i.status === 'success').length} succeeded
                   </span>
                   {reapplyAllProgress.filter(i => i.status === 'error').length > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <XCircle size={14} className="text-red-500" />
+                    <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
+                      <XCircle size={15} />
                       {reapplyAllProgress.filter(i => i.status === 'error').length} failed
                     </span>
                   )}
                 </div>
                 <button
                   onClick={closeReapplyAllModal}
-                  className="w-full px-4 py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-white transition-colors font-medium text-sm"
+                  className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-medium text-sm shadow-md hover:shadow-lg active:scale-[0.99]"
                 >
-                  Close
+                  Done
                 </button>
               </div>
             )}

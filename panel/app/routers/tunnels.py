@@ -1968,7 +1968,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     tunnel.status = "active"
                     tunnel.error_message = None
                     await db.commit()
-                    return {"status": "applied", "message": "Tunnel reapplied successfully to both nodes"}
+                    return {"status": "success", "message": "Tunnel reapplied successfully to both nodes"}
                 else:
                     tunnel.status = "error"
                     tunnel.error_message = "Failed to apply tunnel to one or both nodes"
@@ -2035,7 +2035,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             tunnel.status = "active"
             tunnel.error_message = None
             await db.commit()
-            return {"status": "applied", "message": "Tunnel reapplied successfully"}
+            return {"status": "success", "message": "Tunnel reapplied successfully"}
         else:
             error_msg = response.get("message", "Failed to apply tunnel")
             tunnel.status = "error"
