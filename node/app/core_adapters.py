@@ -6,10 +6,68 @@ import os
 import psutil
 import time
 import logging
-from pathlib import Path
+import signal
 import shutil
 
 logger = logging.getLogger(__name__)
+
+async def safe_stop_subprocess(
+    proc: Optional[asyncio.subprocess.Process] = None,
+    patterns: Optional[List[str]] = None,
+    timeout: float = 3.0
+) -> None:
+    """
+    Safely and thoroughly stop a subprocess and any associated process group or orphan processes.
+    Uses process group signaling (SIGTERM -> SIGKILL) and fallback pattern killing.
+    """
+    if proc is not None and proc.returncode is None:
+        if os.name == 'posix':
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except Exception as e:
+                logger.debug(f"Error terminating pgid for pid {proc.pid}: {e}")
+        
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except (asyncio.TimeoutError, Exception):
+            if os.name == 'posix':
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                except Exception:
+                    pass
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+
+    if patterns:
+        for pat in patterns:
+            if not pat or not str(pat).strip():
+                continue
+            try:
+                kill_proc = await asyncio.create_subprocess_exec(
+                    "pkill", "-9", "-f", str(pat),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                await asyncio.wait_for(kill_proc.wait(), timeout=2.0)
+            except Exception:
+                pass
+
 def parse_address_port(address_str: str):
     """Parse address:port string, returns (host, port, is_ipv6)"""
     import re
@@ -226,28 +284,14 @@ local_addr = "{local_addr}"
     async def remove(self, tunnel_id: str):
         """Remove Rathole tunnel"""
         config_path = self.config_dir / f"{tunnel_id}.toml"
-        
-        if tunnel_id in self.processes:
-            proc = self.processes[tunnel_id]
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            del self.processes[tunnel_id]
-        
-        try:
-            kill_proc = await asyncio.create_subprocess_exec(*["pkill", "-f", f"rathole.*{tunnel_id}"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            await kill_proc.wait()
-        except:
-            pass
+        proc = self.processes.pop(tunnel_id, None)
+        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}"])
             
         if config_path.exists():
-            config_path.unlink()
+            try:
+                config_path.unlink()
+            except Exception:
+                pass
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -503,25 +547,15 @@ class BackhaulAdapter:
 
     async def remove(self, tunnel_id: str):
         config_path = self.config_dir / f"{tunnel_id}.toml"
-        
-        if tunnel_id in self.processes:
-            proc = self.processes[tunnel_id]
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            del self.processes[tunnel_id]
+        proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
                 self.log_handles[tunnel_id].close()
             except Exception:
                 pass
             del self.log_handles[tunnel_id]
+
+        await safe_stop_subprocess(proc, patterns=[f"backhaul.*{tunnel_id}"])
 
         if config_path.exists():
             try:
@@ -757,31 +791,15 @@ class ChiselAdapter:
     
     async def remove(self, tunnel_id: str):
         """Remove Chisel tunnel"""
-        if tunnel_id in self.processes:
-            proc = self.processes[tunnel_id]
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            del self.processes[tunnel_id]
-        
+        proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
                 self.log_handles[tunnel_id].close()
-            except:
+            except Exception:
                 pass
             del self.log_handles[tunnel_id]
-        
-        try:
-            kill_proc = await asyncio.create_subprocess_exec(*["pkill", "-f", f"chisel.*{tunnel_id}"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            await kill_proc.wait()
-        except:
-            pass
+
+        await safe_stop_subprocess(proc, patterns=[f"chisel.*{tunnel_id}"])
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -835,9 +853,9 @@ class FrpAdapter:
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply FRP tunnel - supports both server and client modes"""
-        if tunnel_id in self.processes:
-            logger.info(f"FRP tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
+        logger.info(f"FRP tunnel {tunnel_id} pre-cleaning any existing processes")
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.3)
         
         mode = spec.get('mode', 'client')
         
@@ -1079,39 +1097,30 @@ transport:
             raise RuntimeError(f"FRP failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str):
-        """Remove FRP tunnel"""
-        if tunnel_id in self.processes:
-            proc = self.processes[tunnel_id]
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            del self.processes[tunnel_id]
-        
+        """Remove FRP tunnel (handles both server and client modes)"""
+        proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
                 self.log_handles[tunnel_id].close()
-            except:
+            except Exception:
                 pass
             del self.log_handles[tunnel_id]
-        
-        config_file = self.config_dir / f"frpc_{tunnel_id}.yaml"
-        if config_file.exists():
-            try:
-                config_file.unlink()
-            except:
-                pass
-        
-        try:
-            kill_proc = await asyncio.create_subprocess_exec(*["pkill", "-f", f"frpc.*{tunnel_id}"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            await kill_proc.wait()
-        except:
-            pass
+
+        await safe_stop_subprocess(
+            proc,
+            patterns=[
+                f"frps.*{tunnel_id}",
+                f"frpc.*{tunnel_id}",
+            ]
+        )
+
+        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
+            cfg_path = self.config_dir / cfg_name
+            if cfg_path.exists():
+                try:
+                    cfg_path.unlink()
+                except Exception:
+                    pass
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -1678,26 +1687,16 @@ class GostAdapter:
     
     async def remove(self, tunnel_id: str):
         """Remove GOST tunnel"""
-        if tunnel_id in self.processes:
-            proc = self.processes[tunnel_id]
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            del self.processes[tunnel_id]
-        
+        proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
                 self.log_handles[tunnel_id].close()
-            except:
+            except Exception:
                 pass
             del self.log_handles[tunnel_id]
-        
+
+        await safe_stop_subprocess(proc, patterns=[f"gost.*{tunnel_id}"])
+
         config_file = self.config_dir / f"{tunnel_id}.json"
         if config_file.exists():
             try:
@@ -1711,12 +1710,6 @@ class GostAdapter:
                 log_file.unlink()
             except Exception:
                 pass
-
-        try:
-            kill_proc = await asyncio.create_subprocess_exec(*["pkill", "-f", f"gost.*{tunnel_id}"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            await kill_proc.wait()
-        except:
-            pass
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""

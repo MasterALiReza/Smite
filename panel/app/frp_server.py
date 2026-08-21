@@ -147,12 +147,23 @@ class FrpServerManager:
                     pass
             del self.server_configs[tunnel_id]
         
-        old_toml_config = self.config_dir / f"frps_{tunnel_id}.toml"
-        if old_toml_config.exists():
-            try:
-                old_toml_config.unlink()
-            except:
-                pass
+        for fname in [f"frps_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml"]:
+            cfg = self.config_dir / fname
+            if cfg.exists():
+                try:
+                    cfg.unlink()
+                except Exception:
+                    pass
+
+        try:
+            kill_proc = await asyncio.create_subprocess_exec(
+                "pkill", "-9", "-f", f"frps.*{tunnel_id}",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            await asyncio.wait_for(kill_proc.wait(), timeout=1.0)
+        except Exception:
+            pass
     
     async def is_running(self, tunnel_id: str) -> bool:
         """Check if server is running for a tunnel"""
