@@ -82,10 +82,10 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
       <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 z-[200] space-y-2 flex flex-col items-center sm:items-end pointer-events-none">
         {toasts.map(toast => {
           const colors = {
-            success: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border shadow-lg backdrop-blur-md',
-            error: 'border-rose-500/40 bg-rose-500/10 text-rose-800 dark:text-rose-300 border shadow-lg backdrop-blur-md',
-            warning: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 border shadow-lg backdrop-blur-md',
-            info: 'border-[#3F72AF]/40 dark:border-[#00A8CC]/40 bg-[#3F72AF]/10 dark:bg-[#00A8CC]/10 text-[#112D4E] dark:text-[#F9F7F7] border shadow-lg backdrop-blur-md'
+            success: 'border-green-500 bg-green-50 dark:bg-green-900/40 text-green-800 dark:text-green-200 border shadow-md',
+            error: 'border-red-500 bg-red-50 dark:bg-red-900/40 text-red-800 dark:text-red-200 border shadow-md',
+            warning: 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-200 border shadow-md',
+            info: 'border-blue-500 bg-blue-50 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 border shadow-md'
           };
           const Icons = {
             success: CheckCircle,
@@ -98,12 +98,12 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
           return (
             <div 
               key={toast.id}
-              className={`pointer-events-auto flex items-start gap-3 p-4 rounded-2xl shadow-xl w-full max-w-sm sm:w-80 transform transition-all duration-300 ease-out opacity-100 translate-y-0 ${colors[toast.type]}`}
+              className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg w-full max-w-sm sm:w-80 transform transition-all duration-300 ease-in-out opacity-100 translate-y-0 ${colors[toast.type]}`}
             >
               <Icon className="w-5 h-5 mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-bold truncate">{toast.title}</h4>
-                {toast.message && <p className="text-xs mt-1 font-medium opacity-90 break-words">{toast.message}</p>}
+                <h4 className="text-sm font-semibold truncate">{toast.title}</h4>
+                {toast.message && <p className="text-sm mt-1 opacity-90 break-words">{toast.message}</p>}
               </div>
               <button 
                 onClick={() => removeToast(toast.id)} 
@@ -119,27 +119,27 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
 
       {/* Confirm Modal */}
       {confirmConfig && (
-        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-[#112D4E]/60 dark:bg-black/70 backdrop-blur-md p-4 pointer-events-auto">
-          <div className="bg-white dark:bg-[#27496D] border border-[#DBE2EF] dark:border-[#142850] rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-bold text-[#112D4E] dark:text-[#F9F7F7] mb-2">
+        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 pointer-events-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
               {confirmConfig.options.title}
             </h3>
-            <p className="text-sm text-[#112D4E]/80 dark:text-[#DBE2EF] mb-6">
+            <p className="text-slate-600 dark:text-slate-300 mb-6">
               {confirmConfig.options.message}
             </p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => handleConfirm(false)}
-                className="px-4 py-2.5 rounded-xl bg-[#DBE2EF]/70 hover:bg-[#DBE2EF] dark:bg-[#142850] dark:hover:bg-[#142850]/80 text-[#112D4E] dark:text-[#DBE2EF] font-semibold text-sm transition-colors"
+                className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium transition-colors"
               >
                 {confirmConfig.options.cancelText || 'Cancel'}
               </button>
               <button
                 onClick={() => handleConfirm(true)}
-                className={`px-5 py-2.5 rounded-xl font-semibold text-sm text-white transition-all shadow-md ${
+                className={`px-4 py-2 rounded-lg font-medium text-white transition-colors ${
                   confirmConfig.options.variant === 'danger'
-                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
-                    : 'bg-[#3F72AF] hover:bg-[#3F72AF]/90 dark:bg-[#00A8CC] dark:hover:bg-[#00A8CC]/90 dark:text-[#142850] shadow-[#3F72AF]/20'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
                 {confirmConfig.options.confirmText || 'Confirm'}

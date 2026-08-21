@@ -59,13 +59,13 @@ const Login = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F9F7F7] dark:bg-[#142850] flex items-center justify-center p-4 selection:bg-[#3F72AF]/20 dark:selection:bg-[#00A8CC]/30" dir={dir}>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center p-4" dir={dir}>
       <div className="w-full max-w-md">
         {/* Logo and Title */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-6">
             <div className="relative">
-              <div className="absolute inset-0 bg-[#3F72AF]/20 dark:bg-[#00A8CC]/20 rounded-full blur-2xl"></div>
+              <div className="absolute inset-0 bg-blue-500/20 dark:bg-blue-400/20 rounded-full blur-2xl"></div>
               <img
                 src={darkMode ? SmiteLogoDark : SmiteLogoLight}
                 alt="Smite Logo"
@@ -73,26 +73,26 @@ const Login = () => {
               />
             </div>
           </div>
-          <h1 className="text-4xl sm:text-5xl font-black bg-gradient-to-r from-[#3F72AF] to-[#112D4E] dark:from-[#00A8CC] dark:to-[#F9F7F7] bg-clip-text text-transparent mb-2">
+          <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent mb-2">
             {t.login.title}
           </h1>
-          <p className="text-sm font-medium text-[#112D4E]/70 dark:text-[#DBE2EF]/80">{t.login.subtitle}</p>
+          <p className="text-gray-600 dark:text-gray-400 text-lg">{t.login.subtitle}</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-white dark:bg-[#27496D] rounded-2xl shadow-2xl border border-[#DBE2EF] dark:border-[#142850] p-8 sm:p-10 animate-in fade-in zoom-in-95 duration-200">
+        <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-200/50 dark:border-gray-700/50 p-8 sm:p-10">
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-[#3F72AF]/10 dark:bg-[#00A8CC]/15 rounded-xl">
-                <Shield className="w-5 h-5 text-[#3F72AF] dark:text-[#00A8CC]" />
+              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <Shield className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
-              <h2 className="text-xl font-bold text-[#112D4E] dark:text-[#F9F7F7]">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
                 {t.login.signIn}
               </h2>
             </div>
             <button
               onClick={() => setDarkMode(!darkMode)}
-              className="p-2.5 rounded-xl hover:bg-[#DBE2EF]/60 dark:hover:bg-[#142850] text-[#112D4E] dark:text-[#DBE2EF] transition-colors"
+              className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
               title={darkMode ? 'Light mode' : 'Dark mode'}
             >
               {darkMode ? '☀️' : '🌙'}
@@ -100,8 +100,8 @@ const Login = () => {
           </div>
 
           {error && (
-            <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl">
-              <p className="text-xs font-bold text-rose-700 dark:text-rose-300">{error}</p>
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
             </div>
           )}
 
@@ -109,7 +109,7 @@ const Login = () => {
             <div>
               <label
                 htmlFor="username"
-                className="block text-xs font-bold uppercase tracking-wider text-[#112D4E]/70 dark:text-[#DBE2EF]/70 mb-1.5"
+                className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2"
               >
                 {t.login.username}
               </label>
@@ -119,7 +119,7 @@ const Login = () => {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                className="w-full px-4 py-3 border border-[#DBE2EF] dark:border-[#142850] rounded-xl bg-[#F9F7F7] dark:bg-[#142850] text-[#112D4E] dark:text-[#F9F7F7] placeholder-[#112D4E]/40 dark:placeholder-[#DBE2EF]/40 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#3F72AF] dark:focus:ring-[#00A8CC] transition-all"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder={t.login.usernamePlaceholder}
                 autoComplete="username"
               />
@@ -128,7 +128,7 @@ const Login = () => {
             <div>
               <label
                 htmlFor="password"
-                className="block text-xs font-bold uppercase tracking-wider text-[#112D4E]/70 dark:text-[#DBE2EF]/70 mb-1.5"
+                className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2"
               >
                 {t.login.password}
               </label>
@@ -138,7 +138,7 @@ const Login = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-4 py-3 border border-[#DBE2EF] dark:border-[#142850] rounded-xl bg-[#F9F7F7] dark:bg-[#142850] text-[#112D4E] dark:text-[#F9F7F7] placeholder-[#112D4E]/40 dark:placeholder-[#DBE2EF]/40 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#3F72AF] dark:focus:ring-[#00A8CC] transition-all"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder={t.login.passwordPlaceholder}
                 autoComplete="current-password"
               />
@@ -147,16 +147,16 @@ const Login = () => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full mt-6 px-4 py-3.5 bg-[#3F72AF] hover:bg-[#3F72AF]/90 dark:bg-gradient-to-r dark:from-[#0C7B93] dark:to-[#00A8CC] text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-[#3F72AF] dark:focus:ring-[#00A8CC] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-bold text-sm shadow-lg shadow-[#3F72AF]/25 dark:shadow-[#00A8CC]/25 flex items-center justify-center gap-2 hover:scale-[1.01] active:scale-[0.99]"
+              className="w-full mt-6 px-4 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-5 h-5 animate-spin" />
                   <span>{t.login.signingIn}</span>
                 </>
               ) : (
                 <>
-                  <LogIn className="w-4 h-4" />
+                  <LogIn className="w-5 h-5" />
                   <span>{t.login.signIn}</span>
                 </>
               )}
@@ -165,19 +165,19 @@ const Login = () => {
         </div>
 
         {/* Footer */}
-        <div className="mt-8 text-center text-xs font-medium text-[#112D4E]/60 dark:text-[#DBE2EF]/60 space-y-1">
+        <div className="mt-8 text-center text-sm text-gray-500 dark:text-gray-400">
           <p>
-            Made with <span className="text-rose-500">❤️</span> by{' '}
+            Made with <span className="text-red-500">❤️</span> by{' '}
             <a
               href="https://github.com/zZedix"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[#3F72AF] dark:text-[#00A8CC] hover:underline font-bold"
+              className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
             >
               zZedix
             </a>
           </p>
-          <p>{version}</p>
+          <p className="mt-1">{version}</p>
         </div>
       </div>
     </div>
