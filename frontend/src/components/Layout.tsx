@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Network, FileText, Activity, Moon, Sun, Github, Menu, X, LogOut, Settings, Heart, Globe, Languages } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useTheme } from '../contexts/ThemeContext'
 import SmiteLogoDark from '../assets/SmiteD.png'
 import SmiteLogoLight from '../assets/SmiteL.png'
 
@@ -15,21 +16,9 @@ const Layout = ({ children }: LayoutProps) => {
   const navigate = useNavigate()
   const { logout, username } = useAuth()
   const { language, setLanguage, dir, t } = useLanguage()
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('darkMode')
-    return saved ? JSON.parse(saved) : false
-  })
+  const { darkMode, toggleDarkMode } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [version, setVersion] = useState('v0.1.0')
-
-  useEffect(() => {
-    localStorage.setItem('darkMode', JSON.stringify(darkMode))
-    if (darkMode) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  }, [darkMode])
 
   useEffect(() => {
     setSidebarOpen(false)
@@ -59,7 +48,7 @@ const Layout = ({ children }: LayoutProps) => {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900" dir="ltr">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900" dir={language === 'fa' ? 'rtl' : 'ltr'}>
       <div className="flex h-screen">
         {/* Mobile Sidebar Overlay */}
         {sidebarOpen && (
@@ -69,19 +58,20 @@ const Layout = ({ children }: LayoutProps) => {
           />
         )}
 
-        {/* Sidebar - Always LTR regardless of language */}
+        {/* Sidebar */}
         <aside
-          dir="ltr"
-          className={`fixed lg:static inset-y-0 left-0 w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col z-50 transform transition-transform duration-300 ease-in-out ${
-            sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+          dir={language === 'fa' ? 'rtl' : 'ltr'}
+          className={`fixed lg:static inset-y-0 ${language === 'fa' ? 'right-0 border-l' : 'left-0 border-r'} w-64 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 flex flex-col z-50 transform transition-transform duration-300 ease-in-out ${
+            sidebarOpen ? 'translate-x-0' : (language === 'fa' ? 'translate-x-full lg:translate-x-0' : '-translate-x-full lg:translate-x-0')
           }`}
         >
           {/* Sidebar Header */}
           <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-end lg:hidden mb-2">
               <button
                 onClick={() => setSidebarOpen(false)}
-                className="lg:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                aria-label="Close sidebar"
               >
                 <X size={20} />
               </button>
@@ -114,7 +104,7 @@ const Layout = ({ children }: LayoutProps) => {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
                     isActive
                       ? 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 text-blue-600 dark:text-blue-400 shadow-sm'
                       : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
@@ -132,7 +122,7 @@ const Layout = ({ children }: LayoutProps) => {
             <div className="space-y-2">
               <div className="flex items-center justify-between px-4 py-2">
                 <button
-                  onClick={() => setDarkMode(!darkMode)}
+                  onClick={toggleDarkMode}
                   className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   {darkMode ? <Sun size={18} /> : <Moon size={18} />}
@@ -191,17 +181,33 @@ const Layout = ({ children }: LayoutProps) => {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-900" dir="ltr">
+        <main className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-900" dir={language === 'fa' ? 'rtl' : 'ltr'}>
           {/* Mobile Header */}
-          <div className="lg:hidden sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between shadow-sm">
+          <div className="lg:hidden sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-2.5 flex items-center justify-between shadow-sm">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center"
+              aria-label="Open navigation menu"
             >
-              <Menu size={24} />
+              <Menu size={22} />
             </button>
-            <h1 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">Smite</h1>
-            <div className="w-10" />
+            <h1 className="text-base font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">Smite</h1>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={toggleDarkMode}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                aria-label="Toggle dark mode"
+              >
+                {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+              <button
+                onClick={() => setLanguage(language === 'en' ? 'fa' : 'en')}
+                className="px-2 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-xs font-semibold text-gray-600 dark:text-gray-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                aria-label="Toggle language"
+              >
+                {language === 'en' ? 'FA' : 'EN'}
+              </button>
+            </div>
           </div>
           
           <div className="p-4 sm:p-6 lg:p-8">

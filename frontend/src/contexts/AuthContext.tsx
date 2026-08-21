@@ -1,8 +1,9 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import api from '../api/client'
 
 interface AuthContextType {
   isAuthenticated: boolean
+  isLoading: boolean
   username: string | null
   login: (token: string, username: string) => void
   logout: () => void
@@ -26,20 +27,11 @@ interface AuthProviderProps {
 export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [username, setUsername] = useState<string | null>(null)
+  // isLoading: true during the initial auth check on app startup
+  const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    const token = localStorage.getItem('token')
-    const savedUsername = localStorage.getItem('username')
-    
-    if (token && savedUsername) {
-      // Verify token is still valid
-      checkAuth().catch(() => {
-        logout()
-      })
-    }
-  }, [])
-
-  const checkAuth = async (): Promise<boolean> => {
+  // Stable reference — won't cause ProtectedRoute re-renders
+  const checkAuth = useCallback(async (): Promise<boolean> => {
     try {
       const token = localStorage.getItem('token')
       if (!token) {
@@ -58,11 +50,21 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       setUsername(response.data.username || localStorage.getItem('username'))
       return true
     } catch (error) {
-      // Token is invalid, logout
+      // Token is invalid, clear state
       logout()
       return false
     }
-  }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Run auth check once on app startup
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      checkAuth().finally(() => setIsLoading(false))
+    } else {
+      setIsLoading(false)
+    }
+  }, [checkAuth])
 
   const login = (token: string, username: string) => {
     localStorage.setItem('token', token)
@@ -84,6 +86,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     <AuthContext.Provider
       value={{
         isAuthenticated,
+        isLoading,
         username,
         login,
         logout,
@@ -94,4 +97,3 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     </AuthContext.Provider>
   )
 }
-

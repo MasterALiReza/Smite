@@ -53,17 +53,16 @@ const Logs = () => {
     }
   }
 
-  const getLevelColor = (level: string) => {
-    switch (level.toLowerCase()) {
-      case 'error':
-        return 'text-red-600'
-      case 'warning':
-        return 'text-yellow-600'
-      case 'info':
-        return 'text-blue-600'
-      default:
-        return 'text-gray-600'
+  const getLevelColor = (level: string, dark = false): string => {
+    const colors: Record<string, { light: string; dark: string }> = {
+      error: { light: 'text-red-600', dark: 'text-red-400' },
+      warning: { light: 'text-yellow-600', dark: 'text-yellow-300' },
+      warn: { light: 'text-yellow-600', dark: 'text-yellow-300' },
+      info: { light: 'text-blue-600', dark: 'text-blue-300' },
+      debug: { light: 'text-gray-500', dark: 'text-gray-400' },
     }
+    const c = colors[level.toLowerCase()] ?? { light: 'text-gray-700', dark: 'text-gray-300' }
+    return dark ? c.dark : c.light
   }
 
   if (loading && logs.length === 0) {
@@ -77,24 +76,28 @@ const Logs = () => {
     )
   }
 
-  const getLevelColorDark = (level: string) => {
-    switch (level.toLowerCase()) {
-      case 'error':
-        return 'text-red-400'
-      case 'warning':
-        return 'text-yellow-400'
-      case 'info':
-        return 'text-blue-400'
-      default:
-        return 'text-gray-300'
-    }
+  const handleClearDisplay = () => {
+    setLogs([]) // Just clears local state
   }
 
   return (
     <div className="w-full max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.logs.title}</h1>
-        <p className="text-gray-500 dark:text-gray-400">{t.logs.subtitle}</p>
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.logs.title}</h1>
+          <p className="text-gray-500 dark:text-gray-400">{t.logs.subtitle}</p>
+        </div>
+        <div className="flex gap-3">
+          <span className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium border border-gray-200 dark:border-gray-700">
+            {logs.length} entries
+          </span>
+          <button
+            onClick={handleClearDisplay}
+            className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors"
+          >
+            Clear display
+          </button>
+        </div>
       </div>
 
       <div 
@@ -108,7 +111,7 @@ const Logs = () => {
           logs.map((log, index) => (
             <div key={index} className="mb-1 hover:bg-gray-800/50 px-2 py-1 rounded">
               <span className="text-gray-500 dark:text-gray-400">[{log.timestamp}]</span>{' '}
-              <span className={`${getLevelColor(log.level)} dark:${getLevelColorDark(log.level)}`}>[{log.level.toUpperCase()}]</span>{' '}
+              <span className={`${getLevelColor(log.level, true)}`}>[{log.level.toUpperCase()}]</span>{' '}
               <span className="text-gray-300 dark:text-gray-200">{log.message}</span>
             </div>
           ))

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Server, Network, Cpu, MemoryStick, Plus, Activity as ActivityIcon } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { motion, HTMLMotionProps } from 'framer-motion'
 import { useLanguage } from '../contexts/LanguageContext'
 import api from '../api/client'
 
@@ -25,6 +27,7 @@ const Dashboard = () => {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const { t, dir } = useLanguage()
+  const navigate = useNavigate()
 
   useEffect(() => {
     const fetchData = async () => {
@@ -47,17 +50,24 @@ const Dashboard = () => {
 
   if (loading || !status) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4"></div>
-          <p className="text-gray-500 dark:text-gray-400">{t.dashboard.loadingDashboard}</p>
+      <div className="w-full max-w-7xl mx-auto animate-pulse">
+        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-1/4 mb-4"></div>
+        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/3 mb-8"></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-32 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+          <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto" dir="ltr">
+    <div className="w-full max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.dashboard.title}</h1>
@@ -65,13 +75,22 @@ const Dashboard = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <motion.div 
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+        initial="hidden"
+        animate="show"
+        variants={{
+          hidden: { opacity: 0 },
+          show: { opacity: 1, transition: { staggerChildren: 0.1 } }
+        }}
+      >
         <StatCard
           title={t.dashboard.totalNodes}
           value={status.nodes.total}
           subtitle={`${status.nodes.active} ${t.dashboard.active}`}
           icon={Server}
           color="blue"
+          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.totalTunnels}
@@ -79,6 +98,7 @@ const Dashboard = () => {
           subtitle={`${status.tunnels.active} ${t.dashboard.active}`}
           icon={Network}
           color="green"
+          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.cpuUsage}
@@ -86,6 +106,7 @@ const Dashboard = () => {
           subtitle={t.dashboard.currentUsage}
           icon={Cpu}
           color="purple"
+          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
         <StatCard
           title={t.dashboard.memoryUsage}
@@ -93,8 +114,9 @@ const Dashboard = () => {
           subtitle={`${status.system.memory_percent.toFixed(1)}% of ${status.system.memory_total_gb.toFixed(1)} GB`}
           icon={MemoryStick}
           color="orange"
+          variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } }}
         />
-      </div>
+      </motion.div>
 
       {/* Bottom Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -130,19 +152,19 @@ const Dashboard = () => {
           </div>
           <div className="space-y-3">
             <button 
-              onClick={() => window.location.href = '/tunnels?create=true'}
+              onClick={() => navigate('/tunnels?create=true')}
               className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md"
             >
               {t.dashboard.createNewTunnel}
             </button>
             <button 
-              onClick={() => window.location.href = '/nodes?add=true'}
+              onClick={() => navigate('/nodes?add=true')}
               className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600"
             >
               {t.dashboard.addNode}
             </button>
             <button 
-              onClick={() => window.location.href = '/servers?add=true'}
+              onClick={() => navigate('/servers?add=true')}
               className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600"
             >
               {t.dashboard.addServer}
@@ -162,7 +184,7 @@ interface StatCardProps {
   color: 'blue' | 'green' | 'purple' | 'orange'
 }
 
-const StatCard = ({ title, value, subtitle, icon: Icon, color }: StatCardProps) => {
+const StatCard = ({ title, value, subtitle, icon: Icon, color, ...props }: StatCardProps & HTMLMotionProps<"div">) => {
   const colorClasses = {
     blue: {
       bg: 'bg-blue-50 dark:bg-blue-900/20',
@@ -189,7 +211,12 @@ const StatCard = ({ title, value, subtitle, icon: Icon, color }: StatCardProps) 
   const colors = colorClasses[color]
 
   return (
-    <div className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 transition-all duration-200 hover:shadow-md ${colors.bg}`}>
+    <motion.div 
+      className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 transition-colors duration-200 hover:shadow-md ${colors.bg}`}
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      {...props}
+    >
       <div className="flex items-start justify-between mb-3">
         <div className={`p-3 rounded-lg ${colors.icon} transition-transform hover:scale-110`}>
           <Icon className="w-6 h-6" />
@@ -199,7 +226,7 @@ const StatCard = ({ title, value, subtitle, icon: Icon, color }: StatCardProps) 
       <p className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{value}</p>
       <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
       <div className={`absolute bottom-0 left-0 right-0 h-1 ${colors.accent} rounded-b-xl`}></div>
-    </div>
+    </motion.div>
   )
 }
 

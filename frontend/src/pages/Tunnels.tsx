@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useToast } from '../contexts/ToastContext'
+import { EmptyState } from '../components/EmptyState'
+
+// ─── Reapply Progress Types ────────────────────────────────────────────────
+type ReapplyStatus = 'pending' | 'running' | 'success' | 'error'
+
+interface TunnelReapplyState {
+  id: string
+  name: string
+  status: ReapplyStatus
+  error?: string
+}
 
 interface Tunnel {
   id: string
@@ -174,13 +186,19 @@ const getBackhaulDisplayInfo = (spec: Record<string, any> | undefined): Backhaul
 
 const Tunnels = () => {
   const { t } = useLanguage()
+  const { showToast, showConfirm } = useToast()
   const [tunnels, setTunnels] = useState<Tunnel[]>([])
   const [nodes, setNodes] = useState<any[]>([])
   const [servers, setServers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingTunnel, setEditingTunnel] = useState<Tunnel | null>(null)
-  const [reapplyingAll, setReapplyingAll] = useState(false)
+  // Per-tunnel reapply loading (stores the tunnel id being reapplied)
+  const [reapplyingTunnelId, setReapplyingTunnelId] = useState<string | null>(null)
+  // Reapply All progress modal
+  const [reapplyAllProgress, setReapplyAllProgress] = useState<TunnelReapplyState[] | null>(null)
+  const [reapplyAllDone, setReapplyAllDone] = useState(false)
+  const [showConfirmReapplyAll, setShowConfirmReapplyAll] = useState(false)
 
   useEffect(() => {
     fetchData()
@@ -216,21 +234,31 @@ const Tunnels = () => {
   }
 
   const deleteTunnel = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this tunnel?')) return
+    const confirmed = await showConfirm({
+      title: 'Delete Tunnel',
+      message: 'Are you sure you want to delete this tunnel? The connection will be permanently stopped.',
+      variant: 'danger',
+      confirmText: 'Delete'
+    })
+    if (!confirmed) return
     
     try {
       await api.delete(`/tunnels/${id}`)
+      showToast('success', 'Tunnel Deleted', 'Tunnel was deleted successfully')
       fetchData()
     } catch (error) {
       console.error('Failed to delete tunnel:', error)
-      alert('Failed to delete tunnel')
+      showToast('error', 'Error', 'Failed to delete tunnel')
     }
   }
 
+  // ─── Reapply single tunnel (with per-card loading overlay) ─────────────
   const reapplyTunnel = async (tunnel: Tunnel) => {
+    setReapplyingTunnelId(tunnel.id)
     try {
       const response = await api.post(`/tunnels/${tunnel.id}/apply`)
       if (response.data && response.data.status === 'success') {
+        showToast('success', 'Tunnel Reapplied', `${tunnel.name} reapplied successfully`)
         fetchData()
       } else {
         throw new Error(response.data?.message || 'Failed to reapply tunnel')
@@ -238,29 +266,63 @@ const Tunnels = () => {
     } catch (error: any) {
       console.error('Failed to reapply tunnel:', error)
       const errorMessage = error.response?.data?.detail || error.message || 'Failed to reapply tunnel'
-      alert(errorMessage)
+      showToast('error', 'Reapply Failed', errorMessage)
+    } finally {
+      setReapplyingTunnelId(null)
     }
   }
 
-  const handleReapplyAll = async () => {
-    if (!confirm(t.tunnels.confirmReapplyAll || 'Are you sure you want to reapply all tunnels?')) return
-    
-    setReapplyingAll(true)
-    try {
-      const response = await api.post('/tunnels/reapply-all')
-      if (response.data && response.data.status === 'success') {
-        alert(`${t.tunnels.reapplyAllSuccess || 'Success'}: ${response.data.message}`)
-        fetchData()
-      } else {
-        throw new Error(response.data?.message || 'Failed to reapply all tunnels')
+  // ─── Reapply All — opens progress modal, applies sequentially ──────────
+  const handleReapplyAll = () => {
+    setShowConfirmReapplyAll(true)
+  }
+
+  const startReapplyAll = async () => {
+    setShowConfirmReapplyAll(false)
+    // Initialize progress state for each tunnel
+    const initial: TunnelReapplyState[] = tunnels.map(t => ({
+      id: t.id,
+      name: t.name,
+      status: 'pending',
+    }))
+    setReapplyAllProgress(initial)
+    setReapplyAllDone(false)
+
+    // Apply each tunnel sequentially so progress is visible
+    let current = [...initial]
+    for (let i = 0; i < tunnels.length; i++) {
+      const tunnel = tunnels[i]
+      // Mark as running
+      current = current.map((item, idx) =>
+        idx === i ? { ...item, status: 'running' } : item
+      )
+      setReapplyAllProgress([...current])
+
+      try {
+        const response = await api.post(`/tunnels/${tunnel.id}/apply`)
+        if (response.data && response.data.status === 'success') {
+          current = current.map((item, idx) =>
+            idx === i ? { ...item, status: 'success' } : item
+          )
+        } else {
+          throw new Error(response.data?.message || 'Failed')
+        }
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.detail || error.message || 'Failed to apply'
+        current = current.map((item, idx) =>
+          idx === i ? { ...item, status: 'error', error: errorMsg } : item
+        )
       }
-    } catch (error: any) {
-      console.error('Failed to reapply all tunnels:', error)
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to reapply all tunnels'
-      alert(errorMessage)
-    } finally {
-      setReapplyingAll(false)
+      setReapplyAllProgress([...current])
     }
+
+    setReapplyAllDone(true)
+    fetchData()
+  }
+
+  const closeReapplyAllModal = () => {
+    setReapplyAllProgress(null)
+    setReapplyAllDone(false)
   }
 
   if (loading) {
@@ -276,6 +338,7 @@ const Tunnels = () => {
 
   return (
     <div className="w-full max-w-7xl mx-auto">
+      {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.tunnels.title}</h1>
@@ -284,10 +347,10 @@ const Tunnels = () => {
         <div className="flex gap-3">
           <button
             onClick={handleReapplyAll}
-            disabled={reapplyingAll}
+            disabled={!!reapplyAllProgress && !reapplyAllDone}
             className="px-5 py-2.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RotateCw size={20} className={reapplyingAll ? "animate-spin" : ""} />
+            <RotateCw size={20} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
             {t.tunnels.reapplyAll}
           </button>
           <button
@@ -300,13 +363,23 @@ const Tunnels = () => {
         </div>
       </div>
 
+      {/* ── Tunnel Cards ────────────────────────────────────── */}
       <div className="space-y-3">
+        {tunnels.length === 0 && (
+          <EmptyState
+            icon={<Network size={32} />}
+            title="No tunnels yet"
+            description="Create your first tunnel to get started forwarding traffic between your Iran and foreign nodes."
+            action={{ label: 'Create Tunnel', onClick: () => setShowAddModal(true) }}
+          />
+        )}
         {tunnels.map((tunnel) => {
+          const isReapplying = reapplyingTunnelId === tunnel.id
+
           // Extract ports from spec
           const getPorts = (): string => {
             if (tunnel.spec?.ports) {
               if (Array.isArray(tunnel.spec.ports)) {
-                // For Backhaul, ports are in format "8080=127.0.0.1:8080", extract just the port numbers
                 if (tunnel.core === 'backhaul' && typeof tunnel.spec.ports[0] === 'string' && tunnel.spec.ports[0].includes('=')) {
                   return tunnel.spec.ports.map(p => {
                     const portPart = p.split('=')[0]
@@ -314,18 +387,15 @@ const Tunnels = () => {
                     return port
                   }).join(', ')
                 }
-                // For other cores, ports are numbers
                 return tunnel.spec.ports.map(p => typeof p === 'object' && p.local ? p.local : p).join(', ')
               } else if (typeof tunnel.spec.ports === 'string') {
                 return tunnel.spec.ports
               }
             }
-            // Fallback to single port
             const port = tunnel.spec?.listen_port || tunnel.spec?.remote_port
             return port ? port.toString() : 'N/A'
           }
 
-          // Get core badge color
           const getCoreBadge = () => {
             const coreColors: Record<string, { bg: string; text: string; border: string }> = {
               rathole: { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-800 dark:text-purple-200', border: 'border-purple-300 dark:border-purple-700' },
@@ -345,156 +415,336 @@ const Tunnels = () => {
           return (
             <div
               key={tunnel.id}
-              className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 transition-all hover:shadow-lg hover:border-gray-300 dark:hover:border-gray-600"
+              className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm border transition-all ${
+                isReapplying
+                  ? 'border-green-400 dark:border-green-600 shadow-green-100 dark:shadow-none'
+                  : 'border-gray-200 dark:border-gray-700 hover:shadow-lg hover:border-gray-300 dark:hover:border-gray-600'
+              }`}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-4 flex-1 min-w-0">
-                  {/* Status Badge */}
-                  <span
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
-                      tunnel.status === 'active'
-                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                        : tunnel.status === 'error'
-                        ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                        : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                    }`}
-                  >
-                    {tunnel.status}
-                  </span>
-
-                  <div className="flex-1 min-w-0">
-                    {/* Name, Core Badge, Transmission Badge, and Ports in one line */}
-                    <div className="flex items-center gap-3 mb-2 flex-wrap">
-                      <h3 className="text-base font-semibold text-gray-900 dark:text-white truncate">{tunnel.name}</h3>
-                      <span
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
-                      >
-                        {tunnel.core}
-                      </span>
-                      {(() => {
-                        let transmissionType = null
-                        if (tunnel.core === 'chisel') {
-                          transmissionType = 'TCP'
-                        } else if (tunnel.core === 'rathole') {
-                          const transport = tunnel.spec?.transport || (tunnel.type && tunnel.type !== 'rathole' ? tunnel.type : 'tcp')
-                          transmissionType = transport.toUpperCase()
-                        } else if (tunnel.type && tunnel.type.toLowerCase() !== tunnel.core.toLowerCase()) {
-                          transmissionType = tunnel.type.toUpperCase()
-                        }
-                        
-                        if (!transmissionType) return null
-                        
-                        const getTransmissionBadge = () => {
-                          const typeColors: Record<string, { bg: string; text: string; border: string }> = {
-                            TCP: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-800 dark:text-green-200', border: 'border-green-300 dark:border-green-700' },
-                            UDP: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-800 dark:text-yellow-200', border: 'border-yellow-300 dark:border-yellow-700' },
-                            WS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
-                            WSS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
-                            GRPC: { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-800 dark:text-teal-200', border: 'border-teal-300 dark:border-teal-700' },
-                            TCPMUX: { bg: 'bg-violet-100 dark:bg-violet-900/30', text: 'text-violet-800 dark:text-violet-200', border: 'border-violet-300 dark:border-violet-700' },
-                          }
-                          return typeColors[transmissionType] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-800 dark:text-gray-200', border: 'border-gray-300 dark:border-gray-600' }
-                        }
-                        
-                        const transmissionBadge = getTransmissionBadge()
-                        return (
-                          <span
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
-                          >
-                            {transmissionType}
-                          </span>
-                        )
-                      })()}
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Ports:</span>
-                        <span className="text-sm font-mono font-semibold text-gray-700 dark:text-gray-300">{ports}</span>
-                      </div>
-                    </div>
-
-                    {/* Core Port, Node and Server Info */}
-                    <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
-                      {(() => {
-                        let corePort = null
-                        if (tunnel.core === 'rathole') {
-                          if (tunnel.spec?.bind_addr) {
-                            const match = tunnel.spec.bind_addr.match(/:(\d+)$/)
-                            if (match) corePort = match[1]
-                          }
-                          if (!corePort && tunnel.spec?.control_port) {
-                            corePort = tunnel.spec.control_port
-                          }
-                          if (!corePort) {
-                            const remoteAddr = tunnel.spec?.remote_addr || ''
-                            const match = remoteAddr.match(/:(\d+)$/)
-                            if (match) corePort = match[1]
-                          }
-                          if (!corePort) corePort = '23333'
-                        } else if (tunnel.core === 'chisel') {
-                          corePort = tunnel.spec?.control_port || tunnel.spec?.server_port
-                        } else if (tunnel.core === 'backhaul') {
-                          corePort = tunnel.spec?.control_port || tunnel.spec?.public_port || '3080'
-                        } else if (tunnel.core === 'frp') {
-                          corePort = tunnel.spec?.bind_port || '7000'
-                        }
-                        return corePort ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-medium">Core Port:</span>
-                            <span className="text-gray-700 dark:text-gray-300 font-mono">{corePort}</span>
-                          </div>
-                        ) : null
-                      })()}
-                      {iranNode && (
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium">Node:</span>
-                          <span className="text-gray-700 dark:text-gray-300">{iranNode.name || iranNode.id.substring(0, 8)}</span>
-                        </div>
-                      )}
-                      {foreignServer && (
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium">Server:</span>
-                          <span className="text-gray-700 dark:text-gray-300">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Error Message */}
-                    {tunnel.status === 'error' && tunnel.error_message && (
-                      <div className="mt-2 text-xs text-red-600 dark:text-red-400">
-                        {tunnel.error_message}
-                      </div>
-                    )}
+              {/* ── Per-card loading overlay ── */}
+              {isReapplying && (
+                <div className="absolute inset-0 bg-white/70 dark:bg-gray-800/70 rounded-xl z-10 flex items-center justify-center backdrop-blur-[2px]">
+                  <div className="flex items-center gap-3 px-4 py-2 bg-white dark:bg-gray-900 rounded-lg shadow-lg border border-green-200 dark:border-green-800">
+                    <Loader2 size={18} className="animate-spin text-green-600 dark:text-green-400" />
+                    <span className="text-sm font-medium text-green-700 dark:text-green-300">Applying...</span>
                   </div>
                 </div>
+              )}
 
-                {/* Action Buttons */}
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    onClick={() => reapplyTunnel(tunnel)}
-                    className="p-2.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-colors"
-                    title="Reapply tunnel"
-                  >
-                    <RotateCw size={18} />
-                  </button>
-                  <button
-                    onClick={() => setEditingTunnel(tunnel)}
-                    className="p-2.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
-                    title="Edit tunnel"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                  <button
-                    onClick={() => deleteTunnel(tunnel.id)}
-                    className="p-2.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                    title="Delete tunnel"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+              <div className="p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-4 flex-1 min-w-0">
+                    {/* Status Badge */}
+                    <span
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
+                        tunnel.status === 'active'
+                          ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                          : tunnel.status === 'error'
+                          ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                      }`}
+                    >
+                      {tunnel.status}
+                    </span>
+
+                    <div className="flex-1 min-w-0">
+                      {/* Name, Core Badge, Transmission Badge, Ports */}
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <h3 className="text-base font-semibold text-gray-900 dark:text-white truncate">{tunnel.name}</h3>
+                        <span
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
+                        >
+                          {tunnel.core}
+                        </span>
+                        {(() => {
+                          let transmissionType = null
+                          if (tunnel.core === 'chisel') {
+                            transmissionType = 'TCP'
+                          } else if (tunnel.core === 'rathole') {
+                            const transport = tunnel.spec?.transport || (tunnel.type && tunnel.type !== 'rathole' ? tunnel.type : 'tcp')
+                            transmissionType = transport.toUpperCase()
+                          } else if (tunnel.type && tunnel.type.toLowerCase() !== tunnel.core.toLowerCase()) {
+                            transmissionType = tunnel.type.toUpperCase()
+                          }
+                          
+                          if (!transmissionType) return null
+                          
+                          const getTransmissionBadge = () => {
+                            const typeColors: Record<string, { bg: string; text: string; border: string }> = {
+                              TCP: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-800 dark:text-green-200', border: 'border-green-300 dark:border-green-700' },
+                              UDP: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-800 dark:text-yellow-200', border: 'border-yellow-300 dark:border-yellow-700' },
+                              WS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
+                              WSS: { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-800 dark:text-pink-200', border: 'border-pink-300 dark:border-pink-700' },
+                              GRPC: { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-800 dark:text-teal-200', border: 'border-teal-300 dark:border-teal-700' },
+                              TCPMUX: { bg: 'bg-violet-100 dark:bg-violet-900/30', text: 'text-violet-800 dark:text-violet-200', border: 'border-violet-300 dark:border-violet-700' },
+                            }
+                            return typeColors[transmissionType] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-800 dark:text-gray-200', border: 'border-gray-300 dark:border-gray-600' }
+                          }
+                          
+                          const transmissionBadge = getTransmissionBadge()
+                          return (
+                            <span
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
+                            >
+                              {transmissionType}
+                            </span>
+                          )
+                        })()}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Ports:</span>
+                          <span className="text-sm font-mono font-semibold text-gray-700 dark:text-gray-300">{ports}</span>
+                        </div>
+                      </div>
+
+                      {/* Core Port, Node and Server Info */}
+                      <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                        {(() => {
+                          let corePort = null
+                          if (tunnel.core === 'rathole') {
+                            if (tunnel.spec?.bind_addr) {
+                              const match = tunnel.spec.bind_addr.match(/:(\d+)$/)
+                              if (match) corePort = match[1]
+                            }
+                            if (!corePort && tunnel.spec?.control_port) {
+                              corePort = tunnel.spec.control_port
+                            }
+                            if (!corePort) {
+                              const remoteAddr = tunnel.spec?.remote_addr || ''
+                              const match = remoteAddr.match(/:(\d+)$/)
+                              if (match) corePort = match[1]
+                            }
+                            if (!corePort) corePort = '23333'
+                          } else if (tunnel.core === 'chisel') {
+                            corePort = tunnel.spec?.control_port || tunnel.spec?.server_port
+                          } else if (tunnel.core === 'backhaul') {
+                            corePort = tunnel.spec?.control_port || tunnel.spec?.public_port || '3080'
+                          } else if (tunnel.core === 'frp') {
+                            corePort = tunnel.spec?.bind_port || '7000'
+                          }
+                          return corePort ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium">Core Port:</span>
+                              <span className="text-gray-700 dark:text-gray-300 font-mono">{corePort}</span>
+                            </div>
+                          ) : null
+                        })()}
+                        {iranNode && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium">Node:</span>
+                            <span className="text-gray-700 dark:text-gray-300">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                          </div>
+                        )}
+                        {foreignServer && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium">Server:</span>
+                            <span className="text-gray-700 dark:text-gray-300">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Error Message */}
+                      {tunnel.status === 'error' && tunnel.error_message && (
+                        <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+                          {tunnel.error_message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => reapplyTunnel(tunnel)}
+                      disabled={isReapplying || !!reapplyingTunnelId}
+                      className="p-2 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      title="Reapply tunnel"
+                      aria-label="Reapply tunnel"
+                    >
+                      {isReapplying ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <RotateCw size={18} />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setEditingTunnel(tunnel)}
+                      disabled={isReapplying}
+                      className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      title="Edit tunnel"
+                      aria-label="Edit tunnel"
+                    >
+                      <Edit2 size={18} />
+                    </button>
+                    <button
+                      onClick={() => deleteTunnel(tunnel.id)}
+                      disabled={isReapplying}
+                      className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      title="Delete tunnel"
+                      aria-label="Delete tunnel"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           )
         })}
       </div>
+
+      {/* ── Reapply All — Confirm Dialog ─────────────────────── */}
+      {showConfirmReapplyAll && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-sm">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              {t.tunnels.reapplyAll}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              {t.tunnels.confirmReapplyAll || 'Are you sure you want to reapply all tunnels? This will restart all active connections.'}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowConfirmReapplyAll(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={startReapplyAll}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+              >
+                Yes, Reapply All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reapply All — Progress Modal ─────────────────────── */}
+      {reapplyAllProgress && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md max-h-[80vh] flex flex-col">
+            {/* Modal header */}
+            <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                {reapplyAllDone ? (
+                  <CheckCircle2 size={20} className="text-green-500" />
+                ) : (
+                  <Loader2 size={20} className="animate-spin text-blue-500" />
+                )}
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                    {reapplyAllDone ? 'Reapply Complete' : 'Applying Tunnels...'}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} / {reapplyAllProgress.length} done
+                  </p>
+                </div>
+              </div>
+              {reapplyAllDone && (
+                <button
+                  onClick={closeReapplyAllModal}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            <div className="px-5 pt-4">
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="h-1.5 rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-500 ease-out"
+                  style={{
+                    width: `${(reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length / reapplyAllProgress.length) * 100}%`
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Tunnel list */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-2 mt-2">
+              {reapplyAllProgress.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                    item.status === 'running'
+                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+                      : item.status === 'success'
+                      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                      : item.status === 'error'
+                      ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                      : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700'
+                  }`}
+                >
+                  {/* Status icon */}
+                  <div className="shrink-0">
+                    {item.status === 'pending' && <Clock size={16} className="text-gray-400" />}
+                    {item.status === 'running' && <Loader2 size={16} className="animate-spin text-blue-500" />}
+                    {item.status === 'success' && <CheckCircle2 size={16} className="text-green-500" />}
+                    {item.status === 'error' && <XCircle size={16} className="text-red-500" />}
+                  </div>
+
+                  {/* Tunnel info */}
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium truncate ${
+                      item.status === 'running' ? 'text-blue-700 dark:text-blue-300' :
+                      item.status === 'success' ? 'text-green-700 dark:text-green-300' :
+                      item.status === 'error' ? 'text-red-700 dark:text-red-300' :
+                      'text-gray-600 dark:text-gray-400'
+                    }`}>
+                      {item.name}
+                    </p>
+                    {item.status === 'error' && item.error && (
+                      <p className="text-xs text-red-500 dark:text-red-400 truncate mt-0.5">{item.error}</p>
+                    )}
+                    {item.status === 'running' && (
+                      <p className="text-xs text-blue-500 mt-0.5">Applying...</p>
+                    )}
+                  </div>
+
+                  {/* Status label */}
+                  <span className={`text-xs font-medium shrink-0 ${
+                    item.status === 'pending' ? 'text-gray-400' :
+                    item.status === 'running' ? 'text-blue-500' :
+                    item.status === 'success' ? 'text-green-600' :
+                    'text-red-600'
+                  }`}>
+                    {item.status === 'pending' ? 'Waiting' :
+                     item.status === 'running' ? 'Running' :
+                     item.status === 'success' ? 'Done' : 'Failed'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer */}
+            {reapplyAllDone && (
+              <div className="p-5 border-t border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-3">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-green-500" />
+                    {reapplyAllProgress.filter(i => i.status === 'success').length} succeeded
+                  </span>
+                  {reapplyAllProgress.filter(i => i.status === 'error').length > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <XCircle size={14} className="text-red-500" />
+                      {reapplyAllProgress.filter(i => i.status === 'error').length} failed
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={closeReapplyAllModal}
+                  className="w-full px-4 py-2.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-white transition-colors font-medium text-sm"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showAddModal && (
         <AddTunnelModal
@@ -532,6 +782,7 @@ interface EditTunnelModalProps {
 
 const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) => {
   const { t } = useLanguage()
+  const { showToast } = useToast()
   const forwardToParsed = tunnel.spec?.forward_to ? parseAddressPort(tunnel.spec.forward_to) : null
   const remoteIp = tunnel.spec?.remote_ip || forwardToParsed?.host || '127.0.0.1'
   const remotePort = tunnel.spec?.remote_port || forwardToParsed?.port || 8080
@@ -641,7 +892,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         ports = parsed.ports
         port_ranges = parsed.port_ranges
         if (ports.length === 0 && port_ranges.length === 0) {
-          alert('Please enter at least one valid port or port range')
+          showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
           return
         }
       } else {
@@ -653,7 +904,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           .filter(p => !isNaN(p) && p > 0 && p <= 65535)
           
         if (ports.length === 0) {
-          alert('Please enter at least one valid port')
+          showToast('warning', 'Invalid Port', 'Please enter at least one valid port')
           return
         }
       }
@@ -721,7 +972,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
       }
 
       if (tunnel.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
-        alert("WS Path must start with a slash (e.g., /graphql)")
+        showToast('warning', 'Validation', 'WS Path must start with a slash (e.g., /graphql)')
         return
       }
 
@@ -749,10 +1000,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         iran_node_id: formData.iran_node_id,
         foreign_node_id: formData.foreign_node_id
       })
+      showToast('success', 'Tunnel Updated', `${formData.name} was updated successfully`)
       onSuccess()
     } catch (error) {
       console.error('Failed to update tunnel:', error)
-      alert('Failed to update tunnel')
+      showToast('error', 'Error', 'Failed to update tunnel')
     }
   }
 
@@ -774,11 +1026,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
             />
           </div>
           {tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux') && (
-            <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  {t.tunnels.remoteIP}
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {t.tunnels.remoteIP}
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={formData.remote_ip}
@@ -793,9 +1047,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Ports & Ranges
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Ports & Ranges
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={formData.ports}
@@ -809,7 +1065,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   Ports or ranges (comma-separated, same for panel and target server)
                 </p>
               </div>
-            </>
+            </div>
           )}
           
           {tunnel.core === 'backhaul' && (
@@ -846,11 +1102,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           )}
           
           {tunnel.core === 'rathole' && (
-            <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Rathole Port
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Rathole Port
+                  </label>
+                </div>
                 <input
                   type="number"
                   value={formData.rathole_remote_addr ? formData.rathole_remote_addr.split(':')[1] || formData.rathole_remote_addr : ''}
@@ -867,9 +1125,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Rathole server port on panel (IP: {window.location.hostname})</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Local Port
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Local Port
+                  </label>
+                </div>
                 <input
                   type="number"
                   value={formData.rathole_local_port}
@@ -882,7 +1142,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   max="65535"
                 />
               </div>
-            </>
+            </div>
           )}
           
           {tunnel.core === 'chisel' && (
@@ -949,11 +1209,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           
           {tunnel.core === 'frp' && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Bind Port
-                  </label>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Bind Port
+                    </label>
+                  </div>
                   <input
                     type="number"
                     value={formData.frp_bind_port}
@@ -971,9 +1233,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Ports
-                  </label>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Ports
+                    </label>
+                  </div>
                   <input
                     type="text"
                     value={formData.ports}
@@ -997,11 +1261,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   Advanced FRP & Anti-DPI Settings
                 </h4>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Transport Protocol
-                    </label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                        Transport Protocol
+                      </label>
+                    </div>
                     <select
                       value={formData.frp_transport}
                       onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
@@ -1015,9 +1281,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Stealth SNI / Camouflage Domain
-                    </label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                        Stealth SNI / Camouflage Domain
+                      </label>
+                    </div>
                     <input
                       type="text"
                       value={formData.frp_sni}
@@ -1051,9 +1319,12 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Token (Optional - Auto-generated if empty)
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Token
+                  </label>
+                  <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">Optional</span>
+                </div>
                 <input
                   type="text"
                   value={formData.frp_token}
@@ -1061,9 +1332,9 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                     setFormData({ ...formData, frp_token: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="Leave empty for auto-generation"
+                  placeholder="Auto-generated if empty"
                 />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (will be auto-generated if not provided)</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (auto-generated if left blank)</p>
               </div>
             </>
           )}
@@ -1094,9 +1365,11 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Transport Type</label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Transport Type</label>
+                    </div>
                     <select
                       value={formData.transport_type}
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
@@ -1108,7 +1381,9 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Security Type</label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Security Type</label>
+                    </div>
                     <select
                       value={formData.security_type}
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
@@ -1154,7 +1429,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                       const updates: any = { cdn_mode: isChecked };
                       if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
                         updates.transport_type = 'ws';
-                        alert('CDN mode requires WebSocket transport. Transport type auto-switched to WS.');
+                        showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Transport type auto-switched to WS.')
                       }
                       setFormData({...formData, ...updates});
                     }} />
@@ -1300,6 +1575,7 @@ interface AddTunnelModalProps {
 
 const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalProps) => {
   const { t } = useLanguage()
+  const { showToast } = useToast()
   const [formData, setFormData] = useState({
     name: '',
     core: 'gost',
@@ -1391,7 +1667,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         ports = parsed.ports
         port_ranges = parsed.port_ranges
         if (ports.length === 0 && port_ranges.length === 0) {
-          alert('Please enter at least one valid port or port range')
+          showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
           return
         }
       } else {
@@ -1403,7 +1679,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           .filter(p => !isNaN(p) && p > 0 && p <= 65535)
           
         if (ports.length === 0) {
-          alert('Please enter at least one valid port')
+          showToast('warning', 'Invalid Port', 'Please enter at least one valid port')
           return
         }
       }
@@ -1448,7 +1724,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       
       if (formData.core === 'backhaul') {
         if (!formData.node_id) {
-          alert('Backhaul tunnels require a node')
+          showToast('warning', 'Node Required', 'Backhaul tunnels require an Iran node')
           return
         }
         // CRITICAL: For Backhaul, the Ports field is in BackhaulForm, not in the main formData.ports
@@ -1503,7 +1779,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       
       if (formData.core === 'frp') {
         if (!formData.node_id) {
-          alert('FRP tunnels require a node')
+          showToast('warning', 'Node Required', 'FRP tunnels require an Iran node')
           return
         }
         const bindPort = parseInt(formData.frp_bind_port) || 7000
@@ -1526,7 +1802,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       }
       
       if (formData.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
-        alert("WS Path must start with a slash (e.g., /graphql)")
+        showToast('warning', 'Validation', 'WS Path must start with a slash (e.g., /graphql)')
         return
       }
 
@@ -1557,10 +1833,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         iran_node_id: formData.iran_node_id || formData.node_id || null
       }
       await api.post('/tunnels', payload)
+      showToast('success', 'Tunnel Created', `${formData.name} was created successfully`)
       onSuccess()
     } catch (error) {
       console.error('Failed to create tunnel:', error)
-      alert('Failed to create tunnel')
+      showToast('error', 'Error', 'Failed to create tunnel')
     }
   }
 
@@ -1621,11 +1898,13 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
               required
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {t.tunnels.iranNode}
-              </label>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.tunnels.iranNode}
+                </label>
+              </div>
               <select
                 value={formData.iran_node_id || formData.node_id}
                 onChange={(e) => setFormData({ ...formData, iran_node_id: e.target.value, node_id: e.target.value })}
@@ -1641,9 +1920,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {t.tunnels.foreignServer}
-              </label>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.tunnels.foreignServer}
+                </label>
+              </div>
               <select
                 value={formData.foreign_node_id}
                 onChange={(e) => setFormData({ ...formData, foreign_node_id: e.target.value })}
@@ -1660,11 +1941,13 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {t.tunnels.core}
-              </label>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.tunnels.core}
+                </label>
+              </div>
               <select
                 value={formData.core}
                 onChange={(e) => handleCoreChange(e.target.value)}
@@ -1678,9 +1961,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {t.tunnels.type}
-              </label>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.tunnels.type}
+                </label>
+              </div>
               <select
                 value={formData.type}
                 onChange={(e) => {
@@ -1725,11 +2010,13 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           </div>
 
           {formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux') && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  {t.tunnels.remoteIP}
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {t.tunnels.remoteIP}
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={formData.remote_ip}
@@ -1744,9 +2031,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Ports & Ranges
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Ports & Ranges
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={formData.ports}
@@ -1800,41 +2089,46 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                   Ports (comma-separated, same for panel and node local service)
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Rathole Port
-                </label>
-                <input
-                  type="number"
-                  value={formData.rathole_remote_addr}
-                  onChange={(e) =>
-                    setFormData({ ...formData, rathole_remote_addr: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="23333"
-                  min="1"
-                  max="65535"
-                  required
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Rathole server port on panel (IP: {window.location.hostname})</p>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Rathole Port
+                    </label>
+                  </div>
+                  <input
+                    type="number"
+                    value={formData.rathole_remote_addr}
+                    onChange={(e) =>
+                      setFormData({ ...formData, rathole_remote_addr: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                    placeholder="23333"
+                    min="1"
+                    max="65535"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Rathole server port on panel (IP: {window.location.hostname})</p>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Token
+                    </label>
+                    <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">Optional</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.rathole_token}
+                    onChange={(e) =>
+                      setFormData({ ...formData, rathole_token: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                    placeholder="Auto-generated if empty"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (auto-generated if left blank)</p>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Token (Optional - Auto-generated if empty)
-                </label>
-                <input
-                  type="text"
-                  value={formData.rathole_token}
-                  onChange={(e) =>
-                    setFormData({ ...formData, rathole_token: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="Leave empty for auto-generation"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (will be auto-generated if not provided)</p>
-              </div>
-            </div>
             </>
           )}
           
@@ -1882,11 +2176,13 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
           
           {formData.core === 'frp' && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Bind Port
-                  </label>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Bind Port
+                    </label>
+                  </div>
                   <input
                     type="number"
                     value={formData.frp_bind_port}
@@ -1904,9 +2200,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                   </p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Ports
-                  </label>
+                  <div className="flex items-center justify-between mb-1 h-5">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Ports
+                    </label>
+                  </div>
                   <input
                     type="text"
                     value={formData.ports}
@@ -1930,11 +2228,13 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                   Advanced FRP & Anti-DPI Settings
                 </h4>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Transport Protocol
-                    </label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                        Transport Protocol
+                      </label>
+                    </div>
                     <select
                       value={formData.frp_transport}
                       onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
@@ -1948,9 +2248,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Stealth SNI / Camouflage Domain
-                    </label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                        Stealth SNI / Camouflage Domain
+                      </label>
+                    </div>
                     <input
                       type="text"
                       value={formData.frp_sni}
@@ -1984,9 +2286,12 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Token (Optional - Auto-generated if empty)
-                </label>
+                <div className="flex items-center justify-between mb-1 h-5">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Token
+                  </label>
+                  <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">Optional</span>
+                </div>
                 <input
                   type="text"
                   value={formData.frp_token}
@@ -1994,9 +2299,9 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     setFormData({ ...formData, frp_token: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-                  placeholder="Leave empty for auto-generation"
+                  placeholder="Auto-generated if empty"
                 />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (will be auto-generated if not provided)</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (auto-generated if left blank)</p>
               </div>
             </>
           )}
@@ -2027,9 +2332,11 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Transport Type</label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Transport Type</label>
+                    </div>
                     <select
                       value={formData.transport_type}
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
@@ -2041,7 +2348,9 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Security Type</label>
+                    <div className="flex items-center justify-between mb-1 h-5">
+                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Security Type</label>
+                    </div>
                     <select
                       value={formData.security_type}
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
@@ -2087,7 +2396,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                       const updates: any = { cdn_mode: isChecked };
                       if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
                         updates.transport_type = 'ws';
-                        alert('CDN mode requires WebSocket transport. Transport type auto-switched to WS.');
+                        showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Transport type auto-switched to WS.')
                       }
                       setFormData({...formData, ...updates});
                     }} />

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Activity, RefreshCw, Clock, CheckCircle2, XCircle, AlertCircle, Settings } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useToast } from '../contexts/ToastContext'
 
 interface CoreHealth {
   core: string
@@ -31,6 +32,7 @@ interface ResetConfig {
 
 const CoreHealth = () => {
   const { t } = useLanguage()
+  const { showToast, showConfirm } = useToast()
   const [health, setHealth] = useState<CoreHealth[]>([])
   const [configs, setConfigs] = useState<ResetConfig[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,15 +61,22 @@ const CoreHealth = () => {
 
 
   const handleReset = async (core: string) => {
-    if (!confirm(`Are you sure you want to reset ${core} core?`)) return
+    const confirmed = await showConfirm({
+      title: 'Reset Core Service',
+      message: `Are you sure you want to reset the ${core} core? Active connections using this core may be temporarily interrupted.`,
+      variant: 'danger',
+      confirmText: 'Reset Core'
+    })
+    if (!confirmed) return
     
     setUpdating(core)
     try {
       await api.post(`/core-health/reset/${core}`)
+      showToast('success', 'Core Reset', `${core} core was successfully reset`)
       await fetchData()
     } catch (error) {
       console.error(`Failed to reset ${core}:`, error)
-      alert(`Failed to reset ${core}`)
+      showToast('error', 'Error', `Failed to reset ${core}`)
     } finally {
       setUpdating(null)
     }
@@ -77,10 +86,11 @@ const CoreHealth = () => {
     setUpdating(core)
     try {
       await api.put(`/core-health/reset-config/${core}`, updates)
+      showToast('success', 'Configuration Updated', `Reset schedule for ${core} updated`)
       await fetchData()
     } catch (error) {
       console.error(`Failed to update config for ${core}:`, error)
-      alert(`Failed to update config`)
+      showToast('error', 'Error', 'Failed to update reset configuration')
     } finally {
       setUpdating(null)
     }

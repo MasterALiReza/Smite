@@ -92,12 +92,14 @@ const Settings = () => {
     }))
   }
 
+  const [newAdminId, setNewAdminId] = useState('')
+
   const addAdminId = () => {
-    const newId = prompt(t.settings.enterAdminId)
-    if (newId && newId.trim()) {
+    if (newAdminId && newAdminId.trim()) {
       updateTelegram({
-        admin_ids: [...settings.telegram.admin_ids, newId.trim()]
+        admin_ids: [...settings.telegram.admin_ids, newAdminId.trim()]
       })
+      setNewAdminId('')
     }
   }
 
@@ -152,7 +154,7 @@ const Settings = () => {
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.frp.enabled ? 'translate-x-6' : 'translate-x-1'
+                    settings.frp.enabled ? 'translate-x-6 rtl:-translate-x-6' : 'translate-x-1 rtl:-translate-x-1'
                   }`}
                 />
               </button>
@@ -220,7 +222,7 @@ const Settings = () => {
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.telegram.enabled ? 'translate-x-6' : 'translate-x-1'
+                    settings.telegram.enabled ? 'translate-x-6 rtl:-translate-x-6' : 'translate-x-1 rtl:-translate-x-1'
                   }`}
                 />
               </button>
@@ -269,12 +271,27 @@ const Settings = () => {
                         </button>
                       </div>
                     ))}
-                    <button
-                      onClick={addAdminId}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                    >
-                      {t.settings.addAdminId}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={newAdminId}
+                        onChange={(e) => setNewAdminId(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newAdminId.trim()) {
+                            e.preventDefault();
+                            addAdminId();
+                          }
+                        }}
+                        placeholder={t.settings.enterAdminId || 'Enter Telegram Admin ID'}
+                        className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                      <button
+                        onClick={addAdminId}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                      >
+                        {t.settings.addAdminId || 'Add'}
+                      </button>
+                    </div>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {t.settings.adminUserIdsDescription}
@@ -360,14 +377,14 @@ const Settings = () => {
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.tunnel?.auto_reapply_enabled ? 'translate-x-6' : 'translate-x-1'
+                    settings.tunnel?.auto_reapply_enabled ? 'translate-x-6 rtl:-translate-x-6' : 'translate-x-1 rtl:-translate-x-1'
                   }`}
                 />
               </button>
             </div>
 
             {settings.tunnel?.auto_reapply_enabled && (
-              <div className="space-y-4 pl-4 border-l-2 border-gray-200 dark:border-gray-700">
+              <div className="space-y-4 ps-4 border-s-2 border-gray-200 dark:border-gray-700">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

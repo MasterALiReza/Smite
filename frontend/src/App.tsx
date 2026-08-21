@@ -1,7 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { useState, useEffect } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { LanguageProvider } from './contexts/LanguageContext'
+import { ThemeProvider } from './contexts/ThemeContext'
+import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -13,19 +14,11 @@ import CoreHealth from './pages/CoreHealth'
 import Settings from './pages/Settings'
 
 // Protected Route Component
+// Auth check is done ONCE in AuthProvider on startup — ProtectedRoute just reads the result
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, checkAuth } = useAuth()
-  const [loading, setLoading] = useState(true)
+  const { isAuthenticated, isLoading } = useAuth()
 
-  useEffect(() => {
-    const verifyAuth = async () => {
-      await checkAuth()
-      setLoading(false)
-    }
-    verifyAuth()
-  }, [checkAuth])
-
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="text-center">
@@ -137,11 +130,15 @@ const AppRoutes = () => {
 function App() {
   return (
     <Router>
-      <LanguageProvider>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </LanguageProvider>
+      <ThemeProvider>
+        <ToastProvider>
+          <LanguageProvider>
+            <AuthProvider>
+              <AppRoutes />
+            </AuthProvider>
+          </LanguageProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </Router>
   )
 }

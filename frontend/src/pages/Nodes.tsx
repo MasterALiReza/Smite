@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle } from 'lucide-react'
+import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle, Server } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useToast } from '../contexts/ToastContext'
+import { EmptyState } from '../components/EmptyState'
 
 interface Node {
   id: string
@@ -15,6 +17,7 @@ interface Node {
 
 const Nodes = () => {
   const { t } = useLanguage()
+  const { showToast, showConfirm } = useToast()
   const [nodes, setNodes] = useState<Node[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -51,10 +54,11 @@ const Nodes = () => {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
+      showToast('success', 'Copied', 'Fingerprint copied to clipboard', 2000)
       setTimeout(() => setCopied(false), 2000)
     } catch (error) {
       console.error('Failed to copy to clipboard:', error)
-      alert('Failed to copy to clipboard. Please copy manually.')
+      showToast('error', 'Error', 'Failed to copy to clipboard')
     }
   }
 
@@ -76,7 +80,7 @@ const Nodes = () => {
     } catch (error: any) {
       console.error('Failed to fetch CA:', error)
       const errorMessage = error.response?.data?.detail || error.message || 'Failed to fetch CA certificate'
-      alert(`Failed to fetch CA certificate: ${errorMessage}`)
+      showToast('error', 'Error', `Failed to fetch CA certificate: ${errorMessage}`)
       setShowCertModal(false)
     } finally {
       setCertLoading(false)
@@ -93,20 +97,29 @@ const Nodes = () => {
       document.body.appendChild(link)
       link.click()
       link.remove()
+      showToast('success', 'Downloaded', 'CA certificate downloaded')
     } catch (error) {
       console.error('Failed to download CA:', error)
+      showToast('error', 'Error', 'Failed to download CA certificate')
     }
   }
 
   const deleteNode = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this node?')) return
+    const confirmed = await showConfirm({
+      title: 'Delete Node',
+      message: 'Are you sure you want to delete this Iran node? Any tunnels linked to it may stop working.',
+      variant: 'danger',
+      confirmText: 'Delete'
+    })
+    if (!confirmed) return
     
     try {
       await api.delete(`/nodes/${id}`)
+      showToast('success', 'Deleted', 'Node deleted successfully')
       fetchNodes()
     } catch (error) {
       console.error('Failed to delete node:', error)
-      alert('Failed to delete node')
+      showToast('error', 'Error', 'Failed to delete node')
     }
   }
 
@@ -154,89 +167,99 @@ const Nodes = () => {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
-        <table className="w-full">
-          <thead className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Name
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Fingerprint
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                IP Address
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Last Seen
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-            {nodes.map((node) => (
-              <tr key={node.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900 dark:text-white">{node.name}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center gap-2">
-                    <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">{node.fingerprint}</code>
-                    <button
-                      onClick={() => copyToClipboard(node.fingerprint)}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-600 dark:text-gray-400"
-                    >
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {(() => {
-                    const connStatus = node.metadata?.connection_status || 'failed'
-                    const getStatusColor = (status: string) => {
-                      switch (status) {
-                        case 'connected':
-                          return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                        case 'connecting':
-                        case 'reconnecting':
-                          return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
-                        case 'failed':
-                          return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                        default:
-                          return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
+              <tr>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Name
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Fingerprint
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  IP Address
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Last Seen
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+              {nodes.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-0">
+                    <EmptyState 
+                      icon={<Server size={32} />} 
+                      title="No Iran nodes" 
+                      description="Add an Iran node to get started." 
+                      action={{ label: 'Add Node', onClick: () => setShowAddModal(true) }} 
+                    />
+                  </td>
+                </tr>
+              ) : (
+                nodes.map((node) => (
+                <tr key={node.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900 dark:text-white">{node.name}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">{node.fingerprint}</code>
+                      <button
+                        onClick={() => copyToClipboard(node.fingerprint)}
+                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-400 min-w-[36px] min-h-[36px] flex items-center justify-center"
+                        title="Copy fingerprint"
+                        aria-label="Copy fingerprint"
+                      >
+                        <Copy size={15} />
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    {(() => {
+                      const connStatus = node.metadata?.connection_status || 'failed'
+                      const getStatusColor = (status: string) => {
+                        switch (status) {
+                          case 'connected':
+                            return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                          case 'connecting':
+                          case 'reconnecting':
+                            return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
+                          case 'failed':
+                            return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+                          default:
+                            return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                        }
                       }
-                    }
-                    const getStatusIcon = (status: string) => {
-                      switch (status) {
-                        case 'connected':
-                          return <CheckCircle size={12} className="text-green-600 dark:text-green-400" />
-                        case 'connecting':
-                        case 'reconnecting':
-                          return <AlertCircle size={12} className="text-yellow-600 dark:text-yellow-400" />
-                        case 'failed':
-                          return <XCircle size={12} className="text-red-600 dark:text-red-400" />
-                        default:
-                          return <XCircle size={12} />
+                      const getStatusIcon = (status: string) => {
+                        switch (status) {
+                          case 'connected':
+                            return <CheckCircle size={12} className="text-green-600 dark:text-green-400" />
+                          case 'connecting':
+                          case 'reconnecting':
+                            return <AlertCircle size={12} className="text-yellow-600 dark:text-yellow-400" />
+                          case 'failed':
+                            return <XCircle size={12} className="text-red-600 dark:text-red-400" />
+                          default:
+                            return <XCircle size={12} />
+                        }
                       }
-                    }
-                    const getStatusText = (status: string) => {
-                      switch (status) {
-                        case 'connected':
-                          return 'Connected'
-                        case 'connecting':
-                          return 'Connecting'
-                        case 'reconnecting':
-                          return 'Reconnecting'
-                        case 'failed':
-                          return 'Failed'
-                        default:
-                          return status
+                      const getStatusText = (status: string) => {
+                        switch (status) {
+                          case 'connected': return 'Connected'
+                          case 'connecting': return 'Connecting'
+                          case 'reconnecting': return 'Reconnecting'
+                          case 'failed': return 'Failed'
+                          default: return status
+                        }
                       }
-                    }
                       return (
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(connStatus)}`}>
                           {getStatusIcon(connStatus)}
@@ -249,20 +272,24 @@ const Nodes = () => {
                     {node.metadata?.ip_address || 'N/A'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                  {new Date(node.last_seen).toLocaleString()}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <button
-                    onClick={() => deleteNode(node.id)}
-                    className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    {new Date(node.last_seen).toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <button
+                      onClick={() => deleteNode(node.id)}
+                      className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                      title="Delete node"
+                      aria-label="Delete node"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {showAddModal && (
@@ -294,7 +321,7 @@ interface AddNodeModalProps {
 }
 
 const AddNodeModal = ({ onClose, onSuccess }: AddNodeModalProps) => {
-  const { t } = useLanguage()
+  const { showToast } = useToast()
   const [name, setName] = useState('')
   const [ipAddress, setIpAddress] = useState('')
   const [apiPort, setApiPort] = useState('8888')
@@ -308,10 +335,11 @@ const AddNodeModal = ({ onClose, onSuccess }: AddNodeModalProps) => {
         api_port: parseInt(apiPort) || 8888,
         metadata: {} 
       })
+      showToast('success', 'Node Added', `Node ${name} added successfully`)
       onSuccess()
     } catch (error) {
       console.error('Failed to add node:', error)
-      alert('Failed to add node')
+      showToast('error', 'Error', 'Failed to add node')
     }
   }
 
@@ -434,7 +462,7 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
                       await navigator.clipboard.writeText(certContent)
                       onCopy()
                     } else {
-                      alert('Certificate content is empty. Please wait for it to load.')
+                      showToast('warning', 'Empty Certificate', 'Certificate content is empty. Please wait for it to load.')
                     }
                   } catch (error) {
                     console.error('Failed to copy:', error)
@@ -446,10 +474,10 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
                         document.execCommand('copy')
                         onCopy()
                       } catch (err) {
-                        alert('Failed to copy to clipboard. Please select and copy manually from the text area above.')
+                        showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
                       }
                     } else {
-                      alert('Failed to copy to clipboard. Please select and copy manually from the text area above.')
+                      showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
                     }
                   }
                 }}

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { LogIn, Loader2, Shield } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useTheme } from '../contexts/ThemeContext'
 import api from '../api/client'
 import SmiteLogoDark from '../assets/SmiteD.png'
 import SmiteLogoLight from '../assets/SmiteL.png'
@@ -13,10 +14,7 @@ const Login = () => {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('darkMode')
-    return saved ? JSON.parse(saved) : false
-  })
+  const { darkMode, setDarkMode } = useTheme()
   const navigate = useNavigate()
   const { login, isAuthenticated } = useAuth()
   const { t, dir } = useLanguage()
@@ -26,14 +24,6 @@ const Login = () => {
       navigate('/dashboard')
     }
   }, [isAuthenticated, navigate])
-
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  }, [darkMode])
 
   useEffect(() => {
     fetch('/api/status/version')
@@ -101,10 +91,7 @@ const Login = () => {
               </h2>
             </div>
             <button
-              onClick={() => {
-                setDarkMode(!darkMode)
-                localStorage.setItem('darkMode', JSON.stringify(!darkMode))
-              }}
+              onClick={() => setDarkMode(!darkMode)}
               className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
               title={darkMode ? 'Light mode' : 'Dark mode'}
             >
