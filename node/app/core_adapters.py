@@ -11,6 +11,43 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+async def free_port(port: Optional[int]) -> None:
+    """Safely and aggressively terminate any process holding the specified port."""
+    if not port or not isinstance(port, int) or port <= 0:
+        return
+    
+    current_pid = os.getpid()
+    try:
+        for p in psutil.process_iter(['pid', 'name']):
+            if p.pid == current_pid:
+                continue
+            try:
+                for conn in p.net_connections(kind='inet'):
+                    if conn.laddr and conn.laddr.port == port:
+                        logger.warning(f"Terminating process {p.pid} ({p.name()}) holding port {port}")
+                        p.kill()
+                        try:
+                            p.wait(timeout=1.0)
+                        except Exception:
+                            pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Error freeing port {port}: {e}")
+
+    try:
+        fuser_proc = await asyncio.create_subprocess_exec(
+            "fuser", "-k", "-9", f"{port}/tcp",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        await asyncio.wait_for(fuser_proc.wait(), timeout=1.0)
+    except Exception:
+        pass
+
+
 async def safe_stop_subprocess(
     proc: Optional[asyncio.subprocess.Process] = None,
     patterns: Optional[List[str]] = None,
@@ -18,7 +55,7 @@ async def safe_stop_subprocess(
 ) -> None:
     """
     Safely and thoroughly stop a subprocess and any associated process group or orphan processes.
-    Uses process group signaling (SIGTERM -> SIGKILL) and fallback pattern killing.
+    Uses process group signaling, psutil process-table scanning, and fallback pattern killing.
     """
     if proc is not None and proc.returncode is None:
         if os.name == 'posix':
@@ -55,6 +92,25 @@ async def safe_stop_subprocess(
                 pass
 
     if patterns:
+        current_pid = os.getpid()
+        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+            if p.pid == current_pid:
+                continue
+            try:
+                cmdline_str = " ".join(p.info.get('cmdline') or [])
+                for pat in patterns:
+                    if pat and pat in cmdline_str:
+                        logger.info(f"Terminating orphan process {p.pid} matching '{pat}'")
+                        p.kill()
+                        try:
+                            p.wait(timeout=1.0)
+                        except Exception:
+                            pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            except Exception:
+                pass
+
         for pat in patterns:
             if not pat or not str(pat).strip():
                 continue
@@ -861,6 +917,11 @@ class FrpAdapter:
         
         if mode == 'server':
             bind_port = spec.get('bind_port', 7000)
+            if isinstance(bind_port, str) and str(bind_port).isdigit():
+                bind_port = int(bind_port)
+            elif not isinstance(bind_port, int):
+                bind_port = 7000
+            await free_port(bind_port)
             token = spec.get('token')
             force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls'])
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()

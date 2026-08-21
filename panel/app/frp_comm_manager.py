@@ -60,6 +60,8 @@ class FrpCommManager:
             self.token = token
             
             config_content = f"""bindPort: {port}
+kcpBindPort: 0
+quicBindPort: 0
 """
             if token:
                 config_content += f"""auth:
