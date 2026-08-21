@@ -46,9 +46,16 @@ class FrpServerManager:
             "frps binary not found. Expected at FRPS_BINARY, '/usr/local/bin/frps', or in PATH."
         )
     
-    async def start_server(self, tunnel_id: str, bind_port: int, token: Optional[str] = None) -> bool:
+    async def start_server(
+        self, 
+        tunnel_id: str, 
+        bind_port: int, 
+        token: Optional[str] = None,
+        transport_proto: str = "tcp",
+        force_tls: bool = False
+    ) -> bool:
         """
-        Start an FRP server for a tunnel
+        Start an FRP server for a tunnel with full multi-transport and TLS support
         """
         try:
             if tunnel_id in self.active_servers:
@@ -56,8 +63,25 @@ class FrpServerManager:
                 await self.stop_server(tunnel_id)
                 await asyncio.sleep(0.5)
             
+            proto = transport_proto.lower()
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"bindPort: {bind_port}\n"
+            
+            if proto == 'kcp':
+                config_content += f"kcpBindPort: {bind_port}\nquicBindPort: 0\n"
+            elif proto == 'quic':
+                config_content += f"kcpBindPort: 0\nquicBindPort: {bind_port}\n"
+            else:
+                config_content += "kcpBindPort: 0\nquicBindPort: 0\n"
+            
+            config_content += f"""transport:
+  maxPoolCount: 8
+  heartbeatTimeout: 90
+  tcpMux: true
+  tcpMuxKeepaliveInterval: 25
+  tls:
+    force: {'true' if force_tls else 'false'}
+"""
             if token:
                 config_content += f"auth:\n  method: token\n  token: \"{token}\"\n"
                 
@@ -78,6 +102,8 @@ class FrpServerManager:
             self.server_configs[tunnel_id] = {
                 "bind_port": bind_port,
                 "token": token,
+                "transport_proto": proto,
+                "force_tls": force_tls,
                 "config_file": str(config_file)
             }
             
@@ -85,7 +111,7 @@ class FrpServerManager:
             log_f = open(log_file, 'w', buffering=1)
             
             log_f.write(f"Starting FRP server for tunnel {tunnel_id}\n")
-            log_f.write(f"Config: bind_port={bind_port}, token={'set' if token else 'none'}\n")
+            log_f.write(f"Config: bind_port={bind_port}, proto={proto}, force_tls={force_tls}, token={'set' if token else 'none'}\n")
             log_f.write(f"Command: {' '.join(cmd)}\n")
             log_f.flush()
             
