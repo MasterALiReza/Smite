@@ -4,6 +4,7 @@ import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
+import { copyTextToClipboard } from '../utils/clipboard'
 
 interface Node {
   id: string
@@ -51,13 +52,12 @@ const Nodes = () => {
   }
 
   const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
+    const success = await copyTextToClipboard(text)
+    if (success) {
       setCopied(true)
       showToast('success', 'Copied', 'Fingerprint copied to clipboard', 2000)
       setTimeout(() => setCopied(false), 2000)
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error)
+    } else {
       showToast('error', 'Error', 'Failed to copy to clipboard')
     }
   }
@@ -307,7 +307,7 @@ const Nodes = () => {
           certContent={certContent}
           loading={certLoading}
           onClose={() => setShowCertModal(false)}
-          onCopy={() => copyToClipboard(certContent)}
+          onCopy={() => setCopied(true)}
           copied={copied}
         />
       )}
@@ -418,6 +418,8 @@ interface CertModalProps {
 }
 
 const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalProps) => {
+  const { showToast } = useToast()
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -457,28 +459,21 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
                 onClick={async (e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  try {
-                    if (certContent && certContent.trim().length > 0) {
-                      await navigator.clipboard.writeText(certContent)
-                      onCopy()
-                    } else {
-                      showToast('warning', 'Empty Certificate', 'Certificate content is empty. Please wait for it to load.')
-                    }
-                  } catch (error) {
-                    console.error('Failed to copy:', error)
+                  if (!certContent || certContent.trim().length === 0) {
+                    showToast('warning', 'Empty Certificate', 'Certificate content is empty. Please wait for it to load.')
+                    return
+                  }
+                  const success = await copyTextToClipboard(certContent)
+                  if (success) {
+                    onCopy()
+                    showToast('success', 'Copied', 'Certificate copied to clipboard', 2000)
+                  } else {
                     const textarea = e.currentTarget.closest('.bg-white, .dark\\:bg-gray-800')?.querySelector('textarea')
                     if (textarea) {
                       textarea.select()
                       textarea.setSelectionRange(0, 99999)
-                      try {
-                        document.execCommand('copy')
-                        onCopy()
-                      } catch (err) {
-                        showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
-                      }
-                    } else {
-                      showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
                     }
+                    showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
                   }
                 }}
                 disabled={loading || !certContent || certContent.trim().length === 0}
