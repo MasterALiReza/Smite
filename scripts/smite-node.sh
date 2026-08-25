@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # Smite Node Installer - Smart Multi-Instance & Safety Engine
 # Supports single & multi-node deployments with automatic port collision detection
 
@@ -99,10 +99,22 @@ scan_existing_nodes() {
     EXISTING_ROLES=()
     EXISTING_NAMES=()
 
-    # Check standard directory patterns
-    local candidates=(/opt/smite-node /opt/smite-node-[0-9]* /usr/local/node)
-    for d in ${candidates[@]}; do
-        if [ -d "$d" ] && [ -f "$d/docker-compose.yml" -o -f "$d/.env" ]; then
+    # Collect existing node candidate directories
+    local found_dirs=()
+    if [ -d "/opt/smite-node" ]; then
+        found_dirs+=("/opt/smite-node")
+    fi
+    for d in /opt/smite-node-[0-9]*; do
+        if [ -d "$d" ]; then
+            found_dirs+=("$d")
+        fi
+    done
+    if [ -d "/usr/local/node" ]; then
+        found_dirs+=("/usr/local/node")
+    fi
+
+    for d in "${found_dirs[@]}"; do
+        if [ -f "$d/docker-compose.yml" ] || [ -f "$d/.env" ]; then
             EXISTING_DIRS+=("$d")
             
             # Read metadata from .env if present
