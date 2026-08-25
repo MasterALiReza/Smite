@@ -169,7 +169,7 @@ async def _restore_rathole_servers():
             tunnels = result.scalars().all()
             
             for tunnel in tunnels:
-                if tunnel.core != "rathole":
+                if tunnel.core != "rathole" or tunnel.node_id or getattr(tunnel, "iran_node_id", None) or getattr(tunnel, "foreign_node_id", None):
                     continue
                 
                 remote_addr = tunnel.spec.get("remote_addr")
@@ -199,7 +199,7 @@ async def _restore_backhaul_servers():
             tunnels = result.scalars().all()
 
             for tunnel in tunnels:
-                if tunnel.core != "backhaul":
+                if tunnel.core != "backhaul" or tunnel.node_id or getattr(tunnel, "iran_node_id", None) or getattr(tunnel, "foreign_node_id", None):
                     continue
 
                 try:
@@ -222,7 +222,7 @@ async def _restore_chisel_servers():
             tunnels = result.scalars().all()
             
             for tunnel in tunnels:
-                if tunnel.core != "chisel":
+                if tunnel.core != "chisel" or tunnel.node_id or getattr(tunnel, "iran_node_id", None) or getattr(tunnel, "foreign_node_id", None):
                     continue
                 
                 listen_port = tunnel.spec.get("listen_port") or tunnel.spec.get("remote_port") or tunnel.spec.get("server_port")
@@ -264,7 +264,7 @@ async def _restore_frp_servers():
             tunnels = result.scalars().all()
             
             for tunnel in tunnels:
-                if tunnel.core != "frp":
+                if tunnel.core != "frp" or tunnel.node_id or getattr(tunnel, "iran_node_id", None) or getattr(tunnel, "foreign_node_id", None):
                     continue
                 
                 bind_port = tunnel.spec.get("bind_port", 7000)

@@ -2069,6 +2069,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     await db.commit()
                     raise HTTPException(status_code=500, detail=error_msg)
                 
+                # Allow server to bind and stabilize before foreign node client connects
+                await asyncio.sleep(1.0)
+
                 if not foreign_node.node_metadata.get("api_address"):
                     foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                     await db.commit()
