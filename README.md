@@ -163,18 +163,21 @@ smite edit-env          # Edit .env file
 
 ### Node CLI (`smite-node`)
 
+The Node CLI supports both single-instance and multi-instance environments:
+
 **Node Management:**
 ```bash
-smite-node status       # Show node status
-smite-node update       # Update node (pull images and recreate)
-smite-node restart      # Restart node (recreate to pick up .env changes)
-smite-node logs         # View node logs
+smite-node status            # Show status table of all installed nodes
+smite-node update [N]        # Safely update node (N = instance index or 'all')
+smite-node restart [N]       # Restart node (recreate to pick up .env changes)
+smite-node logs [N] [-f]     # View or stream node logs
+smite-node uninstall [N]     # Safely uninstall a specific node instance
 ```
 
 **Configuration:**
 ```bash
-smite-node edit         # Edit docker-compose.yml
-smite-node edit-env     # Edit .env file
+smite-node edit [N]          # Edit docker-compose.yml for node instance
+smite-node edit-env [N]      # Edit .env file for node instance
 ```
 
 ---

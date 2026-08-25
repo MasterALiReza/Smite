@@ -1,319 +1,400 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-Smite Node CLI
+Smite Node CLI - Smart Multi-Instance Management Tool
 """
 import os
 import sys
 import subprocess
 import argparse
 import shutil
+import json
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 
-def get_compose_file():
-    """Get docker-compose file path"""
-    possible_roots = [
-        Path("/opt/smite-node"),
-        Path("/usr/local/node"),  # Legacy installation path
-        Path.cwd(),
-        Path(__file__).parent.parent / "node",
-    ]
+def discover_nodes():
+    """Discover all Smite Node installations on the host."""
+    candidates = []
     
-    for node_dir in possible_roots:
-        compose_file = node_dir / "docker-compose.yml"
-        if compose_file.exists():
-            return compose_file
+    # Check /opt/smite-node and /opt/smite-node-*
+    opt_dir = Path("/opt")
+    if opt_dir.exists():
+        for d in sorted(opt_dir.iterdir()):
+            if d.is_dir() and (d.name == "smite-node" or d.name.startswith("smite-node-")):
+                if (d / "docker-compose.yml").exists() or (d / ".env").exists():
+                    candidates.append(d)
     
-    return Path("/opt/smite-node") / "docker-compose.yml"
+    # Check legacy /usr/local/node
+    legacy_dir = Path("/usr/local/node")
+    if legacy_dir.exists() and (legacy_dir / "docker-compose.yml").exists():
+        if legacy_dir not in candidates:
+            candidates.append(legacy_dir)
+            
+    # Check current directory
+    cwd = Path.cwd()
+    if (cwd / "docker-compose.yml").exists() and (cwd / "app").exists():
+        if cwd not in candidates:
+            candidates.append(cwd)
 
-
-def get_env_file():
-    """Get .env file path"""
-    possible_roots = [
-        Path("/opt/smite-node"),
-        Path("/usr/local/node"),  # Legacy installation path
-        Path.cwd(),
-        Path(__file__).parent.parent / "node",
-    ]
-    
-    for node_dir in possible_roots:
-        env_file = node_dir / ".env"
+    nodes = []
+    for idx, d in enumerate(candidates, start=1):
+        compose_file = d / "docker-compose.yml"
+        env_file = d / ".env"
+        
+        # Read .env metadata
+        name = f"node-{idx}"
+        port = 8888
+        role = "unknown"
+        panel_addr = "N/A"
+        
         if env_file.exists():
-            return env_file
-    
-    return Path("/opt/smite-node") / ".env"
+            try:
+                for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = line.strip()
+                    if line.startswith("NODE_NAME="):
+                        name = line.split("=", 1)[1].strip('"\' ')
+                    elif line.startswith("NODE_API_PORT="):
+                        try:
+                            port = int(line.split("=", 1)[1].strip('"\' '))
+                        except ValueError:
+                            pass
+                    elif line.startswith("NODE_ROLE="):
+                        role = line.split("=", 1)[1].strip('"\' ')
+                    elif line.startswith("PANEL_ADDRESS="):
+                        panel_addr = line.split("=", 1)[1].strip('"\' ')
+            except Exception:
+                pass
+                
+        # Extract container name from docker-compose.yml
+        cname = "smite-node" if d.name == "smite-node" else d.name
+        if compose_file.exists():
+            try:
+                for line in compose_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = line.strip()
+                    if line.startswith("container_name:"):
+                        cname = line.split(":", 1)[1].strip('"\' ')
+                        break
+            except Exception:
+                pass
+                
+        # Check Docker container status
+        docker_status = "not found"
+        try:
+            res = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", cname],
+                capture_output=True, text=True, check=False
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                docker_status = res.stdout.strip()
+        except Exception:
+            pass
+
+        # Check API status
+        api_status = "unreachable"
+        active_tunnels = 0
+        try:
+            req = urllib.request.Request(f"http://localhost:{port}/api/agent/status")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    api_status = "healthy"
+                    active_tunnels = data.get("active_tunnels", 0)
+        except Exception:
+            pass
+
+        nodes.append({
+            "index": idx,
+            "id_str": str(idx),
+            "dir": d,
+            "compose_file": compose_file,
+            "env_file": env_file,
+            "container_name": cname,
+            "name": name,
+            "port": port,
+            "role": role,
+            "panel_address": panel_addr,
+            "docker_status": docker_status,
+            "api_status": api_status,
+            "active_tunnels": active_tunnels,
+        })
+
+    return nodes
 
 
-def run_docker_compose(args, capture_output=False):
-    """Run docker compose command"""
-    compose_file = get_compose_file()
-    if not compose_file.exists():
-        print(f"Error: docker-compose.yml not found at {compose_file}")
-        print(f"\nPlease ensure you're in the node directory or docker-compose.yml exists at:")
-        print(f"  - /opt/smite-node/docker-compose.yml")
-        print(f"  - /usr/local/node/docker-compose.yml")
-        print(f"  - {Path.cwd()}/docker-compose.yml")
+def select_target_node(nodes, target_arg=None, prompt_action="operate on"):
+    """Select a specific node by index or prompt the user interactively."""
+    if not nodes:
+        print("Error: No Smite Node installations found on this server.")
+        print("Install a node using: sudo bash -c \"$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh)\"")
         sys.exit(1)
+
+    if target_arg:
+        target_arg_str = str(target_arg).strip().lower()
+        if target_arg_str in ["all", "*"]:
+            return nodes
+        for node in nodes:
+            if node["id_str"] == target_arg_str or node["container_name"].lower() == target_arg_str or node["name"].lower() == target_arg_str:
+                return [node]
+        print(f"Error: Node '{target_arg}' not found.")
+        sys.exit(1)
+
+    if len(nodes) == 1:
+        return [nodes[0]]
+
+    print(f"\nMultiple Smite Nodes detected on this server:")
+    for n in nodes:
+        print(f"  [{n['index']}] {n['container_name']} (Port: {n['port']}, Role: {n['role']}, Status: {n['docker_status']})")
     
-    # Change to the directory containing docker-compose.yml so relative paths work
-    compose_dir = compose_file.parent
+    print(f"  [A] All nodes")
+    print(f"  [Q] Cancel")
+    
+    choice = input(f"\nSelect node to {prompt_action} [1-{len(nodes)}/A/Q] (default: 1): ").strip()
+    if not choice:
+        choice = "1"
+    
+    if choice.lower() == "q":
+        print("Operation cancelled.")
+        sys.exit(0)
+    elif choice.lower() == "a":
+        return nodes
+    
+    for n in nodes:
+        if str(n["index"]) == choice:
+            return [n]
+
+    print("Invalid selection.")
+    sys.exit(1)
+
+
+def run_compose_for_node(node, compose_args, capture_output=False):
+    """Run a docker compose command inside the node's directory."""
+    compose_file = node["compose_file"]
+    if not compose_file.exists():
+        print(f"Error: {compose_file} not found.")
+        sys.exit(1)
+        
+    compose_dir = node["dir"]
     original_cwd = Path.cwd()
-    
     try:
         os.chdir(compose_dir)
-        cmd = ["docker", "compose", "-f", str(compose_file)] + args
-        result = subprocess.run(cmd, capture_output=capture_output, text=True, cwd=str(compose_dir))
-        if not capture_output and result.returncode != 0:
-            sys.exit(result.returncode)
-        return result
+        cmd = ["docker", "compose", "-f", str(compose_file)] + compose_args
+        res = subprocess.run(cmd, capture_output=capture_output, text=True, cwd=str(compose_dir))
+        if not capture_output and res.returncode != 0:
+            sys.exit(res.returncode)
+        return res
     finally:
         os.chdir(original_cwd)
 
 
 def cmd_status(args):
-    """Show node status"""
-    print("Node Status:")
-    print("-" * 50)
+    """Show detailed status for all detected nodes."""
+    nodes = discover_nodes()
+    if not nodes:
+        print("No Smite Node installations found on this server.")
+        return
+
+    print("=" * 82)
+    print("                      Smite Node Multi-Instance Status                     ")
+    print("=" * 82)
+    print(f"{'Idx':<4} | {'Container':<14} | {'Port':<6} | {'Role':<8} | {'Docker':<10} | {'API Health':<12} | {'Tunnels':<7}")
+    print("-" * 82)
     
-    result = subprocess.run(["docker", "ps", "--filter", "name=smite-node", "--format", "{{.Status}}"], 
-                          capture_output=True, text=True)
-    if result.stdout.strip():
-        print(f"Docker: {result.stdout.strip()}")
-    else:
-        print("Docker: Not running")
-    
-    try:
-        try:
-            import requests
-        except ImportError:
-            print("API: requests library not installed")
-            return
-            
-        env_file = get_env_file()
-        port = 8888
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if line.startswith("NODE_API_PORT="):
-                    port = int(line.split("=")[1])
-        
-        response = requests.get(f"http://localhost:{port}/api/agent/status", timeout=2)
-        if response.status_code == 200:
-            data = response.json()
-            print(f"API: Running")
-            print(f"Active Tunnels: {data.get('active_tunnels', 0)}")
+    for n in nodes:
+        dock = n["docker_status"]
+        if dock == "running":
+            dock_display = "Running"
+        elif dock == "exited":
+            dock_display = "Stopped"
         else:
-            print("API: Not responding")
-    except Exception as e:
-        print(f"API: Not accessible ({e})")
+            dock_display = dock[:10]
 
+        api_disp = n["api_status"]
+        tunnels_disp = str(n["active_tunnels"]) if n["api_status"] == "healthy" else "-"
 
-def cmd_update(args):
-    """Update node (pull images and recreate)"""
-    print("Updating node...")
-    compose_file = get_compose_file()
-    node_dir = compose_file.parent
-    
-    if (node_dir / ".git").exists():
-        print("Pulling latest changes from git...")
-        subprocess.run(["git", "pull"], cwd=node_dir, check=False)
-        if (node_dir / "docker-compose.yml").exists():
-            print("docker-compose.yml updated from git")
-    else:
-        print("Downloading latest node files from GitHub...")
-        try:
-            import urllib.request
-            import zipfile
-            import io
-            
-            zip_url = "https://github.com/MasterALiReza/Smite/archive/refs/heads/main.zip"
-            with urllib.request.urlopen(zip_url) as response:
-                with zipfile.ZipFile(io.BytesIO(response.read())) as z:
-                    for zip_info in z.infolist():
-                        if zip_info.filename.startswith("Smite-main/node/") and not zip_info.is_dir():
-                            zip_info.filename = zip_info.filename.replace("Smite-main/node/", "", 1)
-                            z.extract(zip_info, node_dir)
-            print("Node files updated")
-        except Exception as e:
-            print(f"Warning: Could not update node files: {e}")
-    
-    run_docker_compose(["up", "-d", "--build", "--force-recreate"])
-    print("Node updated.")
+        print(f"[{n['index']}]  | {n['container_name']:<14} | {n['port']:<6} | {n['role']:<8} | {dock_display:<10} | {api_disp:<12} | {tunnels_disp:<7}")
+
+    print("=" * 82)
+    print(f"Total instances: {len(nodes)}")
+    print("Run `smite-node logs [N]` or `smite-node restart [N]` to manage a specific node.")
 
 
 def cmd_restart(args):
-    """Restart node (recreate container to pick up .env changes, no pull)"""
-    print("Restarting node...")
-    run_docker_compose(["stop", "smite-node"])
-    run_docker_compose(["rm", "-f", "smite-node"])
-    result = run_docker_compose(["up", "-d", "--no-deps", "--no-pull", "smite-node"], capture_output=True)
-    if result.returncode != 0 and "--no-pull" in result.stderr:
-        run_docker_compose(["up", "-d", "--no-deps", "smite-node"])
-    else:
-        if result.returncode != 0:
-            print(result.stderr)
-            sys.exit(result.returncode)
-    print("Node restarted. Tunnels will be restored by the panel.")
-
-
-def cmd_edit(args):
-    """Edit docker-compose.yml"""
-    compose_file = get_compose_file()
-    editor = os.environ.get("EDITOR", "nano")
-    subprocess.run([editor, str(compose_file)])
-
-
-def cmd_edit_env(args):
-    """Edit .env file"""
-    env_file = get_env_file()
-    if not env_file.exists():
-        print(f".env file not found. Creating...")
-        env_file.parent.mkdir(parents=True, exist_ok=True)
-        env_file.write_text("")
+    """Restart node container(s)."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="restart")
     
-    editor = os.environ.get("EDITOR", "nano")
-    subprocess.run([editor, str(env_file)])
+    for n in targets:
+        print(f"\nRestarting {n['container_name']} (Port {n['port']})...")
+        run_compose_for_node(n, ["stop", n["container_name"]])
+        run_compose_for_node(n, ["rm", "-f", n["container_name"]])
+        res = run_compose_for_node(n, ["up", "-d", "--no-deps", "--no-pull", n["container_name"]], capture_output=True)
+        if res.returncode != 0 and "--no-pull" in (res.stderr or ""):
+            run_compose_for_node(n, ["up", "-d", "--no-deps", n["container_name"]])
+        print(f"✓ {n['container_name']} restarted.")
+
+
+def cmd_update(args):
+    """Safely update node container(s)."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="update")
+    
+    for n in targets:
+        print(f"\nUpdating {n['container_name']} in {n['dir']}...")
+        run_compose_for_node(n, ["pull"])
+        run_compose_for_node(n, ["up", "-d", "--force-recreate"])
+        print(f"✓ {n['container_name']} updated.")
 
 
 def cmd_logs(args):
-    """Stream logs"""
-    follow = ["--follow"] if args.follow else []
-    run_docker_compose(["logs"] + follow + ["smite-node"])
+    """Stream or view container logs."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="view logs for")
+    
+    if len(targets) > 1:
+        print("Streaming logs for all containers...")
+        # Follow all
+        follow = ["--follow"] if args.follow else []
+        for n in targets:
+            print(f"--- Logs for {n['container_name']} ---")
+            run_compose_for_node(n, ["logs"] + follow + [n["container_name"]])
+    else:
+        n = targets[0]
+        follow = ["--follow"] if args.follow else []
+        run_compose_for_node(n, ["logs"] + follow + [n["container_name"]])
+
+
+def cmd_edit(args):
+    """Edit docker-compose.yml of target node."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="edit docker-compose.yml for")
+    n = targets[0]
+    editor = os.environ.get("EDITOR", "nano")
+    subprocess.run([editor, str(n["compose_file"])])
+
+
+def cmd_edit_env(args):
+    """Edit .env of target node."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="edit .env for")
+    n = targets[0]
+    editor = os.environ.get("EDITOR", "nano")
+    subprocess.run([editor, str(n["env_file"])])
 
 
 def cmd_uninstall(args):
-    """Uninstall Smite Node - removes everything"""
+    """Safely uninstall a node instance with backup."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="UNINSTALL")
+    
     print("=" * 60)
-    print("⚠️  WARNING: This will completely remove Smite Node!")
-    print("=" * 60)
-    print("\nThis will remove:")
-    print("  - All Docker containers (smite-node)")
-    print("  - All Docker volumes")
-    print("  - Installation directory (/opt/smite-node)")
-    print("  - CLI script (/usr/local/bin/smite-node)")
-    print("  - Docker images (ghcr.io/zzedix/smite-node)")
-    print("\n⚠️  ALL DATA WILL BE LOST!")
+    print("⚠️  WARNING: You are about to uninstall the following instance(s):")
+    for n in targets:
+        print(f"  - {n['container_name']} ({n['dir']})")
     print("=" * 60)
     
-    response = input("\nAre you sure you want to continue? Type 'yes' to confirm: ")
-    if response.lower() != 'yes':
+    confirm = input("Type 'yes' to confirm uninstall: ").strip()
+    if confirm.lower() != "yes":
         print("Uninstall cancelled.")
-        sys.exit(0)
-    
-    print("\nStarting uninstall...")
-    
-    print("\n[1/5] Stopping and removing containers...")
-    try:
-        compose_file = get_compose_file()
-        if compose_file.exists():
-            compose_dir = compose_file.parent
-            original_cwd = Path.cwd()
-            try:
-                os.chdir(compose_dir)
-                subprocess.run(["docker", "compose", "-f", str(compose_file), "down", "-v"], 
-                             capture_output=True, check=False)
-            finally:
-                os.chdir(original_cwd)
+        return
+
+    for n in targets:
+        print(f"\nUninstalling {n['container_name']}...")
         
-        subprocess.run(["docker", "stop", "smite-node"], capture_output=True, check=False)
-        subprocess.run(["docker", "rm", "-f", "smite-node"], capture_output=True, check=False)
-        print("  ✓ Containers removed")
-    except Exception as e:
-        print(f"  ⚠️  Warning: {e}")
-    
-    print("\n[2/5] Removing Docker volumes...")
-    try:
-        result = subprocess.run(["docker", "volume", "ls", "-q", "--filter", "name=smite-node"], 
-                              capture_output=True, text=True)
-        volumes = result.stdout.strip().split('\n')
-        for volume in volumes:
-            if volume:
-                subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True, check=False)
-        print("  ✓ Volumes removed")
-    except Exception as e:
-        print(f"  ⚠️  Warning: {e}")
-    
-    print("\n[3/5] Removing Docker images...")
-    try:
-        subprocess.run(["docker", "rmi", "-f", "ghcr.io/zzedix/smite-node"], capture_output=True, check=False)
-        subprocess.run(["docker", "rmi", "-f", "ghcr.io/zzedix/smite-node:latest"], capture_output=True, check=False)
-        result = subprocess.run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", "ghcr.io/zzedix/smite-node"], 
-                              capture_output=True, text=True)
-        for tag in result.stdout.strip().split('\n'):
-            if tag:
-                subprocess.run(["docker", "rmi", "-f", tag], capture_output=True, check=False)
-        print("  ✓ Images removed")
-    except Exception as e:
-        print(f"  ⚠️  Warning: {e}")
-    
-    print("\n[4/5] Removing installation directory...")
-    install_dirs = [Path("/opt/smite-node"), Path("/usr/local/node")]
-    for install_dir in install_dirs:
-        if install_dir.exists():
-            try:
-                shutil.rmtree(install_dir)
-                print(f"  ✓ Removed {install_dir}")
-            except Exception as e:
-                print(f"  ⚠️  Warning: Could not remove {install_dir}: {e}")
-        else:
-            print(f"  - {install_dir} does not exist")
-    
-    print("\n[5/5] Removing CLI script...")
-    cli_path = Path("/usr/local/bin/smite-node")
-    if cli_path.exists():
+        # 1. Stop and remove containers
         try:
-            cli_path.unlink()
-            print("  ✓ Removed /usr/local/bin/smite-node")
+            run_compose_for_node(n, ["down", "-v"], capture_output=True)
+            subprocess.run(["docker", "stop", n["container_name"]], capture_output=True, check=False)
+            subprocess.run(["docker", "rm", "-f", n["container_name"]], capture_output=True, check=False)
+            print("  ✓ Container removed")
         except Exception as e:
-            print(f"  ⚠️  Warning: Could not remove CLI script: {e}")
-    else:
-        print("  - CLI script not found")
-    
-    print("\n" + "=" * 60)
-    print("✅ Smite Node has been completely uninstalled!")
-    print("=" * 60)
+            print(f"  ⚠️ Container remove error: {e}")
+
+        # 2. Remove volume
+        vol_name = f"{n['container_name']}-data" if n['container_name'] != "smite-node" else "smite-node-data"
+        try:
+            subprocess.run(["docker", "volume", "rm", "-f", vol_name], capture_output=True, check=False)
+            print(f"  ✓ Volume {vol_name} removed")
+        except Exception:
+            pass
+
+        # 3. Remove directory
+        if n["dir"].exists():
+            try:
+                shutil.rmtree(n["dir"])
+                print(f"  ✓ Directory {n['dir']} removed")
+            except Exception as e:
+                print(f"  ⚠️ Directory remove error: {e}")
+
+    remaining = [n for n in discover_nodes() if n not in targets]
+    if not remaining:
+        # If no nodes remain, clean up CLI script
+        cli_path = Path("/usr/local/bin/smite-node")
+        if cli_path.exists():
+            try:
+                cli_path.unlink()
+                print("  ✓ Removed /usr/local/bin/smite-node (no nodes remaining)")
+            except Exception:
+                pass
+
+    print("\n✅ Uninstall completed successfully.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Smite Node CLI")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    parser = argparse.ArgumentParser(description="Smite Node CLI - Multi-Instance Management")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
-    subparsers.add_parser("status", help="Show node status")
+    # Status
+    subparsers.add_parser("status", help="Show status of all node instances")
     
-    subparsers.add_parser("update", help="Update node (pull images and recreate)")
+    # Restart
+    restart_p = subparsers.add_parser("restart", help="Restart node instance")
+    restart_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
     
-    subparsers.add_parser("restart", help="Restart node (recreate to pick up .env changes)")
+    # Update
+    update_p = subparsers.add_parser("update", help="Update node instance")
+    update_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
     
-    subparsers.add_parser("edit", help="Edit docker-compose.yml")
+    # Logs
+    logs_p = subparsers.add_parser("logs", help="View logs")
+    logs_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2)")
+    logs_p.add_argument("-f", "--follow", action="store_true", help="Follow log stream")
     
-    subparsers.add_parser("edit-env", help="Edit .env file")
+    # Edit
+    edit_p = subparsers.add_parser("edit", help="Edit docker-compose.yml")
+    edit_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
     
-    logs_parser = subparsers.add_parser("logs", help="View logs")
-    logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow logs")
+    # Edit .env
+    edit_env_p = subparsers.add_parser("edit-env", help="Edit .env file")
+    edit_env_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
     
-    subparsers.add_parser("uninstall", help="Completely remove Smite Node")
-    
+    # Uninstall
+    uninst_p = subparsers.add_parser("uninstall", help="Uninstall node instance")
+    uninst_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
+
     args = parser.parse_args()
     
     if not args.command:
-        parser.print_help()
-        sys.exit(1)
-    
-    if args.command == "status":
+        # Default to status if no command provided
         cmd_status(args)
-    elif args.command == "update":
-        cmd_update(args)
-    elif args.command == "restart":
-        cmd_restart(args)
-    elif args.command == "edit":
-        cmd_edit(args)
-    elif args.command == "edit-env":
-        cmd_edit_env(args)
-    elif args.command == "logs":
-        cmd_logs(args)
-    elif args.command == "uninstall":
-        cmd_uninstall(args)
+        return
+
+    commands = {
+        "status": cmd_status,
+        "restart": cmd_restart,
+        "update": cmd_update,
+        "logs": cmd_logs,
+        "edit": cmd_edit,
+        "edit-env": cmd_edit_env,
+        "uninstall": cmd_uninstall,
+    }
+    
+    handler = commands.get(args.command)
+    if handler:
+        handler(args)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
     main()
-
