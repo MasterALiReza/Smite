@@ -217,9 +217,19 @@ class RatholeAdapter:
         
         mode = spec.get('mode', 'client')
         
-        transport = (spec.get('transport') or spec.get('type') or 'tcp').lower()
-        use_websocket = transport == 'websocket' or transport == 'ws'
-        websocket_tls = spec.get('websocket_tls', False) or spec.get('tls', False)
+        transport = (spec.get('transport_type') or spec.get('transport') or 'tcp').lower()
+        tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
+        if transport in ['ws', 'websocket']:
+            use_websocket = True
+            use_noise = False
+        elif transport == 'noise':
+            use_websocket = False
+            use_noise = True
+        else:
+            use_websocket = False
+            use_noise = False
+
+        websocket_tls = spec.get('websocket_tls', False) or spec.get('tls', False) or (transport == 'wss')
         
         if mode == 'server':
             bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
@@ -247,7 +257,19 @@ default_token = "{token}"
 heartbeat_interval = 20
 """
             
-            if use_websocket:
+            if use_noise:
+                local_priv = spec.get('server_private_key') or spec.get('local_private_key', '')
+                remote_pub = spec.get('client_public_key') or spec.get('remote_public_key', '')
+                config += f"""
+[server.transport]
+type = "noise"
+
+[server.transport.noise]
+pattern = "Noise_KK_25519_ChaChaPoly_BLAKE2s"
+local_private_key = "{local_priv}"
+remote_public_key = "{remote_pub}"
+"""
+            elif use_websocket:
                 config += f"""
 [server.transport]
 type = "websocket"
@@ -259,10 +281,31 @@ type = "websocket"
             
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                config += f"""
-[server.services.{service_name}]
+                base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
+                
+                if tunnel_type == 'tcp+udp':
+                    config += f"""
+[server.services.{base_service_name}_tcp]
 bind_addr = "0.0.0.0:{port_num}"
+nodelay = true
+
+[server.services.{base_service_name}_udp]
+bind_addr = "0.0.0.0:{port_num}"
+type = "udp"
+nodelay = true
+"""
+                elif tunnel_type == 'udp':
+                    config += f"""
+[server.services.{base_service_name}]
+bind_addr = "0.0.0.0:{port_num}"
+type = "udp"
+nodelay = true
+"""
+                else:
+                    config += f"""
+[server.services.{base_service_name}]
+bind_addr = "0.0.0.0:{port_num}"
+nodelay = true
 """
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
@@ -311,8 +354,10 @@ bind_addr = "0.0.0.0:{port_num}"
             
             if remote_addr.startswith('ws://'):
                 remote_addr = remote_addr[5:]
+                use_websocket = True
             elif remote_addr.startswith('wss://'):
                 remote_addr = remote_addr[6:]
+                use_websocket = True
                 websocket_tls = True
             
             heartbeat_interval = int(spec.get('heartbeat_interval', 20))
@@ -322,7 +367,19 @@ default_token = "{token}"
 heartbeat_interval = {heartbeat_interval}
 """
             
-            if use_websocket:
+            if use_noise:
+                local_priv = spec.get('client_private_key') or spec.get('local_private_key', '')
+                remote_pub = spec.get('server_public_key') or spec.get('remote_public_key', '')
+                config += f"""
+[client.transport]
+type = "noise"
+
+[client.transport.noise]
+pattern = "Noise_KK_25519_ChaChaPoly_BLAKE2s"
+local_private_key = "{local_priv}"
+remote_public_key = "{remote_pub}"
+"""
+            elif use_websocket:
                 config += f"""
 [client.transport]
 type = "websocket"
@@ -335,11 +392,32 @@ type = "websocket"
             # Create multiple service sections for multiple ports
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
+                base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
                 local_addr = f"127.0.0.1:{port_num}"
-                config += f"""
-[client.services.{service_name}]
+                
+                if tunnel_type == 'tcp+udp':
+                    config += f"""
+[client.services.{base_service_name}_tcp]
 local_addr = "{local_addr}"
+nodelay = true
+
+[client.services.{base_service_name}_udp]
+local_addr = "{local_addr}"
+type = "udp"
+nodelay = true
+"""
+                elif tunnel_type == 'udp':
+                    config += f"""
+[client.services.{base_service_name}]
+local_addr = "{local_addr}"
+type = "udp"
+nodelay = true
+"""
+                else:
+                    config += f"""
+[client.services.{base_service_name}]
+local_addr = "{local_addr}"
+nodelay = true
 """
             
             config_path = self.config_dir / f"{tunnel_id}.toml"

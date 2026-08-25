@@ -441,7 +441,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             client_spec["mode"] = "client"
             
             if db_tunnel.core == "rathole":
-                transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
+                transport = getattr(db_tunnel, "transport_type", None) or server_spec.get("transport_type") or server_spec.get("transport") or "tcp"
+                tunnel_type = getattr(db_tunnel, "type", None) or server_spec.get("tunnel_type") or "tcp"
                 token = server_spec.get("token")
                 if not token:
                     from app.utils import generate_token
@@ -450,6 +451,29 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     db_tunnel.spec["token"] = token
                     from sqlalchemy.orm.attributes import flag_modified
                     flag_modified(db_tunnel, "spec")
+                
+                # Handle Noise Protocol Keypairs
+                if transport.lower() == "noise":
+                    server_priv = db_tunnel.spec.get("server_private_key")
+                    server_pub = db_tunnel.spec.get("server_public_key")
+                    client_priv = db_tunnel.spec.get("client_private_key")
+                    client_pub = db_tunnel.spec.get("client_public_key")
+                    if not (server_priv and server_pub and client_priv and client_pub):
+                        from app.utils import generate_noise_keypair
+                        s_priv, s_pub = generate_noise_keypair()
+                        c_priv, c_pub = generate_noise_keypair()
+                        db_tunnel.spec["server_private_key"] = s_priv
+                        db_tunnel.spec["server_public_key"] = s_pub
+                        db_tunnel.spec["client_private_key"] = c_priv
+                        db_tunnel.spec["client_public_key"] = c_pub
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(db_tunnel, "spec")
+                        server_priv, server_pub, client_priv, client_pub = s_priv, s_pub, c_priv, c_pub
+                    
+                    server_spec["local_private_key"] = server_priv
+                    server_spec["remote_public_key"] = client_pub
+                    client_spec["local_private_key"] = client_priv
+                    client_spec["remote_public_key"] = server_pub
                 
                 ports = parse_ports_from_spec(db_tunnel.spec)
                 if not ports:
@@ -473,8 +497,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     control_port = 23333 + (port_hash % 1000)
                 server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
                 server_spec["ports"] = ports
+                server_spec["transport_type"] = transport
                 server_spec["transport"] = transport
-                server_spec["type"] = transport
+                server_spec["tunnel_type"] = tunnel_type
+                server_spec["type"] = tunnel_type
                 if "websocket_tls" in server_spec:
                     server_spec["websocket_tls"] = server_spec["websocket_tls"]
                 elif "tls" in server_spec:
@@ -494,8 +520,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
                 else:
                     client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
+                client_spec["transport_type"] = transport
                 client_spec["transport"] = transport
-                client_spec["type"] = transport
+                client_spec["tunnel_type"] = tunnel_type
+                client_spec["type"] = tunnel_type
                 client_spec["token"] = token
                 client_spec["ports"] = ports  # Pass ports to client
                 if "websocket_tls" in server_spec:
@@ -859,12 +887,35 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             if remote_addr and token and proxy_port and hasattr(request.app.state, 'rathole_server_manager'):
                 try:
                     logger.info(f"Starting Rathole server for tunnel {db_tunnel.id}: remote_addr={remote_addr}, token={token}, proxy_port={proxy_port}, use_ipv6={use_ipv6}")
+                    transport_type = getattr(db_tunnel, "transport_type", None) or db_tunnel.spec.get("transport_type") or db_tunnel.spec.get("transport") or "tcp"
+                    tunnel_type = getattr(db_tunnel, "type", None) or db_tunnel.spec.get("tunnel_type") or "tcp"
+                    
+                    server_priv = db_tunnel.spec.get("server_private_key", "")
+                    client_pub = db_tunnel.spec.get("client_public_key", "")
+                    if transport_type.lower() == "noise" and not (server_priv and client_pub):
+                        from app.utils import generate_noise_keypair
+                        s_priv, s_pub = generate_noise_keypair()
+                        c_priv, c_pub = generate_noise_keypair()
+                        db_tunnel.spec["server_private_key"] = s_priv
+                        db_tunnel.spec["server_public_key"] = s_pub
+                        db_tunnel.spec["client_private_key"] = c_priv
+                        db_tunnel.spec["client_public_key"] = c_pub
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(db_tunnel, "spec")
+                        server_priv, client_pub = s_priv, c_pub
+
                     await request.app.state.rathole_server_manager.start_server(
                         tunnel_id=db_tunnel.id,
                         remote_addr=remote_addr,
                         token=token,
-                        proxy_port=int(proxy_port),
-                        use_ipv6=bool(use_ipv6)
+                        proxy_port=int(proxy_port) if proxy_port else None,
+                        use_ipv6=bool(use_ipv6),
+                        ports=ports if ports else ([int(proxy_port)] if proxy_port else None),
+                        tunnel_type=tunnel_type,
+                        transport_proto=transport_type,
+                        local_private_key=server_priv,
+                        remote_public_key=client_pub,
+                        websocket_tls=bool(db_tunnel.spec.get("websocket_tls") or db_tunnel.spec.get("tls"))
                     )
                     logger.info(f"Successfully started Rathole server for tunnel {db_tunnel.id}")
                     rathole_started = True
@@ -1439,11 +1490,34 @@ async def update_tunnel(
                     if remote_addr and token and proxy_port:
                         try:
                             await request.app.state.rathole_server_manager.stop_server(tunnel.id)
+                            transport_type = getattr(tunnel, "transport_type", None) or tunnel.spec.get("transport_type") or tunnel.spec.get("transport") or "tcp"
+                            tunnel_type = getattr(tunnel, "type", None) or tunnel.spec.get("tunnel_type") or "tcp"
+                            
+                            server_priv = tunnel.spec.get("server_private_key", "")
+                            client_pub = tunnel.spec.get("client_public_key", "")
+                            if transport_type.lower() == "noise" and not (server_priv and client_pub):
+                                from app.utils import generate_noise_keypair
+                                s_priv, s_pub = generate_noise_keypair()
+                                c_priv, c_pub = generate_noise_keypair()
+                                tunnel.spec["server_private_key"] = s_priv
+                                tunnel.spec["server_public_key"] = s_pub
+                                tunnel.spec["client_private_key"] = c_priv
+                                tunnel.spec["client_public_key"] = c_pub
+                                from sqlalchemy.orm.attributes import flag_modified
+                                flag_modified(tunnel, "spec")
+                                server_priv, client_pub = s_priv, c_pub
+
                             await request.app.state.rathole_server_manager.start_server(
                                 tunnel_id=tunnel.id,
                                 remote_addr=remote_addr,
                                 token=token,
-                                proxy_port=int(proxy_port)
+                                proxy_port=int(proxy_port) if proxy_port else None,
+                                ports=[int(proxy_port)] if proxy_port else None,
+                                tunnel_type=tunnel_type,
+                                transport_proto=transport_type,
+                                local_private_key=server_priv,
+                                remote_public_key=client_pub,
+                                websocket_tls=bool(tunnel.spec.get("websocket_tls") or tunnel.spec.get("tls"))
                             )
                             tunnel.status = "active"
                             tunnel.error_message = None
@@ -1850,15 +1924,46 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         client_spec["ports"] = ports
                 
                 elif tunnel.core == "rathole":
-                    transport = spec.get("transport") or spec.get("type") or "tcp"
-                    proxy_port = spec.get("remote_port") or spec.get("listen_port")
+                    transport = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
+                    tunnel_type = getattr(tunnel, "type", None) or spec.get("tunnel_type") or "tcp"
                     token = spec.get("token")
+                    if not token:
+                        from app.utils import generate_token
+                        token = generate_token()
+                        spec["token"] = token
+                        tunnel.spec["token"] = token
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(tunnel, "spec")
                     
-                    if not proxy_port or not token:
+                    # Handle Noise Protocol Keypairs
+                    if transport.lower() == "noise":
+                        server_priv = tunnel.spec.get("server_private_key")
+                        server_pub = tunnel.spec.get("server_public_key")
+                        client_priv = tunnel.spec.get("client_private_key")
+                        client_pub = tunnel.spec.get("client_public_key")
+                        if not (server_priv and server_pub and client_priv and client_pub):
+                            from app.utils import generate_noise_keypair
+                            s_priv, s_pub = generate_noise_keypair()
+                            c_priv, c_pub = generate_noise_keypair()
+                            tunnel.spec["server_private_key"] = s_priv
+                            tunnel.spec["server_public_key"] = s_pub
+                            tunnel.spec["client_private_key"] = c_priv
+                            tunnel.spec["client_public_key"] = c_pub
+                            from sqlalchemy.orm.attributes import flag_modified
+                            flag_modified(tunnel, "spec")
+                            server_priv, server_pub, client_priv, client_pub = s_priv, s_pub, c_priv, c_pub
+                    
+                    ports = parse_ports_from_spec(tunnel.spec)
+                    if not ports:
+                        proxy_port = spec.get("remote_port") or spec.get("listen_port")
+                        if proxy_port:
+                            ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
+                    
+                    if not ports:
                         tunnel.status = "error"
-                        tunnel.error_message = "Missing required fields: remote_port/listen_port or token"
+                        tunnel.error_message = "Missing required fields: ports/remote_port or token"
                         await db.commit()
-                        raise HTTPException(status_code=400, detail="Missing required fields: remote_port/listen_port or token")
+                        raise HTTPException(status_code=400, detail="Missing required fields: ports/remote_port or token")
                     
                     from app.utils import parse_address_port
                     remote_addr = spec.get("remote_addr", "0.0.0.0:23333")
@@ -1871,9 +1976,15 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     server_spec = spec.copy()
                     server_spec["mode"] = "server"
                     server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                    server_spec["proxy_port"] = proxy_port
+                    server_spec["ports"] = ports
+                    server_spec["transport_type"] = transport
                     server_spec["transport"] = transport
+                    server_spec["tunnel_type"] = tunnel_type
+                    server_spec["type"] = tunnel_type
                     server_spec["token"] = token
+                    if transport.lower() == "noise":
+                        server_spec["local_private_key"] = server_priv
+                        server_spec["remote_public_key"] = client_pub
                     
                     iran_node_ip = iran_node.node_metadata.get("ip_address")
                     if not iran_node_ip:
@@ -1884,6 +1995,16 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     
                     client_spec = spec.copy()
                     client_spec["mode"] = "client"
+                    client_spec["ports"] = ports
+                    client_spec["transport_type"] = transport
+                    client_spec["transport"] = transport
+                    client_spec["tunnel_type"] = tunnel_type
+                    client_spec["type"] = tunnel_type
+                    client_spec["token"] = token
+                    if transport.lower() == "noise":
+                        client_spec["local_private_key"] = client_priv
+                        client_spec["remote_public_key"] = server_pub
+
                     transport_lower = transport.lower()
                     if transport_lower in ("websocket", "ws"):
                         use_tls = bool(spec.get("websocket_tls") or spec.get("tls"))
@@ -1891,8 +2012,6 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
                     else:
                         client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                    client_spec["transport"] = transport
-                    client_spec["token"] = token
                 
                 elif tunnel.core == "chisel":
                     listen_port = spec.get("listen_port") or spec.get("remote_port")

@@ -22,7 +22,20 @@ class RatholeServerManager:
         self.server_configs: Dict[str, dict] = {}
         self.log_files: Dict[str, object] = {}
     
-    async def start_server(self, tunnel_id: str, remote_addr: str, token: str, proxy_port: int, use_ipv6: bool = False) -> bool:
+    async def start_server(
+        self,
+        tunnel_id: str,
+        remote_addr: str,
+        token: str,
+        proxy_port: Optional[int] = None,
+        use_ipv6: bool = False,
+        ports: Optional[list] = None,
+        tunnel_type: str = "tcp",
+        transport_proto: str = "tcp",
+        local_private_key: str = "",
+        remote_public_key: str = "",
+        websocket_tls: bool = False
+    ) -> bool:
         """
         Start a Rathole server for a tunnel
         """
@@ -32,7 +45,13 @@ class RatholeServerManager:
                 raise ValueError(f"Invalid remote_addr format: {remote_addr} (port required)")
             
             bind_addr = f"0.0.0.0:{port}"
-            proxy_bind_addr = f"0.0.0.0:{proxy_port}"
+            
+            resolved_ports = ports or []
+            if not resolved_ports and proxy_port:
+                resolved_ports = [proxy_port]
+            
+            if not resolved_ports:
+                raise ValueError("Rathole server requires at least one port")
             
             if tunnel_id in self.active_servers:
                 logger.warning(f"Rathole server for tunnel {tunnel_id} already exists, stopping it first")
@@ -43,9 +62,56 @@ class RatholeServerManager:
 bind_addr = "{bind_addr}"
 default_token = "{token}"
 heartbeat_interval = 20
+"""
+            transport_lower = transport_proto.lower()
+            if transport_lower == "noise":
+                config += f"""
+[server.transport]
+type = "noise"
 
-[server.services.{tunnel_id}]
-bind_addr = "{proxy_bind_addr}"
+[server.transport.noise]
+pattern = "Noise_KK_25519_ChaChaPoly_BLAKE2s"
+local_private_key = "{local_private_key}"
+remote_public_key = "{remote_public_key}"
+"""
+            elif transport_lower in ("websocket", "ws", "wss"):
+                config += f"""
+[server.transport]
+type = "websocket"
+
+[server.transport.websocket]
+"""
+                if websocket_tls or transport_lower == "wss":
+                    config += "tls = true\n"
+            
+            tunnel_type_lower = tunnel_type.lower()
+            for i, p in enumerate(resolved_ports):
+                p_num = int(p) if isinstance(p, (int, str)) and str(p).isdigit() else p
+                base_service_name = f"{tunnel_id}_{i}" if len(resolved_ports) > 1 else tunnel_id
+                
+                if tunnel_type_lower == "tcp+udp":
+                    config += f"""
+[server.services.{base_service_name}_tcp]
+bind_addr = "0.0.0.0:{p_num}"
+nodelay = true
+
+[server.services.{base_service_name}_udp]
+bind_addr = "0.0.0.0:{p_num}"
+type = "udp"
+nodelay = true
+"""
+                elif tunnel_type_lower == "udp":
+                    config += f"""
+[server.services.{base_service_name}]
+bind_addr = "0.0.0.0:{p_num}"
+type = "udp"
+nodelay = true
+"""
+                else:
+                    config += f"""
+[server.services.{base_service_name}]
+bind_addr = "0.0.0.0:{p_num}"
+nodelay = true
 """
             
             config_path = self.config_dir / f"{tunnel_id}.toml"

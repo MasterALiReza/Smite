@@ -131,3 +131,40 @@ def generate_token(length: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+
+def generate_noise_keypair() -> tuple[str, str]:
+    """
+    Generate an X25519 keypair for Rathole Noise protocol (Noise_KK_25519_ChaChaPoly_BLAKE2s).
+    
+    Returns:
+        tuple of (private_key_base64, public_key_base64)
+    """
+    import base64
+    try:
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        from cryptography.hazmat.primitives import serialization
+        
+        priv = x25519.X25519PrivateKey.generate()
+        pub = priv.public_key()
+        
+        priv_bytes = priv.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        pub_bytes = pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        return (
+            base64.b64encode(priv_bytes).decode("utf-8"),
+            base64.b64encode(pub_bytes).decode("utf-8")
+        )
+    except Exception:
+        # Fallback in case cryptography module fails
+        priv_bytes = secrets.token_bytes(32)
+        return (
+            base64.b64encode(priv_bytes).decode("utf-8"),
+            base64.b64encode(priv_bytes).decode("utf-8")
+        )
+

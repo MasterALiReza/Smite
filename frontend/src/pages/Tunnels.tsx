@@ -836,6 +836,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
       const parsed = parseAddressPort(tunnel.spec.remote_addr)
       return parsed.port?.toString() || ''
     })() : '',
+    rathole_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
     chisel_control_port: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : '',
     frp_bind_port: tunnel.spec?.bind_port ? tunnel.spec.bind_port.toString() : '7000',
     frp_token: tunnel.spec?.token || '',
@@ -928,6 +929,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         }
         if (formData.node_ipv6) {
           updatedSpec.node_ipv6 = formData.node_ipv6
+        }
+        if (formData.rathole_transport) {
+          updatedSpec.transport = formData.rathole_transport
+          updatedSpec.transport_type = formData.rathole_transport
         }
         updatedSpec.ports = ports
         updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
@@ -1150,6 +1155,24 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   min="1"
                   max="65535"
                 />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Rathole Transport Protocol
+                </label>
+                <select
+                  value={formData.rathole_transport || 'tcp'}
+                  onChange={(e) => setFormData({ ...formData, rathole_transport: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="tcp">TCP (Standard)</option>
+                  <option value="noise">Noise Protocol (Ultra-Fast Encrypted / Gaming / Anti-DPI)</option>
+                  <option value="ws">WebSocket (WS)</option>
+                  <option value="wss">WebSocket + TLS (WSS)</option>
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.
+                </p>
               </div>
             </div>
           )}
@@ -1596,6 +1619,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     remote_ip: '127.0.0.1',
     rathole_remote_addr: '23333',
     rathole_token: '',
+    rathole_transport: 'tcp',
     chisel_control_port: '',  // Empty means auto (listen_port + 10000)
     frp_bind_port: '7000',
     frp_token: '',
@@ -1714,6 +1738,8 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         spec.ports = ports
         spec.remote_port = ports[0]
         spec.listen_port = ports[0]
+        spec.transport = formData.rathole_transport || 'tcp'
+        spec.transport_type = formData.rathole_transport || 'tcp'
       }
       
       if (formData.core === 'chisel') {
@@ -1992,7 +2018,8 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                 ) : formData.core === 'rathole' ? (
                   <>
                     <option value="tcp">TCP</option>
-                    <option value="ws">WebSocket (WS)</option>
+                    <option value="udp">UDP (Gaming)</option>
+                    <option value="tcp+udp">TCP + UDP</option>
                   </>
                 ) : formData.core === 'frp' ? (
                   <>
@@ -2136,6 +2163,24 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     placeholder="Auto-generated if empty"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Authentication token (auto-generated if left blank)</p>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Rathole Transport Protocol
+                  </label>
+                  <select
+                    value={formData.rathole_transport || 'tcp'}
+                    onChange={(e) => setFormData({ ...formData, rathole_transport: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="tcp">TCP (Standard)</option>
+                    <option value="noise">Noise Protocol (Ultra-Fast Encrypted / Gaming / Anti-DPI)</option>
+                    <option value="ws">WebSocket (WS)</option>
+                    <option value="wss">WebSocket + TLS (WSS)</option>
+                  </select>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.
+                  </p>
                 </div>
               </div>
             </>
