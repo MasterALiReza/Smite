@@ -488,23 +488,42 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     await db.refresh(db_tunnel)
                     return db_tunnel
                 
-                remote_addr = server_spec.get("remote_addr", "0.0.0.0:23333")
-                from app.utils import parse_address_port
-                _, control_port, _ = parse_address_port(remote_addr)
+                control_port = server_spec.get("control_port")
                 if not control_port:
+                    remote_addr = server_spec.get("remote_addr", "")
+                    from app.utils import parse_address_port
+                    _, control_port, _ = parse_address_port(remote_addr) if remote_addr else (None, None, None)
+                if not control_port or int(control_port) == 23333:
                     import hashlib
                     port_hash = int(hashlib.md5(db_tunnel.id.encode()).hexdigest()[:8], 16)
-                    control_port = 23333 + (port_hash % 1000)
+                    control_port = 25000 + (port_hash % 25000)
+                    db_tunnel.spec["control_port"] = control_port
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(db_tunnel, "spec")
+                
                 server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
                 server_spec["ports"] = ports
                 server_spec["transport_type"] = transport
                 server_spec["transport"] = transport
                 server_spec["tunnel_type"] = tunnel_type
                 server_spec["type"] = tunnel_type
+                server_spec["token"] = token
                 if "websocket_tls" in server_spec:
                     server_spec["websocket_tls"] = server_spec["websocket_tls"]
                 elif "tls" in server_spec:
                     server_spec["websocket_tls"] = server_spec["tls"]
+                
+                if transport.lower() == "noise":
+                    server_priv = db_tunnel.spec.get("server_private_key") or db_tunnel.spec.get("local_private_key")
+                    client_pub = db_tunnel.spec.get("client_public_key") or db_tunnel.spec.get("remote_public_key")
+                    client_priv = db_tunnel.spec.get("client_private_key") or db_tunnel.spec.get("local_private_key")
+                    server_pub = db_tunnel.spec.get("server_public_key") or db_tunnel.spec.get("remote_public_key")
+                    if server_priv and client_pub:
+                        server_spec["local_private_key"] = server_priv
+                        server_spec["remote_public_key"] = client_pub
+                    if client_priv and server_pub:
+                        client_spec["local_private_key"] = client_priv
+                        client_spec["remote_public_key"] = server_pub
                 
                 iran_node_ip = iran_node.node_metadata.get("ip_address")
                 if not iran_node_ip:
@@ -525,7 +544,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 client_spec["tunnel_type"] = tunnel_type
                 client_spec["type"] = tunnel_type
                 client_spec["token"] = token
-                client_spec["ports"] = ports  # Pass ports to client
+                client_spec["ports"] = ports
                 if "websocket_tls" in server_spec:
                     client_spec["websocket_tls"] = server_spec["websocket_tls"]
                 elif "tls" in server_spec:
@@ -1965,13 +1984,19 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         await db.commit()
                         raise HTTPException(status_code=400, detail="Missing required fields: ports/remote_port or token")
                     
-                    from app.utils import parse_address_port
-                    remote_addr = spec.get("remote_addr", "0.0.0.0:23333")
-                    _, control_port, _ = parse_address_port(remote_addr)
+                    control_port = spec.get("control_port")
                     if not control_port:
+                        remote_addr = spec.get("remote_addr", "")
+                        from app.utils import parse_address_port
+                        _, control_port, _ = parse_address_port(remote_addr) if remote_addr else (None, None, None)
+                    if not control_port or int(control_port) == 23333:
                         import hashlib
                         port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                        control_port = 23333 + (port_hash % 1000)
+                        control_port = 25000 + (port_hash % 25000)
+                    
+                    tunnel.spec["control_port"] = control_port
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(tunnel, "spec")
                     
                     server_spec = spec.copy()
                     server_spec["mode"] = "server"

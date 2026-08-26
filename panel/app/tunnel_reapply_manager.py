@@ -248,23 +248,48 @@ class TunnelReapplyManager:
                             
                             if tunnel.core == "rathole":
                                 transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
-                                proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
                                 token = server_spec.get("token")
-                                if not proxy_port or not token:
+                                
+                                ports = server_spec.get("ports") or []
+                                if not ports:
+                                    proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
+                                    if proxy_port:
+                                        ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
+                                
+                                if not ports or not token:
                                     continue
                                 
-                                from app.utils import parse_address_port
-                                remote_addr = server_spec.get("remote_addr", "0.0.0.0:23333")
-                                _, control_port, _ = parse_address_port(remote_addr)
+                                control_port = server_spec.get("control_port")
                                 if not control_port:
+                                    remote_addr = server_spec.get("remote_addr", "")
+                                    from app.utils import parse_address_port
+                                    _, control_port, _ = parse_address_port(remote_addr) if remote_addr else (None, None, None)
+                                if not control_port or int(control_port) == 23333:
                                     import hashlib
                                     port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                                    control_port = 23333 + (port_hash % 1000)
+                                    control_port = 25000 + (port_hash % 25000)
+                                    tunnel.spec["control_port"] = control_port
+                                    from sqlalchemy.orm.attributes import flag_modified
+                                    flag_modified(tunnel, "spec")
+                                
                                 server_spec["mode"] = "server"
                                 server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                                server_spec["proxy_port"] = proxy_port
+                                server_spec["ports"] = ports
                                 server_spec["transport"] = transport
+                                server_spec["transport_type"] = transport
                                 server_spec["token"] = token
+                                
+                                if transport.lower() == "noise":
+                                    server_priv = tunnel.spec.get("server_private_key") or tunnel.spec.get("local_private_key")
+                                    client_pub = tunnel.spec.get("client_public_key") or tunnel.spec.get("remote_public_key")
+                                    client_priv = tunnel.spec.get("client_private_key") or tunnel.spec.get("local_private_key")
+                                    server_pub = tunnel.spec.get("server_public_key") or tunnel.spec.get("remote_public_key")
+                                    if server_priv and client_pub:
+                                        server_spec["local_private_key"] = server_priv
+                                        server_spec["remote_public_key"] = client_pub
+                                    if client_priv and server_pub:
+                                        client_spec["local_private_key"] = client_priv
+                                        client_spec["remote_public_key"] = server_pub
                                 
                                 iran_node_ip = iran_node.node_metadata.get("ip_address")
                                 if not iran_node_ip:
@@ -277,7 +302,9 @@ class TunnelReapplyManager:
                                 else:
                                     client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
                                 client_spec["mode"] = "client"
+                                client_spec["ports"] = ports
                                 client_spec["transport"] = transport
+                                client_spec["transport_type"] = transport
                                 client_spec["token"] = token
                             
                             elif tunnel.core == "gost":

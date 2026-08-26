@@ -1617,7 +1617,7 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     iran_node_id: '',
     ports: '8080',  // Comma-separated ports (e.g., "8080,8081,8082")
     remote_ip: '127.0.0.1',
-    rathole_remote_addr: '23333',
+    rathole_remote_addr: String(Math.floor(25000 + Math.random() * 25000)),
     rathole_token: '',
     rathole_transport: 'tcp',
     chisel_control_port: '',  // Empty means auto (listen_port + 10000)
@@ -1730,8 +1730,9 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       
       if (formData.core === 'rathole') {
         const remoteHost = window.location.hostname
-        const remotePort = formData.rathole_remote_addr || '23333'
+        const remotePort = formData.rathole_remote_addr || String(Math.floor(25000 + Math.random() * 25000))
         spec.remote_addr = `${remoteHost}:${remotePort}`
+        spec.control_port = parseInt(remotePort)
         if (formData.rathole_token) {
           spec.token = formData.rathole_token
         }
