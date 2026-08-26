@@ -162,9 +162,74 @@ def generate_noise_keypair() -> tuple[str, str]:
         )
     except Exception:
         # Fallback in case cryptography module fails
-        priv_bytes = secrets.token_bytes(32)
         return (
             base64.b64encode(priv_bytes).decode("utf-8"),
             base64.b64encode(priv_bytes).decode("utf-8")
         )
+
+
+async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Optional[list] = None) -> Optional[int]:
+    """
+    Measures true network layer-3 (ICMP) or layer-4 (raw TCP handshake) round-trip latency in milliseconds.
+    Returns the exact wire network ping without HTTP/REST application serialization overhead.
+    """
+    if not ip_or_host:
+        return None
+        
+    import asyncio
+    import os
+    import re
+    import subprocess
+    import time
+
+    host = ip_or_host.strip()
+    if host.startswith("[") and "]" in host:
+        host = host[1:host.index("]")]
+    elif ":" in host and host.count(":") == 1:
+        host = host.split(":")[0]
+    
+    # 1. Try ICMP ping first (matches standard OS terminal ping output)
+    try:
+        is_win = os.name == 'nt'
+        cmd = ["ping", "-n", "1", "-w", "1000", host] if is_win else ["ping", "-c", "1", "-W", "1", host]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.5)
+        out = stdout.decode('utf-8', errors='ignore')
+        match = re.search(r'time[=<]\s*([0-9.]+)\s*ms', out, re.IGNORECASE)
+        if not match:
+            match = re.search(r'Average\s*=\s*([0-9]+)ms', out, re.IGNORECASE)
+        if match:
+            val = float(match.group(1))
+            return max(1, round(val))
+    except Exception:
+        pass
+
+    # 2. Try fast TCP Handshake probe (Layer 4 true RTT - Works if ICMP blocked by firewall)
+    candidate_ports = fallback_ports or [443, 80, 22, 8080, 7000]
+    for port in candidate_ports:
+        t_start = time.perf_counter()
+        try:
+            conn = asyncio.open_connection(host, port)
+            _, writer = await asyncio.wait_for(conn, timeout=1.0)
+            elapsed = (time.perf_counter() - t_start) * 1000
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return max(1, round(elapsed))
+        except (ConnectionRefusedError, ConnectionResetError):
+            # Target OS kernel returned RST packet in exactly 1 RTT
+            elapsed = (time.perf_counter() - t_start) * 1000
+            if elapsed < 800:
+                return max(1, round(elapsed))
+        except Exception:
+            continue
+
+    return None
+
 

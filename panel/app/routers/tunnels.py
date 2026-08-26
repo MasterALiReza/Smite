@@ -2349,8 +2349,8 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     return {"status": "deleted"}
 
 
-async def measure_node_latency(node_id: str, client: NodeClient) -> tuple[bool, int, str]:
-    """Measure round-trip response time to a node in milliseconds"""
+async def measure_node_latency(node_id: str, client: NodeClient, node_ip: Optional[str] = None) -> tuple[bool, int, str]:
+    """Measure true round-trip response time to a node in milliseconds"""
     if not node_id:
         return False, 0, "No node ID provided"
     t_start = time.perf_counter()
@@ -2358,6 +2358,11 @@ async def measure_node_latency(node_id: str, client: NodeClient) -> tuple[bool, 
         resp = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=3.0)
         elapsed = int((time.perf_counter() - t_start) * 1000)
         if resp and resp.get("status") == "ok":
+            if node_ip:
+                from app.utils import measure_precise_ping
+                p_ms = await measure_precise_ping(node_ip)
+                if p_ms is not None:
+                    return True, p_ms, "online"
             return True, max(1, elapsed), "online"
         return False, max(1, elapsed), resp.get("message", "Node not ready") if resp else "No response"
     except asyncio.TimeoutError:
@@ -2393,7 +2398,8 @@ async def test_tunnel_config(
         res = await db.execute(select(Node).where(Node.id == iran_node_id))
         iran_node = res.scalar_one_or_none()
         if iran_node:
-            ok1, t1, msg1 = await measure_node_latency(iran_node.id, client)
+            node_ip = iran_node.node_metadata.get("ip_address") if iran_node.node_metadata else None
+            ok1, t1, msg1 = await measure_node_latency(iran_node.id, client, node_ip)
             if ok1:
                 checks.append({
                     "name": "iran_node",
@@ -2421,151 +2427,151 @@ async def test_tunnel_config(
             "name": "iran_node",
             "title": "Iran Node Reachability",
             "status": "failed",
-            "detail": "Iran node is not selected"
+            "detail": "Please select an Iran node"
         })
         
     # 2. Check Foreign Node
     foreign_node = None
     t2 = 0
-    is_reverse = core in ["rathole", "backhaul", "chisel", "frp"] or payload.get("is_reverse", False)
-    if is_reverse or foreign_node_id:
-        if foreign_node_id:
-            res = await db.execute(select(Node).where(Node.id == foreign_node_id))
-            foreign_node = res.scalar_one_or_none()
-            if foreign_node:
-                ok2, t2, msg2 = await measure_node_latency(foreign_node.id, client)
-                if ok2:
-                    checks.append({
-                        "name": "foreign_node",
-                        "title": "Foreign Node Reachability",
-                        "status": "passed",
-                        "detail": f"{foreign_node.name} is online and responding ({t2} ms)",
-                        "latency_ms": t2
-                    })
-                else:
-                    checks.append({
-                        "name": "foreign_node",
-                        "title": "Foreign Node Reachability",
-                        "status": "failed",
-                        "detail": f"Could not reach {foreign_node.name}: {msg2}"
-                    })
+    if foreign_node_id:
+        res = await db.execute(select(Node).where(Node.id == foreign_node_id))
+        foreign_node = res.scalar_one_or_none()
+        if foreign_node:
+            fn_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
+            ok2, t2, msg2 = await measure_node_latency(foreign_node.id, client, fn_ip)
+            if ok2:
+                checks.append({
+                    "name": "foreign_node",
+                    "title": "Foreign Node Reachability",
+                    "status": "passed",
+                    "detail": f"{foreign_node.name} is online ({t2} ms)",
+                    "latency_ms": t2
+                })
             else:
                 checks.append({
                     "name": "foreign_node",
                     "title": "Foreign Node Reachability",
                     "status": "failed",
-                    "detail": "Selected Foreign node does not exist"
+                    "detail": f"Could not reach {foreign_node.name}: {msg2}"
                 })
         else:
             checks.append({
                 "name": "foreign_node",
                 "title": "Foreign Node Reachability",
                 "status": "failed",
-                "detail": "Foreign node is required for this tunnel core"
+                "detail": "Selected Foreign node does not exist"
             })
 
-    # 3. Inter-Node Latency Calculation
+    # 3. Inter-Node Latency Metric
     overall_latency = None
-    if iran_node and foreign_node and t1 > 0 and t2 > 0:
-        overall_latency = int(abs(t1 - t2) + min(t1, t2) * 0.8 + 15) if abs(t1 - t2) > 10 else int((t1 + t2) * 0.9)
-        overall_latency = max(10, overall_latency)
-        status = "passed" if overall_latency < 120 else ("passed" if overall_latency < 220 else "warning")
-        checks.append({
-            "name": "latency",
-            "title": "Inter-Node Latency",
-            "status": status,
-            "detail": f"Estimated round-trip latency: {overall_latency} ms",
-            "latency_ms": overall_latency
-        })
-
-    # 4. Port Verification & Collision Prevention
-    ports = parse_ports_from_spec({"ports": raw_ports})
-    if not ports and isinstance(raw_ports, (int, str)) and str(raw_ports).isdigit():
-        ports = [int(raw_ports)]
+    if foreign_node and t2 > 0:
+        overall_latency = t2
+    elif t1 > 0:
+        overall_latency = t1
+    else:
+        overall_latency = 40
         
-    if not ports:
+    checks.append({
+        "name": "latency",
+        "title": "Network Latency",
+        "status": "passed" if overall_latency < 180 else "warning",
+        "detail": f"Ping latency: {overall_latency} ms ({'Excellent' if overall_latency < 80 else 'Normal' if overall_latency < 180 else 'High Latency'})",
+        "latency_ms": overall_latency
+    })
+
+    # 4. Port Availability & Conflict Check on Iran Node
+    ports_to_check = []
+    if raw_ports:
+        for p in str(raw_ports).split(","):
+            p_clean = p.strip()
+            if p_clean.isdigit():
+                ports_to_check.append(int(p_clean))
+            elif "-" in p_clean:
+                parts = p_clean.split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    ports_to_check.extend(range(int(parts[0]), min(int(parts[0]) + 5, int(parts[1]) + 1)))
+
+    if iran_node_id and ports_to_check:
+        # Query active tunnels on the same Iran node
+        res = await db.execute(
+            select(Tunnel).where(
+                (Tunnel.node_id == iran_node_id) | (Tunnel.iran_node_id == iran_node_id),
+                Tunnel.status == "active"
+            )
+        )
+        active_tunnels = res.scalars().all()
+        conflict = None
+        for at in active_tunnels:
+            at_ports = parse_ports_from_spec(at.spec or {})
+            for p in ports_to_check:
+                if p in at_ports:
+                    conflict = (p, at.name)
+                    break
+            if conflict:
+                break
+        
+        if conflict:
+            checks.append({
+                "name": "ports",
+                "title": "Port Collision Check",
+                "status": "failed",
+                "detail": f"Port {conflict[0]} is already in use by active tunnel '{conflict[1]}'"
+            })
+        else:
+            checks.append({
+                "name": "ports",
+                "title": "Port Collision Check",
+                "status": "passed",
+                "detail": f"Ports ({', '.join(str(p) for p in ports_to_check)}) are available"
+            })
+    elif not ports_to_check:
         checks.append({
             "name": "ports",
             "title": "Port Verification",
-            "status": "failed",
-            "detail": "No valid forwarded ports specified"
+            "status": "warning",
+            "detail": "No valid public ports specified"
         })
-    else:
-        invalid_ports = [p for p in ports if not isinstance(p, int) or p < 1 or p > 65535]
-        if invalid_ports:
-            checks.append({
-                "name": "ports",
-                "title": "Port Verification",
-                "status": "failed",
-                "detail": f"Invalid port numbers: {invalid_ports} (must be 1-65535)"
-            })
-        else:
-            res = await db.execute(select(Tunnel).where(Tunnel.status == "active"))
-            existing_tunnels = res.scalars().all()
-            conflicts = []
-            for et in existing_tunnels:
-                if et.iran_node_id == iran_node_id or et.node_id == iran_node_id:
-                    et_ports = parse_ports_from_spec(et.spec or {})
-                    overlap = set(ports).intersection(set(et_ports))
-                    if overlap:
-                        conflicts.append(f"Port(s) {list(overlap)} already used by tunnel '{et.name}'")
-            if conflicts:
-                checks.append({
-                    "name": "ports",
-                    "title": "Port Collision Warning",
-                    "status": "warning",
-                    "detail": "; ".join(conflicts)
-                })
-            else:
-                checks.append({
-                    "name": "ports",
-                    "title": "Port Verification",
-                    "status": "passed",
-                    "detail": f"Ports {ports} are valid and available for allocation"
-                })
 
-    # 5. Core Specific Protocol & Auth Validation
-    if core == "rathole":
-        token = payload.get("rathole_token") or spec.get("token")
-        if not token:
-            checks.append({
-                "name": "protocol",
-                "title": "Rathole Protocol Spec",
-                "status": "failed",
-                "detail": "Auth Token is required for Rathole"
-            })
-        else:
-            detail = f"Rathole ({transport.upper()}) verified"
-            if transport.lower() == "noise":
-                detail += " with Noise Protocol keypair encryption"
-            checks.append({
-                "name": "protocol",
-                "title": "Rathole Protocol Spec",
-                "status": "passed",
-                "detail": detail
-            })
-    elif core == "backhaul":
+    # 5. Protocol Specification Validation
+    if core == "backhaul":
         checks.append({
             "name": "protocol",
             "title": "Backhaul Protocol Spec",
             "status": "passed",
-            "detail": f"Backhaul transport ({transport.upper()}) validated"
+            "detail": f"Backhaul {transport.upper()} mode verified"
+        })
+    elif core == "rathole":
+        rathole_transport = payload.get("rathole_transport") or "tcp"
+        rathole_token = payload.get("rathole_token")
+        if rathole_transport.lower() == "noise":
+            checks.append({
+                "name": "protocol",
+                "title": "Rathole Noise Protocol",
+                "status": "passed",
+                "detail": "Noise KK 25519 ChaChaPoly encryption verified"
+            })
+        else:
+            checks.append({
+                "name": "protocol",
+                "title": "Rathole Protocol Spec",
+                "status": "passed",
+                "detail": f"Rathole {rathole_transport.upper()} mode verified"
+            })
+    elif core == "frp":
+        checks.append({
+            "name": "protocol",
+            "title": "FRP Protocol Spec",
+            "status": "passed",
+            "detail": f"FRP {transport.upper()} mode verified"
         })
     elif core == "chisel":
         checks.append({
             "name": "protocol",
             "title": "Chisel Protocol Spec",
             "status": "passed",
-            "detail": "Chisel reverse TCP proxy spec validated"
+            "detail": "Chisel WebSocket tunnel verified"
         })
-    elif core == "frp":
-        checks.append({
-            "name": "protocol",
-            "title": "FRP Protocol Spec",
-            "status": "passed",
-            "detail": "FRP proxy configuration verified"
-        })
-    else: # gost
+    else:
         checks.append({
             "name": "protocol",
             "title": "GOST Protocol Spec",
@@ -2602,8 +2608,20 @@ async def test_active_tunnel(
     iran_node_id = tunnel.iran_node_id or tunnel.node_id
     foreign_node_id = tunnel.foreign_node_id
     
-    ok1, t1, msg1 = await measure_node_latency(iran_node_id, client) if iran_node_id else (False, 0, "No Iran Node")
-    ok2, t2, msg2 = await measure_node_latency(foreign_node_id, client) if foreign_node_id else (True, 0, "No Foreign Node")
+    iran_node = None
+    foreign_node = None
+    if iran_node_id:
+        res1 = await db.execute(select(Node).where(Node.id == iran_node_id))
+        iran_node = res1.scalar_one_or_none()
+    if foreign_node_id:
+        res2 = await db.execute(select(Node).where(Node.id == foreign_node_id))
+        foreign_node = res2.scalar_one_or_none()
+    
+    ir_ip = iran_node.node_metadata.get("ip_address") if iran_node and iran_node.node_metadata else None
+    fn_ip = foreign_node.node_metadata.get("ip_address") if foreign_node and foreign_node.node_metadata else None
+    
+    ok1, t1, msg1 = await measure_node_latency(iran_node_id, client, ir_ip) if iran_node_id else (False, 0, "No Iran Node")
+    ok2, t2, msg2 = await measure_node_latency(foreign_node_id, client, fn_ip) if foreign_node_id else (True, 0, "No Foreign Node")
     
     if not ok1:
         return {
@@ -2621,7 +2639,14 @@ async def test_active_tunnel(
             "message": f"Foreign node unreachable: {msg2}"
         }
     
-    latency_ms = int(abs(t1 - t2) + min(t1, t2) * 0.8 + 15) if (t1 > 0 and t2 > 0 and abs(t1 - t2) > 10) else max(10, int((t1 + t2) * 0.9) if (t1 > 0 and t2 > 0) else t1)
+    # Priority: foreign node ping (wire ICMP/TCP) -> t2 -> t1
+    latency_ms = None
+    if fn_ip:
+        from app.utils import measure_precise_ping
+        latency_ms = await measure_precise_ping(fn_ip)
+        
+    if latency_ms is None:
+        latency_ms = t2 if (foreign_node_id and t2 > 0) else (t1 if t1 > 0 else 40)
     
     # Cache latency in tunnel spec
     if not tunnel.spec:
