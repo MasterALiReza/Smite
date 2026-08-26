@@ -1333,12 +1333,10 @@ async def list_tunnels(db: AsyncSession = Depends(get_db)):
             lat_for = foreign_node.node_metadata.get("latency_ms") if foreign_node and foreign_node.node_metadata else None
             if lat_ir and lat_for:
                 t.spec["latency_ms"] = int(abs(lat_ir - lat_for) + min(lat_ir, lat_for) * 0.8 + 15) if abs(lat_ir - lat_for) > 10 else int((lat_ir + lat_for) * 0.9)
-            elif lat_ir:
-                t.spec["latency_ms"] = lat_ir
             elif lat_for:
                 t.spec["latency_ms"] = lat_for
-            else:
-                t.spec["latency_ms"] = 45
+            elif lat_ir:
+                t.spec["latency_ms"] = lat_ir
     return tunnels
 
 

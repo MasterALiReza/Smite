@@ -410,6 +410,10 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
                 elif metadata.get("role") == "iran":
                     metadata["country_code"] = "IR"
         
+        node.node_metadata = metadata
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(node, "node_metadata")
+        
         return NodeResponse(
             id=node.id,
             name=node.name,
