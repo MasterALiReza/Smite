@@ -254,7 +254,7 @@ class RatholeAdapter:
             config = f"""[server]
 bind_addr = "{bind_host}:{bind_port}"
 default_token = "{token}"
-heartbeat_interval = 20
+heartbeat_interval = 10
 """
             
             if use_noise:
@@ -364,7 +364,7 @@ nodelay = true
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
-heartbeat_timeout = 40
+heartbeat_timeout = 25
 retry_interval = 1
 """
             
@@ -2077,12 +2077,12 @@ class AdapterManager:
         self.start_watchdog()
 
     async def _watchdog_loop(self):
-        """Monitor active tunnels, restart dead processes with exponential backoff"""
-        logger.info("AdapterManager watchdog loop started (interval: 30s)")
+        """Continuous Self-Healing Watchdog: inspects tunnel processes every 15s and auto-recovers dead tunnels"""
+        logger.info("AdapterManager self-healing watchdog loop started (interval: 15s)")
         backoff: Dict[str, int] = {}
         while True:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(15)
                 for tunnel_id in list(self.tunnel_configs.keys()):
                     config = self.tunnel_configs.get(tunnel_id, {})
                     tunnel_core = config.get("core")
@@ -2098,17 +2098,20 @@ class AdapterManager:
                     is_running = status.get("process_running", False) or status.get("active", False)
                     
                     if not is_running:
-                        current_delay = backoff.get(tunnel_id, 5)
-                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) process is dead! Restarting in {current_delay}s...")
+                        current_delay = backoff.get(tunnel_id, 3)
+                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering in {current_delay}s...")
                         await asyncio.sleep(current_delay)
                         try:
+                            # Cleanly remove old process/sockets and reapply
+                            await adapter.remove(tunnel_id)
+                            await asyncio.sleep(0.3)
                             await adapter.apply(tunnel_id, spec)
                             self.active_tunnels[tunnel_id] = adapter
                             backoff.pop(tunnel_id, None)
-                            logger.info(f"Watchdog: successfully restarted tunnel {tunnel_id} ({tunnel_core})")
+                            logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
                         except Exception as e:
-                            logger.error(f"Watchdog: failed to restart tunnel {tunnel_id}: {e}")
-                            backoff[tunnel_id] = min(current_delay * 2, 300)
+                            logger.error(f"Watchdog: failed to auto-recover tunnel {tunnel_id}: {e}")
+                            backoff[tunnel_id] = min(current_delay * 2, 120)
                     else:
                         backoff.pop(tunnel_id, None)
             except asyncio.CancelledError:
@@ -2121,7 +2124,7 @@ class AdapterManager:
         """Start watchdog background task"""
         if not hasattr(self, '_watchdog_task') or self._watchdog_task is None or self._watchdog_task.done():
             self._watchdog_task = asyncio.create_task(self._watchdog_loop())
-            logger.info("AdapterManager watchdog task created")
+            logger.info("AdapterManager self-healing watchdog task started")
 
     def stop_watchdog(self):
         """Stop watchdog background task"""
@@ -2154,6 +2157,7 @@ class AdapterManager:
         }
         logger.info(f"Saving tunnel {tunnel_id} to persistent storage (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
         self._save_tunnels()
+        self.start_watchdog()
         logger.info(f"Tunnel {tunnel_id} applied and saved successfully (core={tunnel_core}, mode={spec.get('mode', 'N/A')}, total_saved={len(self.tunnel_configs)})")
     
     async def remove_tunnel(self, tunnel_id: str):
