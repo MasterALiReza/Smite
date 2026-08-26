@@ -360,13 +360,11 @@ class TunnelReapplyManager:
                         server_pub = tunnel.spec.get("server_public_key") or tunnel.spec.get("remote_public_key")
                         
                         if not (server_priv and client_pub and client_priv and server_pub):
-                            from app.utils import generate_noise_keys
-                            server_keys = generate_noise_keys()
-                            client_keys = generate_noise_keys()
-                            server_priv = server_keys["private_key"]
-                            server_pub = server_keys["public_key"]
-                            client_priv = client_keys["private_key"]
-                            client_pub = client_keys["public_key"]
+                            from app.utils import generate_noise_keypair
+                            s_priv, s_pub = generate_noise_keypair()
+                            c_priv, c_pub = generate_noise_keypair()
+                            server_priv, server_pub = s_priv, s_pub
+                            client_priv, client_pub = c_priv, c_pub
                             tunnel.spec["server_private_key"] = server_priv
                             tunnel.spec["server_public_key"] = server_pub
                             tunnel.spec["client_private_key"] = client_priv

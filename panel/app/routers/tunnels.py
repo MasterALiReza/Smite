@@ -441,7 +441,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             client_spec["mode"] = "client"
             
             if db_tunnel.core == "rathole":
-                transport = getattr(db_tunnel, "transport_type", None) or server_spec.get("transport_type") or server_spec.get("transport") or "tcp"
+                transport = server_spec.get("transport_type") or server_spec.get("transport") or getattr(db_tunnel, "transport_type", None) or "tcp"
                 tunnel_type = getattr(db_tunnel, "type", None) or server_spec.get("tunnel_type") or "tcp"
                 token = server_spec.get("token")
                 if not token:
@@ -2023,7 +2023,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         client_spec["ports"] = ports
                 
                 elif tunnel.core == "rathole":
-                    transport = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
+                    transport = spec.get("transport_type") or spec.get("transport") or getattr(tunnel, "transport_type", None) or "tcp"
                     tunnel_type = getattr(tunnel, "type", None) or spec.get("tunnel_type") or "tcp"
                     token = spec.get("token")
                     if not token:

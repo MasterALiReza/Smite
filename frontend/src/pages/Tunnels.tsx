@@ -1136,6 +1136,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
       await api.put(`/tunnels/${tunnel.id}`, {
         name: formData.name,
         spec: updatedSpec,
+        transport_type: tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : formData.transport_type),
         ...(tunnel.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
@@ -1144,7 +1145,6 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
           ws_path: formData.ws_path,
           is_reverse: formData.is_reverse,
           stealth_domain: formData.stealth_domain || null,
-          transport_type: formData.transport_type,
           security_type: formData.security_type,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
