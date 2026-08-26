@@ -12,6 +12,13 @@ from app.process_manager import start_async_process, stop_async_process, wait_fo
 logger = logging.getLogger(__name__)
 
 
+def sanitize_config_str(val: object) -> str:
+    """Sanitizes configuration strings by removing newlines and quotes to prevent config injection."""
+    if val is None:
+        return ""
+    return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
+
+
 class RatholeServerManager:
     """Manages Rathole server processes on the panel"""
     
@@ -58,9 +65,13 @@ class RatholeServerManager:
                 await self.stop_server(tunnel_id)
                 await asyncio.sleep(0.5)
             
+            safe_token = sanitize_config_str(token)
+            safe_priv = sanitize_config_str(local_private_key)
+            safe_pub = sanitize_config_str(remote_public_key)
+            
             config = f"""[server]
 bind_addr = "{bind_addr}"
-default_token = "{token}"
+default_token = "{safe_token}"
 heartbeat_interval = 20
 """
             transport_lower = transport_proto.lower()
@@ -71,8 +82,8 @@ type = "noise"
 
 [server.transport.noise]
 pattern = "Noise_KK_25519_ChaChaPoly_BLAKE2s"
-local_private_key = "{local_private_key}"
-remote_public_key = "{remote_public_key}"
+local_private_key = "{safe_priv}"
+remote_public_key = "{safe_pub}"
 """
             elif transport_lower in ("websocket", "ws", "wss"):
                 config += f"""

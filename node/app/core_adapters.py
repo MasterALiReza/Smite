@@ -12,6 +12,12 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+def sanitize_config_str(val: Any) -> str:
+    """Sanitizes configuration strings by removing newlines and quotes to prevent config injection."""
+    if val is None:
+        return ""
+    return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
+
 async def free_port(port: Optional[Any]) -> None:
     """Safely and aggressively terminate any process holding the specified port."""
     if not port:
@@ -241,6 +247,7 @@ class RatholeAdapter:
                 if proxy_port:
                     ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
             
+            token = sanitize_config_str(token)
             if not token:
                 raise ValueError("Rathole server requires 'token' in spec")
             if not ports:
@@ -258,8 +265,8 @@ heartbeat_interval = 10
 """
             
             if use_noise:
-                local_priv = spec.get('server_private_key') or spec.get('local_private_key', '')
-                remote_pub = spec.get('client_public_key') or spec.get('remote_public_key', '')
+                local_priv = sanitize_config_str(spec.get('server_private_key') or spec.get('local_private_key', ''))
+                remote_pub = sanitize_config_str(spec.get('client_public_key') or spec.get('remote_public_key', ''))
                 config += f"""
 [server.transport]
 type = "noise"
@@ -361,6 +368,7 @@ nodelay = true
                 use_websocket = True
                 websocket_tls = True
             
+            token = sanitize_config_str(token)
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
@@ -369,8 +377,8 @@ retry_interval = 1
 """
             
             if use_noise:
-                local_priv = spec.get('client_private_key') or spec.get('local_private_key', '')
-                remote_pub = spec.get('server_public_key') or spec.get('remote_public_key', '')
+                local_priv = sanitize_config_str(spec.get('client_private_key') or spec.get('local_private_key', ''))
+                remote_pub = sanitize_config_str(spec.get('server_public_key') or spec.get('remote_public_key', ''))
                 config += f"""
 [client.transport]
 type = "noise"
@@ -389,7 +397,7 @@ type = "websocket"
 """
                 if websocket_tls:
                     config += "tls = true\n"
-                    custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('hostname')
+                    custom_sni = sanitize_config_str(spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('hostname'))
                     if custom_sni:
                         config += f"""
 [client.transport.tls]
