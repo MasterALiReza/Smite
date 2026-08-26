@@ -200,6 +200,7 @@ const Tunnels = () => {
   const [reapplyAllProgress, setReapplyAllProgress] = useState<TunnelReapplyState[] | null>(null)
   const [reapplyAllDone, setReapplyAllDone] = useState(false)
   const [showConfirmReapplyAll, setShowConfirmReapplyAll] = useState(false)
+  const [livePingEnabled, setLivePingEnabled] = useState(true)
 
   useEffect(() => {
     fetchData()
@@ -208,8 +209,56 @@ const Tunnels = () => {
       setShowAddModal(true)
       window.history.replaceState({}, '', '/tunnels')
     }
-    
   }, [])
+
+  // ─── Live 2-second Latency Auto-Refresh ───────────────────────
+  useEffect(() => {
+    if (!livePingEnabled) return
+
+    let isMounted = true
+    let intervalId: any = null
+
+    const fetchLatencies = async () => {
+      if (document.hidden) return
+      try {
+        const response = await api.get('/tunnels/latencies')
+        if (!isMounted || !response.data?.tunnels) return
+
+        const latMap: Record<string, number> = response.data.tunnels
+        setTunnels(prev =>
+          prev.map(t => {
+            if (latMap[t.id] !== undefined && t.spec?.latency_ms !== latMap[t.id]) {
+              return {
+                ...t,
+                spec: {
+                  ...t.spec,
+                  latency_ms: latMap[t.id],
+                },
+              }
+            }
+            return t
+          })
+        )
+      } catch (err) {
+        // Silently continue
+      }
+    }
+
+    intervalId = setInterval(fetchLatencies, 2000)
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchLatencies()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      isMounted = false
+      if (intervalId) clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [livePingEnabled])
 
   const fetchData = async () => {
     try {
@@ -368,7 +417,27 @@ const Tunnels = () => {
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.tunnels.title}</h1>
           <p className="text-gray-500 dark:text-gray-400">{t.tunnels.subtitle}</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
+          {/* Live Ping Toggle */}
+          <button
+            type="button"
+            onClick={() => setLivePingEnabled(prev => !prev)}
+            className={`px-3 py-2 rounded-lg border transition-all duration-200 font-medium text-xs flex items-center gap-2 shadow-sm ${
+              livePingEnabled
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
+                : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400'
+            }`}
+            title={livePingEnabled ? 'Live ping auto-refreshing every 2s (Click to pause)' : 'Live ping paused (Click to enable)'}
+          >
+            <span className="relative flex h-2 w-2">
+              {livePingEnabled && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              )}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${livePingEnabled ? 'bg-emerald-500' : 'bg-gray-400'}`}></span>
+            </span>
+            <span>Live Ping: {livePingEnabled ? '2s' : 'OFF'}</span>
+          </button>
+
           <button
             onClick={handleReapplyAll}
             disabled={!!reapplyAllProgress && !reapplyAllDone}

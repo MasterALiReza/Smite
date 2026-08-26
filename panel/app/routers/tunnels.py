@@ -1341,6 +1341,67 @@ async def list_tunnels(db: AsyncSession = Depends(get_db)):
     return tunnels
 
 
+_ping_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+
+
+@router.get("/latencies")
+async def get_tunnels_latencies(db: AsyncSession = Depends(get_db)):
+    """
+    Ultra-lightweight endpoint for real-time 2-second live ping polling.
+    Returns { "tunnels": { "<tunnel_id>": <latency_ms> }, "timestamp": <unix_ts> }
+    """
+    from app.utils import measure_precise_ping
+    
+    result = await db.execute(
+        select(Tunnel.id, Tunnel.status, Tunnel.node_id, Tunnel.iran_node_id, Tunnel.foreign_node_id)
+        .where(Tunnel.status == "active")
+    )
+    active_tunnels = result.all()
+    if not active_tunnels:
+        return {"tunnels": {}, "timestamp": int(time.time())}
+        
+    node_res = await db.execute(select(Node.id, Node.node_metadata))
+    nodes_ip_map = {}
+    for n_id, n_meta in node_res.all():
+        if n_meta and n_meta.get("ip_address"):
+            nodes_ip_map[n_id] = n_meta.get("ip_address")
+            
+    now = time.time()
+    
+    # Collect unique IPs to ping
+    ips_to_ping = set()
+    tunnel_ip_mapping = {}
+    for t_id, t_status, t_node_id, t_iran_id, t_foreign_id in active_tunnels:
+        target_ip = None
+        if t_foreign_id and t_foreign_id in nodes_ip_map:
+            target_ip = nodes_ip_map[t_foreign_id]
+        elif (t_iran_id or t_node_id) and (t_iran_id or t_node_id) in nodes_ip_map:
+            target_ip = nodes_ip_map[t_iran_id or t_node_id]
+            
+        if target_ip:
+            tunnel_ip_mapping[t_id] = target_ip
+            if target_ip not in _ping_cache or (now - _ping_cache[target_ip][0]) > 1.8:
+                ips_to_ping.add(target_ip)
+                
+    # Ping unique IPs concurrently
+    if ips_to_ping:
+        async def do_ping(ip: str):
+            res = await measure_precise_ping(ip)
+            _ping_cache[ip] = (time.time(), res)
+            
+        await asyncio.gather(*(do_ping(ip) for ip in ips_to_ping), return_exceptions=True)
+        
+    tunnel_latencies = {}
+    for t_id, target_ip in tunnel_ip_mapping.items():
+        if target_ip in _ping_cache and _ping_cache[target_ip][1] is not None:
+            tunnel_latencies[t_id] = _ping_cache[target_ip][1]
+            
+    return {
+        "tunnels": tunnel_latencies,
+        "timestamp": int(time.time())
+    }
+
+
 @router.get("/{tunnel_id}", response_model=TunnelResponse)
 async def get_tunnel(tunnel_id: str, db: AsyncSession = Depends(get_db)):
     """Get tunnel by ID"""
