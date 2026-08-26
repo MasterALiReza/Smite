@@ -2099,12 +2099,11 @@ class AdapterManager:
                     
                     if not is_running:
                         current_delay = backoff.get(tunnel_id, 3)
-                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering in {current_delay}s...")
-                        await asyncio.sleep(current_delay)
+                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering immediately...")
                         try:
                             # Cleanly remove old process/sockets and reapply
                             await adapter.remove(tunnel_id)
-                            await asyncio.sleep(0.3)
+                            await asyncio.sleep(0.2)
                             await adapter.apply(tunnel_id, spec)
                             self.active_tunnels[tunnel_id] = adapter
                             backoff.pop(tunnel_id, None)

@@ -464,6 +464,58 @@ class TunnelReapplyManager:
                     client_spec["mode"] = "client"
                     client_spec["reverse_port"] = listen_port
                 
+                elif tunnel.core == "frp":
+                    bind_port = server_spec.get("bind_port")
+                    if not bind_port:
+                        port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
+                        bind_port = 7000 + (port_hash % 1000)
+                    
+                    token = server_spec.get("token")
+                    iran_node_ip = iran_node.node_metadata.get("ip_address")
+                    if not iran_node_ip:
+                        return False
+                    
+                    transport_type = getattr(tunnel, "transport_type", None) or server_spec.get("transport_type") or server_spec.get("transport") or "tcp"
+                    security_type = getattr(tunnel, "security_type", None) or server_spec.get("security_type") or "tls"
+                    custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or server_spec.get("custom_sni") or server_spec.get("stealth_domain")
+                    use_encryption = server_spec.get("use_encryption", True)
+                    use_compression = server_spec.get("use_compression", True)
+                    
+                    server_spec["mode"] = "server"
+                    server_spec["bind_port"] = bind_port
+                    server_spec["token"] = token
+                    server_spec["transport_type"] = transport_type
+                    server_spec["security_type"] = security_type
+                    
+                    client_spec["mode"] = "client"
+                    client_spec["server_addr"] = iran_node_ip
+                    client_spec["server_port"] = bind_port
+                    client_spec["token"] = token
+                    client_spec["transport_type"] = transport_type
+                    client_spec["security_type"] = security_type
+                    client_spec["custom_sni"] = custom_sni
+                    client_spec["use_encryption"] = use_encryption
+                    client_spec["use_compression"] = use_compression
+                    
+                    tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
+                    if tunnel_type not in ["tcp", "udp"]:
+                        tunnel_type = "tcp"
+                    client_spec["type"] = tunnel_type
+                    client_spec["local_ip"] = server_spec.get("local_ip") or "127.0.0.1"
+                    
+                    ports = server_spec.get("ports", [])
+                    if not ports:
+                        local_port = server_spec.get("local_port")
+                        remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
+                        if remote_port and local_port:
+                            client_spec["ports"] = [{"local": int(local_port), "remote": int(remote_port)}]
+                        elif remote_port:
+                            client_spec["ports"] = [{"local": int(remote_port), "remote": int(remote_port)}]
+                        elif local_port:
+                            client_spec["ports"] = [{"local": int(local_port), "remote": int(local_port)}]
+                    else:
+                        client_spec["ports"] = ports
+                
                 server_response = await client.send_to_node(
                     node_id=iran_node.id,
                     endpoint="/api/agent/tunnels/apply",
