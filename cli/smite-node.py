@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Smite Node CLI - Smart Multi-Instance Management Tool
 """
@@ -235,13 +235,25 @@ def cmd_restart(args):
 
 
 def cmd_update(args):
-    """Safely update node container(s)."""
+    """Safely update node container(s) and core adapters."""
     nodes = discover_nodes()
     targets = select_target_node(nodes, args.target, prompt_action="update")
     
     for n in targets:
         print(f"\nUpdating {n['container_name']} in {n['dir']}...")
-        run_compose_for_node(n, ["pull"])
+        app_dir = n["dir"] / "app"
+        if app_dir.exists():
+            try:
+                url = "https://raw.githubusercontent.com/MasterALiReza/Smite/main/node/app/core_adapters.py"
+                req = urllib.request.Request(url, headers={"User-Agent": "smite-node-cli"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    if resp.status == 200:
+                        (app_dir / "core_adapters.py").write_bytes(resp.read())
+                        print("  ✓ Latest core adapters synced")
+            except Exception as e:
+                print(f"  ⚠️ Could not sync core_adapters directly: {e}")
+        
+        run_compose_for_node(n, ["pull"], capture_output=True)
         run_compose_for_node(n, ["up", "-d", "--force-recreate"])
         print(f"✓ {n['container_name']} updated.")
 
