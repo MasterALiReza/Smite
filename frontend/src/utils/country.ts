@@ -1,4 +1,6 @@
-﻿// Country code to Flag emoji and localized names
+﻿import React from 'react'
+
+// Country code to localized names in Persian
 export const countryNamesFa: Record<string, string> = {
   IR: 'ایران',
   DE: 'آلمان',
@@ -37,6 +39,29 @@ export const countryNamesFa: Record<string, string> = {
   GE: 'گرجستان',
 }
 
+// Robust country code extractor from metadata or server name
+export function extractCountryCode(name?: string, metadataCode?: string): string {
+  if (metadataCode && typeof metadataCode === 'string' && metadataCode.trim().length === 2) {
+    return metadataCode.trim().toUpperCase()
+  }
+  if (!name) return ''
+  const upper = name.toUpperCase()
+  if (upper.includes('USA') || upper.includes('US-') || upper.startsWith('US ') || upper.includes('UNITED STATES')) return 'US'
+  if (upper.includes('TR-') || upper.startsWith('TR ') || upper.includes('TURKEY')) return 'TR'
+  if (upper.includes('FN-') || upper.includes('FI-') || upper.startsWith('FI ') || upper.includes('FINLAND') || upper.includes('HETZ')) return 'FI'
+  if (upper.includes('DE-') || upper.startsWith('DE ') || upper.includes('GERMANY')) return 'DE'
+  if (upper.includes('NL-') || upper.startsWith('NL ') || upper.includes('NETHERLANDS')) return 'NL'
+  if (upper.includes('FR-') || upper.startsWith('FR ') || upper.includes('FRANCE')) return 'FR'
+  if (upper.includes('GB-') || upper.includes('UK-') || upper.startsWith('GB ') || upper.includes('ENGLAND')) return 'GB'
+  if (upper.includes('IR-') || upper.startsWith('IR ') || upper.includes('IRAN')) return 'IR'
+  
+  const match = name.match(/^([A-Za-z]{2})[\s\-_]/)
+  if (match) {
+    return match[1].toUpperCase()
+  }
+  return ''
+}
+
 // Convert 2-letter ISO country code (e.g. 'DE') to Flag Emoji (🇩🇪)
 export function getCountryFlag(code?: string): string {
   if (!code || typeof code !== 'string') return '🌐'
@@ -71,8 +96,9 @@ export function formatLocalizedNodeName(name: string, isPersian: boolean, countr
   const simpleMatch = name.match(/^node[\s\-_](\d+)$/i)
   if (simpleMatch) {
     const num = simpleMatch[1]
-    if (countryCode && countryNamesFa[countryCode.toUpperCase()]) {
-      return `نود ${countryNamesFa[countryCode.toUpperCase()]} ${num}`
+    const cc = countryCode?.toUpperCase() || ''
+    if (cc && countryNamesFa[cc]) {
+      return `نود ${countryNamesFa[cc]} ${num}`
     }
     return `نود ${num}`
   }

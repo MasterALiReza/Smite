@@ -7,7 +7,8 @@ import { EmptyState } from '../components/EmptyState'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { JoinModal } from '../components/JoinModal'
 import { EditNodeModal } from '../components/EditNodeModal'
-import { getCountryFlag, formatLocalizedNodeName } from '../utils/country'
+import { LatencyBadge } from '../components/LatencyBadge'
+import { getCountryFlag, formatLocalizedNodeName, extractCountryCode } from '../utils/country'
 
 interface Server {
   id: string
@@ -189,6 +190,9 @@ const Servers = () => {
                   Status
                 </th>
                 <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Ping
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   IP Address
                 </th>
                 <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -202,7 +206,7 @@ const Servers = () => {
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {servers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-0">
+                  <td colSpan={7} className="px-6 py-0">
                     <EmptyState 
                       icon={<Server size={32} />} 
                       title="No foreign servers" 
@@ -212,112 +216,134 @@ const Servers = () => {
                   </td>
                 </tr>
               ) : (
-                servers.map((server) => (
-                  <tr key={server.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-xl select-none" title={server.metadata?.country_name || server.metadata?.country_code || 'Location'}>
-                          {getCountryFlag(server.metadata?.country_code)}
-                        </span>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                            {formatLocalizedNodeName(server.name, language === 'fa', server.metadata?.country_code)}
-                          </span>
-                          {server.metadata?.country_code && (
-                            <span className="text-[11px] text-gray-400 font-mono">
-                              {server.metadata?.country_code} • {server.metadata?.api_port || '8888'}
-                            </span>
+                servers.map((server) => {
+                  const cc = extractCountryCode(server.name, server.metadata?.country_code)
+                  const flag = getCountryFlag(cc)
+                  return (
+                    <tr key={server.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center gap-3">
+                          {cc ? (
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700/70 rounded-lg border border-gray-200/60 dark:border-gray-600/60 shadow-2xs">
+                              <img
+                                src={`https://purecatamphetamine.github.io/country-flag-icons/3x2/${cc}.svg`}
+                                alt={cc}
+                                className="w-4 h-3 object-cover rounded-xs"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).style.display = 'none'
+                                }}
+                              />
+                              <span className="text-[11px] font-mono font-bold text-gray-700 dark:text-gray-300">{cc}</span>
+                            </div>
+                          ) : (
+                            <div className="w-7 h-6 bg-gray-100 dark:bg-gray-700/70 rounded-lg flex items-center justify-center text-xs">
+                              🌐
+                            </div>
                           )}
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                              {formatLocalizedNodeName(server.name, language === 'fa', cc)}
+                            </span>
+                            <span className="text-[11px] text-gray-400 font-mono">
+                              Port: {server.metadata?.api_port || '8888'}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">{server.fingerprint}</code>
-                        <button
-                          onClick={() => copyToClipboard(server.fingerprint)}
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-400 min-w-[36px] min-h-[36px] flex items-center justify-center"
-                          title="Copy fingerprint"
-                          aria-label="Copy fingerprint"
-                        >
-                          <Copy size={15} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {(() => {
-                        const connStatus = server.metadata?.connection_status || 'failed'
-                        const getStatusColor = (status: string) => {
-                          switch (status) {
-                            case 'connected':
-                              return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                            case 'connecting':
-                            case 'reconnecting':
-                              return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
-                            case 'failed':
-                              return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                            default:
-                              return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">{server.fingerprint}</code>
+                          <button
+                            onClick={() => copyToClipboard(server.fingerprint)}
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-400 min-w-[36px] min-h-[36px] flex items-center justify-center"
+                            title="Copy fingerprint"
+                            aria-label="Copy fingerprint"
+                          >
+                            <Copy size={15} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {(() => {
+                          const connStatus = server.metadata?.connection_status || 'failed'
+                          const getStatusColor = (status: string) => {
+                            switch (status) {
+                              case 'connected':
+                                return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                              case 'connecting':
+                              case 'reconnecting':
+                                return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
+                              case 'failed':
+                                return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+                              default:
+                                return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                            }
                           }
-                        }
-                        const getStatusIcon = (status: string) => {
-                          switch (status) {
-                            case 'connected':
-                              return <CheckCircle size={12} className="text-green-600 dark:text-green-400" />
-                            case 'connecting':
-                            case 'reconnecting':
-                              return <AlertCircle size={12} className="text-yellow-600 dark:text-yellow-400" />
-                            case 'failed':
-                              return <XCircle size={12} className="text-red-600 dark:text-red-400" />
-                            default:
-                              return <XCircle size={12} />
+                          const getStatusIcon = (status: string) => {
+                            switch (status) {
+                              case 'connected':
+                                return <CheckCircle size={12} className="text-green-600 dark:text-green-400" />
+                              case 'connecting':
+                              case 'reconnecting':
+                                return <AlertCircle size={12} className="text-yellow-600 dark:text-yellow-400" />
+                              case 'failed':
+                                return <XCircle size={12} className="text-red-600 dark:text-red-400" />
+                              default:
+                                return <XCircle size={12} />
+                            }
                           }
-                        }
-                        const getStatusText = (status: string) => {
-                          switch (status) {
-                            case 'connected': return 'Connected'
-                            case 'connecting': return 'Connecting'
-                            case 'reconnecting': return 'Reconnecting'
-                            case 'failed': return 'Failed'
-                            default: return status
+                          const getStatusText = (status: string) => {
+                            switch (status) {
+                              case 'connected': return 'Connected'
+                              case 'connecting': return 'Connecting'
+                              case 'reconnecting': return 'Reconnecting'
+                              case 'failed': return 'Failed'
+                              default: return status
+                            }
                           }
-                        }
-                        return (
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(connStatus)}`}>
-                            {getStatusIcon(connStatus)}
-                            {getStatusText(connStatus)}
-                          </span>
-                        )
-                      })()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                      {server.metadata?.ip_address || 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                      {new Date(server.last_seen).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => setEditingServer(server)}
-                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
-                          title="Edit Node Name"
-                          aria-label="Edit Node Name"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button
-                          onClick={() => deleteServer(server.id)}
-                          className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
-                          title="Delete server"
-                          aria-label="Delete server"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          return (
+                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(connStatus)}`}>
+                              {getStatusIcon(connStatus)}
+                              {getStatusText(connStatus)}
+                            </span>
+                          )
+                        })()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <LatencyBadge
+                          latency={server.metadata?.latency_ms}
+                          status={server.metadata?.connection_status || 'failed'}
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                        {server.metadata?.ip_address || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                        {new Date(server.last_seen).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => setEditingServer(server)}
+                            className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                            title="Edit Node Name"
+                            aria-label="Edit Node Name"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button
+                            onClick={() => deleteServer(server.id)}
+                            className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                            title="Delete server"
+                            aria-label="Delete server"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
