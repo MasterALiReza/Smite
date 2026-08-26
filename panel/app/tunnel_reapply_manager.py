@@ -352,17 +352,37 @@ class TunnelReapplyManager:
                         control_port = assigned_control_port
                         tunnel.spec["control_port"] = control_port
 
-                    use_noise = server_spec.get("noise") or server_spec.get("use_noise", False)
+                    use_noise = server_spec.get("noise") or server_spec.get("use_noise", False) or transport.lower() == "noise"
                     if use_noise:
-                        from app.utils import generate_noise_keys
-                        server_keys = generate_noise_keys()
-                        client_keys = generate_noise_keys()
-                        server_spec["server_private_key"] = server_keys["private_key"]
-                        server_spec["server_public_key"] = server_keys["public_key"]
-                        server_spec["client_public_key"] = client_keys["public_key"]
-                        client_spec["client_private_key"] = client_keys["private_key"]
-                        client_spec["client_public_key"] = client_keys["public_key"]
-                        client_spec["server_public_key"] = server_keys["public_key"]
+                        server_priv = tunnel.spec.get("server_private_key") or tunnel.spec.get("local_private_key")
+                        client_pub = tunnel.spec.get("client_public_key") or tunnel.spec.get("remote_public_key")
+                        client_priv = tunnel.spec.get("client_private_key") or tunnel.spec.get("local_private_key")
+                        server_pub = tunnel.spec.get("server_public_key") or tunnel.spec.get("remote_public_key")
+                        
+                        if not (server_priv and client_pub and client_priv and server_pub):
+                            from app.utils import generate_noise_keys
+                            server_keys = generate_noise_keys()
+                            client_keys = generate_noise_keys()
+                            server_priv = server_keys["private_key"]
+                            server_pub = server_keys["public_key"]
+                            client_priv = client_keys["private_key"]
+                            client_pub = client_keys["public_key"]
+                            tunnel.spec["server_private_key"] = server_priv
+                            tunnel.spec["server_public_key"] = server_pub
+                            tunnel.spec["client_private_key"] = client_priv
+                            tunnel.spec["client_public_key"] = client_pub
+
+                        server_spec["server_private_key"] = server_priv
+                        server_spec["server_public_key"] = server_pub
+                        server_spec["client_public_key"] = client_pub
+                        server_spec["local_private_key"] = server_priv
+                        server_spec["remote_public_key"] = client_pub
+
+                        client_spec["client_private_key"] = client_priv
+                        client_spec["client_public_key"] = client_pub
+                        client_spec["server_public_key"] = server_pub
+                        client_spec["local_private_key"] = client_priv
+                        client_spec["remote_public_key"] = server_pub
                     
                     server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
                     server_spec["control_port"] = control_port
@@ -381,6 +401,19 @@ class TunnelReapplyManager:
                     client_spec["transport"] = transport
                     client_spec["ports"] = ports
                 
+                elif tunnel.core == "gost":
+                    from app.routers.tunnels import build_gost_node_specs
+                    control_port = server_spec.get("control_port")
+                    auth_token = server_spec.get("auth_token") or server_spec.get("token")
+                    ports = server_spec.get("ports", [])
+                    iran_node_ip = iran_node.node_metadata.get("ip_address")
+                    foreign_node_ip = foreign_node.node_metadata.get("ip_address")
+                    if not iran_node_ip or not foreign_node_ip:
+                        return False
+                    server_spec, client_spec = build_gost_node_specs(
+                        tunnel, iran_node_ip, foreign_node_ip, control_port, auth_token, ports
+                    )
+
                 elif tunnel.core == "backhaul":
                     transport = server_spec.get("transport") or server_spec.get("transport_type") or "tcp"
                     token = server_spec.get("token")
