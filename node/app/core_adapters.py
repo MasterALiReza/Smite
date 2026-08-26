@@ -360,11 +360,11 @@ nodelay = true
                 use_websocket = True
                 websocket_tls = True
             
-            heartbeat_interval = int(spec.get('heartbeat_interval', 20))
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
-heartbeat_interval = {heartbeat_interval}
+heartbeat_timeout = 40
+retry_interval = 1
 """
             
             if use_noise:
