@@ -389,6 +389,12 @@ type = "websocket"
 """
                 if websocket_tls:
                     config += "tls = true\n"
+                    custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('hostname')
+                    if custom_sni:
+                        config += f"""
+[client.transport.tls]
+hostname = "{custom_sni}"
+"""
             
             # Create multiple service sections for multiple ports
             for i, port in enumerate(ports):

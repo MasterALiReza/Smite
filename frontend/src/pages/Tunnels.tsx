@@ -955,10 +955,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
     custom_host: tunnel.custom_host || '',
-    custom_sni: tunnel.custom_sni || '',
+    custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
     ws_path: tunnel.ws_path || '',
     is_reverse: tunnel.is_reverse || false,
-    stealth_domain: tunnel.stealth_domain || '',
+    stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.spec?.custom_sni || '',
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type || 'none',
     failover_ips: tunnel.failover_ips && Array.isArray(tunnel.failover_ips) ? tunnel.failover_ips.join('\n') : '',
@@ -1076,6 +1076,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         if (formData.rathole_transport) {
           updatedSpec.transport = formData.rathole_transport
           updatedSpec.transport_type = formData.rathole_transport
+        }
+        if (formData.custom_sni) {
+          updatedSpec.custom_sni = formData.custom_sni
+          updatedSpec.stealth_domain = formData.custom_sni
         }
         updatedSpec.ports = ports
         updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
@@ -1314,9 +1318,29 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
                   <option value="wss">WebSocket + TLS (WSS)</option>
                 </select>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.
+                  {formData.rathole_transport === 'noise' && 'Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.'}
+                  {formData.rathole_transport === 'wss' && 'WSS wraps traffic inside standard HTTPS/TLS for maximum anti-DPI survivability and CDN compatibility.'}
+                  {formData.rathole_transport === 'ws' && 'WebSocket mode allows HTTP-based reverse proxying.'}
+                  {(!formData.rathole_transport || formData.rathole_transport === 'tcp') && 'TCP Raw provides standard raw transmission.'}
                 </p>
               </div>
+              {(formData.rathole_transport === 'wss' || formData.rathole_transport === 'ws') && (
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Custom SNI / Domain Camouflage
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.custom_sni || ''}
+                    onChange={(e) => setFormData({ ...formData, custom_sni: e.target.value })}
+                    placeholder="e.g., dl.google.com or cdn.cloudflare.com"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Used as TLS Server Name Indication (SNI) to mimic legitimate web traffic and bypass DPI.
+                  </p>
+                </div>
+              )}
             </div>
           )}
           
@@ -1991,6 +2015,10 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         spec.listen_port = ports[0]
         spec.transport = formData.rathole_transport || 'tcp'
         spec.transport_type = formData.rathole_transport || 'tcp'
+        if (formData.custom_sni) {
+          spec.custom_sni = formData.custom_sni
+          spec.stealth_domain = formData.custom_sni
+        }
       }
       
       if (formData.core === 'chisel') {
@@ -2430,9 +2458,29 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
                     <option value="wss">WebSocket + TLS (WSS)</option>
                   </select>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.
+                    {formData.rathole_transport === 'noise' && 'Noise protocol provides WireGuard-grade encryption with zero-handshake overhead for low gaming ping.'}
+                    {formData.rathole_transport === 'wss' && 'WSS wraps traffic inside standard HTTPS/TLS for maximum anti-DPI survivability and CDN compatibility.'}
+                    {formData.rathole_transport === 'ws' && 'WebSocket mode allows HTTP-based reverse proxying.'}
+                    {(!formData.rathole_transport || formData.rathole_transport === 'tcp') && 'TCP Raw provides standard raw transmission.'}
                   </p>
                 </div>
+                {(formData.rathole_transport === 'wss' || formData.rathole_transport === 'ws') && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Custom SNI / Domain Camouflage
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.custom_sni || ''}
+                      onChange={(e) => setFormData({ ...formData, custom_sni: e.target.value })}
+                      placeholder="e.g., dl.google.com or cdn.cloudflare.com"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Used as TLS Server Name Indication (SNI) to mimic legitimate web traffic and bypass DPI.
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}

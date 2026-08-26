@@ -391,10 +391,25 @@ class TunnelReapplyManager:
                     iran_node_ip = iran_node.node_metadata.get("ip_address")
                     if not iran_node_ip:
                         return False
-                    if is_valid_ipv6_address(iran_node_ip):
-                        client_spec["remote_addr"] = f"[{iran_node_ip}]:{control_port}"
+                    
+                    transport_lower = transport.lower()
+                    if transport_lower in ("websocket", "ws", "wss"):
+                        use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls") or transport_lower == "wss")
+                        protocol = "wss://" if use_tls else "ws://"
+                        if is_valid_ipv6_address(iran_node_ip):
+                            client_spec["remote_addr"] = f"{protocol}[{iran_node_ip}]:{control_port}"
+                        else:
+                            client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
+                        client_spec["websocket_tls"] = use_tls
+                        custom_sni = server_spec.get("custom_sni") or server_spec.get("stealth_domain") or getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None)
+                        if custom_sni:
+                            client_spec["custom_sni"] = custom_sni
+                            server_spec["custom_sni"] = custom_sni
                     else:
-                        client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
+                        if is_valid_ipv6_address(iran_node_ip):
+                            client_spec["remote_addr"] = f"[{iran_node_ip}]:{control_port}"
+                        else:
+                            client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
                     client_spec["token"] = token
                     client_spec["transport"] = transport
                     client_spec["ports"] = ports

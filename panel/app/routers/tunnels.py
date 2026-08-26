@@ -534,10 +534,15 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     await db.refresh(db_tunnel)
                     return db_tunnel
                 transport_lower = transport.lower()
-                if transport_lower in ("websocket", "ws"):
-                    use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls"))
+                if transport_lower in ("websocket", "ws", "wss"):
+                    use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls") or transport_lower == "wss")
                     protocol = "wss://" if use_tls else "ws://"
                     client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
+                    client_spec["websocket_tls"] = use_tls
+                    custom_sni = server_spec.get("custom_sni") or server_spec.get("stealth_domain") or getattr(db_tunnel, "custom_sni", None) or getattr(db_tunnel, "stealth_domain", None)
+                    if custom_sni:
+                        client_spec["custom_sni"] = custom_sni
+                        server_spec["custom_sni"] = custom_sni
                 else:
                     client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
                 client_spec["transport_type"] = transport
@@ -546,10 +551,6 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 client_spec["type"] = tunnel_type
                 client_spec["token"] = token
                 client_spec["ports"] = ports
-                if "websocket_tls" in server_spec:
-                    client_spec["websocket_tls"] = server_spec["websocket_tls"]
-                elif "tls" in server_spec:
-                    client_spec["websocket_tls"] = server_spec["tls"]
                 
             elif db_tunnel.core == "chisel":
                 ports = parse_ports_from_spec(db_tunnel.spec)
@@ -2112,10 +2113,15 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         client_spec["remote_public_key"] = server_pub
 
                     transport_lower = transport.lower()
-                    if transport_lower in ("websocket", "ws"):
-                        use_tls = bool(spec.get("websocket_tls") or spec.get("tls"))
+                    if transport_lower in ("websocket", "ws", "wss"):
+                        use_tls = bool(spec.get("websocket_tls") or spec.get("tls") or transport_lower == "wss")
                         protocol = "wss://" if use_tls else "ws://"
                         client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
+                        client_spec["websocket_tls"] = use_tls
+                        custom_sni = spec.get("custom_sni") or spec.get("stealth_domain") or getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None)
+                        if custom_sni:
+                            client_spec["custom_sni"] = custom_sni
+                            server_spec["custom_sni"] = custom_sni
                     else:
                         client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
                 
