@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # Smite Node Installer - Smart Multi-Instance & Zero-Touch Auto-Discovery
 # Supports interactive deployment & one-click automated join
 
@@ -124,6 +124,21 @@ detect_public_ip() {
     fi
     
     echo "127.0.0.1"
+}
+
+# -------------------------------------------------------------
+# Helper: Detect Country Code of this machine (GeoIP)
+# -------------------------------------------------------------
+detect_country_code() {
+    local cc=""
+    for url in "http://ip-api.com/line?fields=countryCode" "https://ifconfig.co/country-iso" "https://ipapi.co/country/" "https://api.country.is"; do
+        cc=$(curl -s --connect-timeout 2 "$url" 2>/dev/null | tr -d ' \n\r' || true)
+        if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
+            echo "$cc" | tr '[:lower:]' '[:upper:]'
+            return 0
+        fi
+    done
+    echo ""
 }
 
 # -------------------------------------------------------------
@@ -391,6 +406,7 @@ auto_register_in_panel() {
     local n_port=$4
     local n_role=$5
     local n_token=$6
+    local n_cc=$7
 
     if [ -z "$n_token" ] || [ -z "$p_addr" ]; then
         return 0
@@ -406,7 +422,7 @@ auto_register_in_panel() {
     fi
 
     local reg_url="${proto}://${clean_addr}/api/nodes/auto-register"
-    local json_payload="{\"name\":\"${n_name}\",\"ip_address\":\"${n_ip}\",\"api_port\":${n_port},\"role\":\"${n_role}\",\"registration_token\":\"${n_token}\"}"
+    local json_payload="{\"name\":\"${n_name}\",\"ip_address\":\"${n_ip}\",\"api_port\":${n_port},\"role\":\"${n_role}\",\"registration_token\":\"${n_token}\",\"metadata\":{\"country_code\":\"${n_cc}\"}}"
 
     local resp=$(curl -s -X POST "$reg_url" \
         -H "Content-Type: application/json" \
@@ -551,8 +567,12 @@ EOF
     # Wait for node to be alive
     sleep 3
 
+    # Auto-detect location
+    local detected_cc=$(detect_country_code)
+    [ -n "$detected_cc" ] && info "Detected server location: ${detected_cc}"
+
     # Auto-register in Panel
-    auto_register_in_panel "$panel_addr" "$node_name" "$public_ip" "$node_port" "$node_role" "$reg_token"
+    auto_register_in_panel "$panel_addr" "$node_name" "$public_ip" "$node_port" "$node_role" "$reg_token" "$detected_cc"
 
     echo ""
     echo -e "${GREEN}${BOLD}================================================================${NC}"

@@ -24,6 +24,11 @@ class NodeCreate(BaseModel):
     metadata: dict = {}
 
 
+class NodeUpdate(BaseModel):
+    name: str = None
+    metadata: dict = None
+
+
 class NodeAutoRegister(BaseModel):
     name: str
     ip_address: str
@@ -44,6 +49,35 @@ class NodeResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+async def get_country_info(ip: str) -> tuple:
+    """Return (country_code, country_name) for a given IP"""
+    if not ip or ip.startswith(("127.", "192.168.", "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
+        return ("IR", "Iran")
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"http://ip-api.com/json/{ip}?fields=status,country,countryCode")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "success":
+                    return (data.get("countryCode", "").upper(), data.get("country", ""))
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"https://ipapi.co/{ip}/json/")
+            if resp.status_code == 200:
+                data = resp.json()
+                cc = data.get("country_code", "")
+                if cc:
+                    return (cc.upper(), data.get("country_name", ""))
+    except Exception:
+        pass
+
+    return ("", "")
 
 
 @router.post("/auto-register", response_model=NodeResponse)
@@ -82,8 +116,50 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     metadata["role"] = incoming_role
     metadata["connection_status"] = client_conn_status
 
+    # GeoIP resolution & Intelligent Naming
+    country_code = metadata.get("country_code", "")
+    country_name = metadata.get("country_name", "")
+    if not country_code:
+        cc, cn = await get_country_info(payload.ip_address)
+        if cc:
+            country_code = cc
+            country_name = cn
+        elif incoming_role == "iran":
+            country_code = "IR"
+            country_name = "Iran"
+            
+    if country_code:
+        metadata["country_code"] = country_code
+        if country_name:
+            metadata["country_name"] = country_name
+
+    # Determine node name
+    final_name = payload.name
+    is_generic = (
+        not final_name or
+        final_name.startswith("node-") or
+        final_name.startswith("srv-") or
+        "-node-" in final_name or
+        final_name.startswith("ubuntu-") or
+        final_name.startswith("debian-")
+    )
+
+    if is_generic and country_code:
+        # Count existing nodes with this country code
+        all_nodes_res = await db.execute(select(Node))
+        all_nodes = all_nodes_res.scalars().all()
+        matching_count = sum(
+            1 for n in all_nodes
+            if n.id != getattr(existing, "id", None) and (
+                (n.node_metadata and n.node_metadata.get("country_code") == country_code) or
+                n.name.startswith(f"{country_code} Node")
+            )
+        )
+        final_name = f"{country_code} Node {matching_count + 1}"
+
     if existing:
-        existing.name = payload.name
+        if final_name and not existing.name:
+            existing.name = final_name
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
         existing.node_metadata.update(metadata)
@@ -100,7 +176,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         )
     else:
         db_node = Node(
-            name=payload.name,
+            name=final_name or f"node-1",
             fingerprint=fingerprint,
             status="active",
             node_metadata=metadata
@@ -298,6 +374,12 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
         
         metadata = node.node_metadata.copy() if node.node_metadata else {}
         metadata["connection_status"] = connection_status
+        if "country_code" not in metadata:
+            parts = (node.name or "").split()
+            if len(parts) >= 2 and len(parts[0]) == 2 and parts[0].isupper():
+                metadata["country_code"] = parts[0]
+            elif metadata.get("role") == "iran":
+                metadata["country_code"] = "IR"
         
         return NodeResponse(
             id=node.id,
@@ -318,6 +400,12 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
             node = nodes[i]
             metadata = node.node_metadata.copy() if node.node_metadata else {}
             metadata["connection_status"] = "failed"
+            if "country_code" not in metadata:
+                parts = (node.name or "").split()
+                if len(parts) >= 2 and len(parts[0]) == 2 and parts[0].isupper():
+                    metadata["country_code"] = parts[0]
+                elif metadata.get("role") == "iran":
+                    metadata["country_code"] = "IR"
             results.append(NodeResponse(
                 id=node.id,
                 name=node.name,
@@ -340,6 +428,39 @@ async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    return NodeResponse(
+        id=node.id,
+        name=node.name,
+        fingerprint=node.fingerprint,
+        status=node.status,
+        registered_at=node.registered_at,
+        last_seen=node.last_seen,
+        metadata=node.node_metadata or {}
+    )
+
+
+@router.put("/{node_id}", response_model=NodeResponse)
+async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depends(get_db)):
+    """Update node name and metadata"""
+    from sqlalchemy.orm.attributes import flag_modified
+    
+    result = await db.execute(select(Node).where(Node.id == node_id))
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    if payload.name is not None and payload.name.strip():
+        node.name = payload.name.strip()
+        
+    if payload.metadata is not None:
+        if not node.node_metadata:
+            node.node_metadata = {}
+        node.node_metadata.update(payload.metadata)
+        flag_modified(node, "node_metadata")
+        
+    await db.commit()
+    await db.refresh(node)
+    
     return NodeResponse(
         id=node.id,
         name=node.name,

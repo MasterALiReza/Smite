@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle, Server, Sparkles } from 'lucide-react'
+import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle, Server, Sparkles, Edit2 } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { JoinModal } from '../components/JoinModal'
+import { EditNodeModal } from '../components/EditNodeModal'
+import { getCountryFlag, formatLocalizedNodeName } from '../utils/country'
 
 interface Node {
   id: string
@@ -18,13 +20,14 @@ interface Node {
 }
 
 const Nodes = () => {
-  const { t } = useLanguage()
+  const { t, language } = useLanguage()
   const { showToast, showConfirm } = useToast()
   const [nodes, setNodes] = useState<Node[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
   const [showJoinModal, setShowJoinModal] = useState(false)
+  const [editingNode, setEditingNode] = useState<Node | null>(null)
   const [certContent, setCertContent] = useState<string>('')
   const [certLoading, setCertLoading] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -219,7 +222,21 @@ const Nodes = () => {
                 nodes.map((node) => (
                 <tr key={node.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900 dark:text-white">{node.name}</div>
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xl select-none" title={node.metadata?.country_name || node.metadata?.country_code || 'Location'}>
+                        {getCountryFlag(node.metadata?.country_code || 'IR')}
+                      </span>
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                          {formatLocalizedNodeName(node.name, language === 'fa', node.metadata?.country_code || 'IR')}
+                        </span>
+                        {node.metadata?.country_code && (
+                          <span className="text-[11px] text-gray-400 font-mono">
+                            {node.metadata?.country_code} • {node.metadata?.api_port || '8888'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center gap-2">
@@ -287,14 +304,24 @@ const Nodes = () => {
                     {new Date(node.last_seen).toLocaleString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button
-                      onClick={() => deleteNode(node.id)}
-                      className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
-                      title="Delete node"
-                      aria-label="Delete node"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setEditingNode(node)}
+                        className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                        title="Edit Node Name"
+                        aria-label="Edit Node Name"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      <button
+                        onClick={() => deleteNode(node.id)}
+                        className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                        title="Delete node"
+                        aria-label="Delete node"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 ))
@@ -332,6 +359,13 @@ const Nodes = () => {
         }}
         role="iran"
         onNodeRegistered={fetchNodes}
+      />
+
+      <EditNodeModal
+        isOpen={!!editingNode}
+        node={editingNode}
+        onClose={() => setEditingNode(null)}
+        onSuccess={fetchNodes}
       />
     </div>
   )

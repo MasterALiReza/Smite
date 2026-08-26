@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Trash2, CheckCircle, XCircle, AlertCircle, Server, Sparkles } from 'lucide-react'
+import { Plus, Copy, Trash2, CheckCircle, XCircle, AlertCircle, Server, Sparkles, Edit2 } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { JoinModal } from '../components/JoinModal'
+import { EditNodeModal } from '../components/EditNodeModal'
+import { getCountryFlag, formatLocalizedNodeName } from '../utils/country'
 
 interface Server {
   id: string
@@ -18,13 +20,14 @@ interface Server {
 }
 
 const Servers = () => {
-  const { t } = useLanguage()
+  const { t, language } = useLanguage()
   const { showToast, showConfirm } = useToast()
   const [servers, setServers] = useState<Server[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
   const [showJoinModal, setShowJoinModal] = useState(false)
+  const [editingServer, setEditingServer] = useState<Server | null>(null)
   const [certContent, setCertContent] = useState('')
   const [certLoading, setCertLoading] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -212,7 +215,21 @@ const Servers = () => {
                 servers.map((server) => (
                   <tr key={server.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">{server.name}</div>
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-xl select-none" title={server.metadata?.country_name || server.metadata?.country_code || 'Location'}>
+                          {getCountryFlag(server.metadata?.country_code)}
+                        </span>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {formatLocalizedNodeName(server.name, language === 'fa', server.metadata?.country_code)}
+                          </span>
+                          {server.metadata?.country_code && (
+                            <span className="text-[11px] text-gray-400 font-mono">
+                              {server.metadata?.country_code} • {server.metadata?.api_port || '8888'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -280,14 +297,24 @@ const Servers = () => {
                       {new Date(server.last_seen).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <button
-                        onClick={() => deleteServer(server.id)}
-                        className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
-                        title="Delete server"
-                        aria-label="Delete server"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setEditingServer(server)}
+                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                          title="Edit Node Name"
+                          aria-label="Edit Node Name"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button
+                          onClick={() => deleteServer(server.id)}
+                          className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                          title="Delete server"
+                          aria-label="Delete server"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -325,6 +352,13 @@ const Servers = () => {
         }}
         role="foreign"
         onNodeRegistered={fetchServers}
+      />
+
+      <EditNodeModal
+        isOpen={!!editingServer}
+        node={editingServer}
+        onClose={() => setEditingServer(null)}
+        onSuccess={fetchServers}
       />
     </div>
   )
