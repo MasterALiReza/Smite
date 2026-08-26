@@ -126,3 +126,24 @@ async def health():
     """Health check"""
     return {"status": "ok"}
 
+
+@router.get("/join-token")
+async def get_join_token():
+    """Get the registration token for node auto-enrollment"""
+    import hashlib
+    token = hashlib.sha256(f"smite_node_reg:{settings.secret_key}".encode()).hexdigest()[:32]
+    return {"token": token}
+
+
+@router.get("/join-command")
+async def get_join_command(role: str = "foreign"):
+    """Get the one-click node install/join command"""
+    import hashlib
+    token = hashlib.sha256(f"smite_node_reg:{settings.secret_key}".encode()).hexdigest()[:32]
+    return {
+        "token": token,
+        "role": role,
+        "ca_endpoint": "/panel/ca/server" if role == "foreign" else "/panel/ca"
+    }
+
+

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle, Server } from 'lucide-react'
+import { Plus, Copy, Trash2, CheckCircle, XCircle, Download, AlertCircle, Server, Sparkles } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
 import { copyTextToClipboard } from '../utils/clipboard'
+import { JoinModal } from '../components/JoinModal'
 
 interface Node {
   id: string
@@ -23,17 +24,20 @@ const Nodes = () => {
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
+  const [showJoinModal, setShowJoinModal] = useState(false)
   const [certContent, setCertContent] = useState<string>('')
   const [certLoading, setCertLoading] = useState(false)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     fetchNodes()
+    const interval = setInterval(fetchNodes, 6000)
     const params = new URLSearchParams(window.location.search)
     if (params.get('add') === 'true') {
       setShowAddModal(true)
       window.history.replaceState({}, '', '/nodes')
     }
+    return () => clearInterval(interval)
   }, [])
 
   const fetchNodes = async () => {
@@ -141,26 +145,34 @@ const Nodes = () => {
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.nodes.title}</h1>
           <p className="text-gray-500 dark:text-gray-400">{t.nodes.subtitle}</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
+          <button
+            onClick={() => setShowJoinModal(true)}
+            className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
+            title="One-Click Automatic Node Join Command"
+          >
+            <Sparkles size={18} />
+            Auto Join Command
+          </button>
           <button
             onClick={showCA}
-            className="px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2"
+            className="px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
           >
             <Copy size={18} />
             {t.nodes.viewCACertificate}
           </button>
           <button
             onClick={downloadCA}
-            className="px-4 py-2.5 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600 flex items-center gap-2"
+            className="px-4 py-2.5 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600 flex items-center gap-2 text-sm"
           >
             <Download size={18} />
             {t.nodes.downloadCA}
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2"
+            className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
           >
-            <Plus size={20} />
+            <Plus size={18} />
             {t.nodes.addNode}
           </button>
         </div>
@@ -311,6 +323,16 @@ const Nodes = () => {
           copied={copied}
         />
       )}
+
+      <JoinModal
+        isOpen={showJoinModal}
+        onClose={() => {
+          setShowJoinModal(false)
+          fetchNodes()
+        }}
+        role="iran"
+        onNodeRegistered={fetchNodes}
+      />
     </div>
   )
 }

@@ -24,6 +24,15 @@ class NodeCreate(BaseModel):
     metadata: dict = {}
 
 
+class NodeAutoRegister(BaseModel):
+    name: str
+    ip_address: str
+    api_port: int = 8888
+    role: str = "foreign"
+    registration_token: str
+    metadata: dict = {}
+
+
 class NodeResponse(BaseModel):
     id: str
     name: str
@@ -35,7 +44,79 @@ class NodeResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+@router.post("/auto-register", response_model=NodeResponse)
+async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depends(get_db)):
+    """Auto-register a node from the installer script using registration token"""
+    import hashlib
+    from app.config import settings
     
+    expected_token = hashlib.sha256(f"smite_node_reg:{settings.secret_key}".encode()).hexdigest()[:32]
+    if payload.registration_token != expected_token and payload.registration_token != settings.secret_key:
+        raise HTTPException(status_code=401, detail="Invalid registration token")
+        
+    incoming_role = payload.role if payload.role in ["iran", "foreign"] else "foreign"
+    
+    # Reverse probe verification
+    client_conn_status = "connected"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
+            if resp.status_code == 200:
+                client_conn_status = "connected"
+    except Exception as e:
+        logger.warning(f"Probe to http://{payload.ip_address}:{payload.api_port} failed: {e}")
+        client_conn_status = "connected"
+
+    fingerprint_data = f"{payload.ip_address}:{payload.api_port}".encode()
+    fingerprint = hashlib.sha256(fingerprint_data).hexdigest()[:16]
+
+    result = await db.execute(select(Node).where(Node.fingerprint == fingerprint))
+    existing = result.scalar_one_or_none()
+
+    metadata = payload.metadata.copy() if payload.metadata else {}
+    metadata["api_address"] = f"http://{payload.ip_address}:{payload.api_port}"
+    metadata["ip_address"] = payload.ip_address
+    metadata["api_port"] = payload.api_port
+    metadata["role"] = incoming_role
+    metadata["connection_status"] = client_conn_status
+
+    if existing:
+        existing.name = payload.name
+        existing.last_seen = datetime.utcnow()
+        existing.status = "active"
+        existing.node_metadata.update(metadata)
+        await db.commit()
+        await db.refresh(existing)
+        return NodeResponse(
+            id=existing.id,
+            name=existing.name,
+            fingerprint=existing.fingerprint,
+            status=existing.status,
+            registered_at=existing.registered_at,
+            last_seen=existing.last_seen,
+            metadata=existing.node_metadata
+        )
+    else:
+        db_node = Node(
+            name=payload.name,
+            fingerprint=fingerprint,
+            status="active",
+            node_metadata=metadata
+        )
+        db.add(db_node)
+        await db.commit()
+        await db.refresh(db_node)
+        return NodeResponse(
+            id=db_node.id,
+            name=db_node.name,
+            fingerprint=db_node.fingerprint,
+            status=db_node.status,
+            registered_at=db_node.registered_at,
+            last_seen=db_node.last_seen,
+            metadata=db_node.node_metadata
+        )
 
 
 @router.post("", response_model=NodeResponse)

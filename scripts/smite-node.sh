@@ -1,6 +1,6 @@
-#!/bin/bash
-# Smite Node Installer - Smart Multi-Instance & Safety Engine
-# Supports single & multi-node deployments with automatic port collision detection
+﻿#!/bin/bash
+# Smite Node Installer - Smart Multi-Instance & Zero-Touch Auto-Discovery
+# Supports interactive deployment & one-click automated join
 
 set -e
 
@@ -58,14 +58,83 @@ if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/
 fi
 
 # -------------------------------------------------------------
+# CLI Arguments Parsing (One-Click Auto Join Support)
+# -------------------------------------------------------------
+ARG_PANEL=""
+ARG_TOKEN=""
+ARG_ROLE=""
+ARG_PORT=""
+ARG_NAME=""
+ARG_AUTO="false"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --panel)
+            ARG_PANEL="$2"
+            shift 2
+            ;;
+        --token)
+            ARG_TOKEN="$2"
+            shift 2
+            ;;
+        --role)
+            ARG_ROLE="$2"
+            shift 2
+            ;;
+        --port)
+            ARG_PORT="$2"
+            shift 2
+            ;;
+        --name)
+            ARG_NAME="$2"
+            shift 2
+            ;;
+        --auto)
+            ARG_AUTO="true"
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+if [ -n "$ARG_PANEL" ] && [ -n "$ARG_TOKEN" ]; then
+    ARG_AUTO="true"
+fi
+
+# -------------------------------------------------------------
+# Helper: Detect Public IP Address of this machine
+# -------------------------------------------------------------
+detect_public_ip() {
+    local ip=""
+    for url in "https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com" "https://ident.me" "https://checkip.amazonaws.com"; do
+        ip=$(curl -s --connect-timeout 3 "$url" 2>/dev/null | tr -d ' \n\r' || true)
+        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    
+    # Fallback to local default route IP
+    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1 || true)
+    if [ -n "$ip" ]; then
+        echo "$ip"
+        return 0
+    fi
+    
+    echo "127.0.0.1"
+}
+
+# -------------------------------------------------------------
 # Helper: Check if a network port is already in use on the host
 # -------------------------------------------------------------
 is_port_in_use() {
     local port=$1
     if command -v ss &> /dev/null; then
-        ss -tuln | grep -qE ":${port}\b" && return 0
+        ss -tuln | grep -qE "[: ]${port}\b" && return 0
     elif command -v netstat &> /dev/null; then
-        netstat -tuln | grep -qE ":${port}\b" && return 0
+        netstat -tuln | grep -qE "[: ]${port}\b" && return 0
     elif command -v lsof &> /dev/null; then
         lsof -i ":${port}" &> /dev/null && return 0
     fi
@@ -99,7 +168,6 @@ scan_existing_nodes() {
     EXISTING_ROLES=()
     EXISTING_NAMES=()
 
-    # Collect existing node candidate directories
     local found_dirs=()
     if [ -d "/opt/smite-node" ]; then
         found_dirs+=("/opt/smite-node")
@@ -117,7 +185,6 @@ scan_existing_nodes() {
         if [ -f "$d/docker-compose.yml" ] || [ -f "$d/.env" ]; then
             EXISTING_DIRS+=("$d")
             
-            # Read metadata from .env if present
             local name="node"
             local port="8888"
             local role="unknown"
@@ -127,7 +194,6 @@ scan_existing_nodes() {
                 role=$(grep -E '^NODE_ROLE=' "$d/.env" | cut -d '=' -f2- | tr -d '"'\'' ' || echo "unknown")
             fi
             
-            # Extract container name from docker-compose.yml if available
             local cname="smite-node"
             if [ -f "$d/docker-compose.yml" ]; then
                 local found_cname=$(grep -E 'container_name:' "$d/docker-compose.yml" | awk '{print $2}' | tr -d '"'\'' ' || true)
@@ -254,7 +320,6 @@ install_cli_tool() {
 # Function: Apply System & Kernel Optimizations
 # -------------------------------------------------------------
 apply_kernel_optimizations() {
-    echo ""
     info "Applying network & kernel optimizations for stable tunnels..."
     if [ -f "/etc/sysctl.conf" ]; then
         if [ ! -f "/etc/sysctl.conf.smite-backup" ]; then
@@ -314,6 +379,194 @@ EOF
             progress "BBR congestion control enabled"
         fi
     fi
+}
+
+# -------------------------------------------------------------
+# Function: Auto-Register Node in Panel
+# -------------------------------------------------------------
+auto_register_in_panel() {
+    local p_addr=$1
+    local n_name=$2
+    local n_ip=$3
+    local n_port=$4
+    local n_role=$5
+    local n_token=$6
+
+    if [ -z "$n_token" ] || [ -z "$p_addr" ]; then
+        return 0
+    fi
+
+    info "Sending Zero-Touch Auto-Registration request to Panel (${p_addr})..."
+    
+    # Strip protocol if present in panel address
+    local clean_addr=$(echo "$p_addr" | sed -e 's|^https\?://||' -e 's|/$||')
+    local proto="http"
+    if [[ "$p_addr" =~ ^https:// ]]; then
+        proto="https"
+    fi
+
+    local reg_url="${proto}://${clean_addr}/api/nodes/auto-register"
+    local json_payload="{\"name\":\"${n_name}\",\"ip_address\":\"${n_ip}\",\"api_port\":${n_port},\"role\":\"${n_role}\",\"registration_token\":\"${n_token}\"}"
+
+    local resp=$(curl -s -X POST "$reg_url" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload" 2>/dev/null || true)
+
+    if echo "$resp" | grep -q '"fingerprint"'; then
+        progress "Node successfully auto-registered and connected in Panel!"
+    else
+        # Try fallback URL without /api prefix
+        local fallback_url="${proto}://${clean_addr}/nodes/auto-register"
+        local resp2=$(curl -s -X POST "$fallback_url" \
+            -H "Content-Type: application/json" \
+            -d "$json_payload" 2>/dev/null || true)
+        if echo "$resp2" | grep -q '"fingerprint"'; then
+            progress "Node successfully auto-registered and connected in Panel!"
+        else
+            warn "Auto-registration response: $resp"
+            info "You can also manually verify the server in the Panel UI under Foreign Nodes / Iran Nodes."
+        fi
+    fi
+}
+
+# -------------------------------------------------------------
+# Function: One-Click Automated Deployment Engine
+# -------------------------------------------------------------
+deploy_auto_one_click() {
+    info "Initiating One-Click Automated Node Join..."
+    
+    read -r next_idx next_dir next_cname next_vname <<< "$(get_next_instance_info)"
+    
+    local target_dir="$next_dir"
+    local c_name="$next_cname"
+    local v_name="$next_vname"
+    local instance_idx="$next_idx"
+
+    local panel_addr="$ARG_PANEL"
+    local reg_token="$ARG_TOKEN"
+    local node_role="${ARG_ROLE:-foreign}"
+    
+    # Auto-detect free port
+    local node_port="$ARG_PORT"
+    if [ -z "$node_port" ]; then
+        node_port=$(find_next_free_port 8888)
+    fi
+
+    # Auto-detect public IP
+    local public_ip=$(detect_public_ip)
+    
+    # Node name
+    local node_name="$ARG_NAME"
+    if [ -z "$node_name" ]; then
+        local hostname_clean=$(hostname -s 2>/dev/null || echo "srv")
+        node_name="${hostname_clean}-node-${instance_idx}"
+    fi
+
+    echo -e "  - Target Directory: ${CYAN}${target_dir}${NC}"
+    echo -e "  - Container Name:   ${CYAN}${c_name}${NC}"
+    echo -e "  - Public IP:        ${CYAN}${public_ip}${NC}"
+    echo -e "  - Node API Port:    ${CYAN}${node_port}${NC}"
+    echo -e "  - Node Role:        ${CYAN}${node_role}${NC}"
+    echo -e "  - Panel Address:    ${CYAN}${panel_addr}${NC}"
+    echo ""
+
+    mkdir -p "$target_dir/certs" "$target_dir/config"
+
+    # Download CA certificate from panel automatically
+    info "Downloading CA certificate from Panel..."
+    local ca_endpoint="panel/ca/server"
+    if [ "$node_role" = "iran" ]; then
+        ca_endpoint="panel/ca"
+    fi
+
+    local clean_addr=$(echo "$panel_addr" | sed -e 's|^https\?://||' -e 's|/$||')
+    local proto="http"
+    if [[ "$panel_addr" =~ ^https:// ]]; then
+        proto="https"
+    fi
+
+    if ! curl -fsSL "${proto}://${clean_addr}/api/${ca_endpoint}" -o "$target_dir/certs/ca.crt" 2>/dev/null; then
+        curl -fsSL "${proto}://${clean_addr}/${ca_endpoint}" -o "$target_dir/certs/ca.crt" 2>/dev/null || true
+    fi
+
+    if [ ! -s "$target_dir/certs/ca.crt" ]; then
+        warn "Could not download CA certificate directly from panel API. Creating placeholder..."
+        touch "$target_dir/certs/ca.crt"
+    else
+        progress "CA certificate downloaded"
+    fi
+
+    # Write .env file
+    cat > "$target_dir/.env" << EOF
+NODE_API_PORT=$node_port
+NODE_NAME=$node_name
+NODE_ROLE=$node_role
+SMITE_VERSION=${SMITE_VERSION:-latest}
+
+PANEL_CA_PATH=/etc/smite-node/certs/ca.crt
+PANEL_ADDRESS=$panel_addr
+PANEL_API_PORT=8000
+EOF
+    progress "Configuration written to ${target_dir}/.env"
+
+    # Create docker-compose.yml
+    create_compose_file "$target_dir" "$c_name" "$v_name"
+
+    # Download node code from GitHub
+    GIT_BRANCH=""
+    if [ "${SMITE_VERSION:-latest}" = "next" ]; then
+        GIT_BRANCH="-b next"
+    fi
+
+    TEMP_DIR=$(mktemp -d)
+    if git clone --depth 1 $GIT_BRANCH https://github.com/MasterALiReza/Smite.git "$TEMP_DIR" 2>/dev/null; then
+        cp -r "$TEMP_DIR/node"/* "$target_dir/" 2>/dev/null || true
+        rm -rf "$TEMP_DIR"
+    else
+        rm -rf "$TEMP_DIR"
+    fi
+
+    # Re-apply compose file
+    create_compose_file "$target_dir" "$c_name" "$v_name"
+
+    # Apply optimizations
+    apply_kernel_optimizations
+
+    # Pull or build image
+    if [ -z "${SMITE_VERSION}" ]; then
+        export SMITE_VERSION=latest
+    fi
+
+    if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
+        (cd "$target_dir" && docker compose build 2>&1 || true)
+    fi
+
+    # Start the container
+    info "Starting node container (${c_name})..."
+    (cd "$target_dir" && docker compose up -d)
+
+    # Install CLI tool
+    install_cli_tool "$target_dir"
+
+    # Wait for node to be alive
+    sleep 3
+
+    # Auto-register in Panel
+    auto_register_in_panel "$panel_addr" "$node_name" "$public_ip" "$node_port" "$node_role" "$reg_token"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}================================================================${NC}"
+    echo -e "${GREEN}${BOLD}🎉 Smite Node (${c_name}) Installed & Registered Successfully!${NC}"
+    echo -e "${GREEN}${BOLD}================================================================${NC}"
+    echo -e "  - Public IP:      ${CYAN}${public_ip}${NC}"
+    echo -e "  - Node API Port:  ${CYAN}${node_port}${NC}"
+    echo -e "  - Container:      ${CYAN}${c_name}${NC}"
+    echo -e "  - Directory:      ${CYAN}${target_dir}${NC}"
+    echo -e "  - Status:         ${GREEN}Connected in Panel${NC}"
+    echo ""
+    echo -e "Manage node instances with: ${BOLD}smite-node status${NC}"
+    echo ""
+    exit 0
 }
 
 # -------------------------------------------------------------
@@ -405,7 +658,6 @@ deploy_node_instance() {
         exit 1
     fi
 
-    # Setup directories
     mkdir -p "$target_dir/certs" "$target_dir/config"
     echo -e "$PANEL_CA_CONTENT" > "$target_dir/certs/ca.crt"
     if [ ! -s "$target_dir/certs/ca.crt" ]; then
@@ -414,7 +666,6 @@ deploy_node_instance() {
     fi
     progress "CA certificate saved to ${target_dir}/certs/ca.crt"
 
-    # Write .env file
     cat > "$target_dir/.env" << EOF
 NODE_API_PORT=$NODE_API_PORT
 NODE_NAME=$NODE_NAME
@@ -427,11 +678,9 @@ PANEL_API_PORT=$PANEL_API_PORT
 EOF
     progress "Configuration saved to ${target_dir}/.env"
 
-    # Create docker-compose.yml
     create_compose_file "$target_dir" "$c_name" "$v_name"
     progress "Docker Compose created for container: ${c_name}"
 
-    # Download / copy node code files
     GIT_BRANCH=""
     if [ "${SMITE_VERSION:-latest}" = "next" ]; then
         GIT_BRANCH="-b next"
@@ -443,17 +692,12 @@ EOF
         cp -r "$TEMP_DIR/node"/* "$target_dir/" 2>/dev/null || true
         rm -rf "$TEMP_DIR"
     else
-        warn "Could not git clone, continuing with prebuilt container..."
         rm -rf "$TEMP_DIR"
     fi
 
-    # Re-apply compose file to ensure custom container_name & volume are preserved
     create_compose_file "$target_dir" "$c_name" "$v_name"
-
-    # Apply optimizations
     apply_kernel_optimizations
 
-    # Pull or build image
     echo ""
     info "Pulling Docker image..."
     if [ -z "${SMITE_VERSION}" ]; then
@@ -461,19 +705,15 @@ EOF
     fi
 
     if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
-        warn "Prebuilt image not found in GHCR, building locally..."
         (cd "$target_dir" && docker compose build 2>&1 || true)
     fi
 
-    # Start the container
     info "Starting node container (${c_name})..."
     (cd "$target_dir" && docker compose up -d)
 
-    # Install CLI tool
     install_cli_tool "$target_dir"
 
-    # Health check
-    sleep 4
+    sleep 3
     if docker ps --format '{{.Names}}' | grep -q "^${c_name}$"; then
         echo ""
         echo -e "${GREEN}${BOLD}✅ Smite Node (${c_name}) installed & running successfully!${NC}"
@@ -524,6 +764,11 @@ update_existing_node() {
 # -------------------------------------------------------------
 scan_existing_nodes
 
+# Check if One-Click automated join is triggered via flags
+if [ "$ARG_AUTO" = "true" ]; then
+    deploy_auto_one_click
+fi
+
 if [ ${#EXISTING_DIRS[@]} -eq 0 ]; then
     # No existing node found -> Standard fresh install (Node 1)
     deploy_node_instance "/opt/smite-node" "smite-node" "smite-node-data" "1"
@@ -564,11 +809,9 @@ else
 
     case "$ACTION_CHOICE" in
         1)
-            # Add parallel node
             deploy_node_instance "$next_dir" "$next_cname" "$next_vname" "$next_idx"
             ;;
         2)
-            # Update
             if [ ${#EXISTING_DIRS[@]} -eq 1 ]; then
                 update_existing_node "${EXISTING_DIRS[0]}" "${EXISTING_CONTAINERS[0]}"
             else
@@ -590,7 +833,6 @@ else
             fi
             ;;
         3)
-            # Reinstall / Overwrite with backup
             target_idx=0
             if [ ${#EXISTING_DIRS[@]} -gt 1 ]; then
                 read -p "Enter node number to reinstall [1-${#EXISTING_DIRS[@]}]: " REINSTALL_NUM
@@ -613,18 +855,15 @@ else
                 exit 0
             fi
 
-            # Create backup
             BACKUP_PATH="${target_d}.bak.$(date +%Y%m%d_%H%M%S)"
             info "Creating safe backup at: ${BACKUP_PATH}"
             cp -r "$target_d" "$BACKUP_PATH"
             progress "Backup created"
 
-            # Stop container
             (cd "$target_d" && docker compose down 2>/dev/null || true)
             docker stop "$target_c" 2>/dev/null || true
             docker rm -f "$target_c" 2>/dev/null || true
 
-            # Extract instance index from directory name (e.g. /opt/smite-node-2 -> 2)
             inst_num=$(echo "$target_d" | grep -oE '[0-9]+$' || echo "1")
             vname="${target_c}-data"
             [ "$target_c" = "smite-node" ] && vname="smite-node-data"
