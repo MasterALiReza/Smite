@@ -211,9 +211,9 @@ class RatholeAdapter:
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply Rathole tunnel - supports both server and client modes"""
-        if tunnel_id in self.processes:
-            logger.info(f"Rathole tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
+        # Always remove any previous or orphan instance for this tunnel before applying
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.2)
         
         mode = spec.get('mode', 'client')
         
@@ -320,6 +320,7 @@ nodelay = true
                     await free_port(p_num)
                 except Exception:
                     pass
+            await asyncio.sleep(0.3)
 
             try:
                 proc = await asyncio.create_subprocess_exec(*["/usr/local/bin/rathole", "-s", str(config_path)],
@@ -445,10 +446,16 @@ nodelay = true
         """Remove Rathole tunnel"""
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
-        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}"])
+        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}", f"-s.*{tunnel_id}", f"-c.*{tunnel_id}"])
             
         if config_path.exists():
             try:
+                content = config_path.read_text(encoding="utf-8", errors="ignore")
+                for line in content.splitlines():
+                    if "bind_addr" in line and ":" in line:
+                        p_str = line.split(":")[-1].replace('"', '').replace("'", "").strip()
+                        if p_str.isdigit():
+                            await free_port(int(p_str))
                 config_path.unlink()
             except Exception:
                 pass

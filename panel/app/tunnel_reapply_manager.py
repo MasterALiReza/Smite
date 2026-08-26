@@ -264,10 +264,12 @@ class TunnelReapplyManager:
                                     remote_addr = server_spec.get("remote_addr", "")
                                     from app.utils import parse_address_port
                                     _, control_port, _ = parse_address_port(remote_addr) if remote_addr else (None, None, None)
-                                if not control_port or int(control_port) == 23333:
-                                    import hashlib
-                                    port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                                    control_port = 25000 + (port_hash % 25000)
+                                import hashlib
+                                port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
+                                assigned_control_port = 25000 + (port_hash % 25000)
+
+                                if not control_port or int(control_port) < 24000:
+                                    control_port = assigned_control_port
                                     tunnel.spec["control_port"] = control_port
                                     from sqlalchemy.orm.attributes import flag_modified
                                     flag_modified(tunnel, "spec")
