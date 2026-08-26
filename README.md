@@ -1,4 +1,4 @@
-# Smite - Tunneling Control Panel
+﻿# Smite - Tunneling Control Panel
 
 <div align="center">
   <picture>
@@ -7,7 +7,7 @@
     <img src="assets/SmiteL.png" alt="Smite Logo" width="200"/>
   </picture>
   
-  **Modern tunnel management built on GOST, Backhaul, Rathole, Chisel, and FRP, featuring dual-node architecture, intuitive WebUI, real-time status tracking, and open-source freedom.**
+  **Enterprise-grade tunnel management built on GOST, Backhaul, Rathole, Chisel, and FRP, featuring zero-touch dual-node auto-registration, real-time live ping/latency tracking, intelligent GeoIP naming with country flags, and open-source freedom.**
   
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
   [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
@@ -23,19 +23,22 @@
 
 ## 🚀 Features
 
-- **Multiple Tunnel Types**: Support for TCP, UDP, WebSocket, gRPC, TCPMux via GOST, Backhaul, Rathole, Chisel, and FRP
-- **Unified Node Management**: Iran and Foreign nodes are manageable from a single panel for reverse tunnels
-- **Web UI**: Modern, intuitive web interface with real-time connection status tracking
-- **CLI Tools**: Powerful command-line tools for management
-- **Telegram Bot**: Panel statistics and automatic backups via Telegram
-- **GOST Forwarding**: Forward traffic from Iran nodes to Foreign servers with support for TCP, UDP, WebSocket, gRPC, and TCPMux
+- **⚡ Zero-Touch One-Click Node Join**: Generate a secure 1-click install command from the WebUI. Automatically configures certificates, downloads CA, detects IP, and registers with reverse health verification.
+- **📍 Intelligent GeoIP Auto-Naming & Flags**: Automatically resolves node locations and assigns sequential names (e.g. `DE Node 1`, `TR Node 1`, `US Node 1`) with crisp SVG country flags and bilingual display (English / Persian `نود آلمان ۱`).
+- **📶 Live Real-Time Latency & Ping (ms)**: Dynamic real-time round-trip latency tracking with color-coded animated pulsing badges (🟢 `< 80ms`, 🟡 `80–180ms`, 🔴 `> 180ms`).
+- **✏️ In-Panel Node Name Editing**: Customize and edit node display names directly within the panel table without modifying server configs.
+- **🛡️ Multiple High-Performance Cores**: Complete support for **GOST**, **Backhaul**, **Rathole**, **Chisel**, and **FRP** over TCP, UDP, WebSocket, gRPC, and TCPMux.
+- **🔒 Rathole Multi-Tunnel Isolation**: Isolated dynamic core control port allocation (`25000–50000`) ensuring seamless parallel tunnels between the same server pair without port collisions. Supports **Noise Protocol** keypairs and WebSocket transports.
+- **🔄 Multi-Instance Node CLI (`smite-node`)**: Full multi-instance node management on a single VPS (`smite-node update all`, `status`, `restart`, `logs`, `uninstall`).
+- **🤖 Telegram Bot Integration**: Real-time panel statistics, tunnel status alerts, and automated database backups directly to Telegram.
 
 ---
 
 ## 📋 Prerequisites
 
-- Docker and Docker Compose installed
-- For Iran servers, install Docker first:
+- Linux Server (Ubuntu 20.04+, Debian 11+, CentOS 8+, AlmaLinux)
+- Docker & Docker Compose installed
+- For domestic/Iran servers, install Docker using the mirror:
   ```bash
   curl -fsSL https://raw.githubusercontent.com/manageitir/docker/main/install-ubuntu.sh | sh
   ```
@@ -44,7 +47,7 @@
 
 ## 🔧 Panel Installation
 
-### Quick Install
+### 1-Click Quick Install
 
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/install.sh)"
@@ -55,14 +58,14 @@ sudo bash -c "$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/m
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/MasterALiReza/Smite.git
-cd Smite
+git clone https://github.com/MasterALiReza/Smite.git /opt/smite
+cd /opt/smite
 ```
 
 2. Copy environment file and configure:
 ```bash
 cp .env.example .env
-# Edit .env with your settings
+# Edit .env with your secret keys and credentials
 ```
 
 3. Install CLI tools:
@@ -70,7 +73,7 @@ cp .env.example .env
 sudo bash cli/install_cli.sh
 ```
 
-4. Start services:
+4. Start panel services:
 ```bash
 docker compose up -d
 ```
@@ -80,7 +83,7 @@ docker compose up -d
 smite admin create
 ```
 
-6. Access the web interface at `http://localhost:8000`
+6. Access the web interface at `http://YOUR_SERVER_IP:8000`
 
 </details>
 
@@ -88,129 +91,66 @@ smite admin create
 
 ## 🖥️ Node Installation
 
-### Architecture
+### ⚡ Method 1: Zero-Touch 1-Click Join (Recommended)
 
-- **Iran Nodes**: Handle reverse tunnels (Rathole, Backhaul, Chisel, FRP) and run GOST forwarders
-- **Foreign Nodes**: Participate in reverse tunnels and receive forwarded traffic from Iran nodes
+1. Open your Smite WebUI and navigate to **Iran Nodes** or **Foreign Nodes**.
+2. Click **⚡ Auto Join Command**.
+3. Copy the generated 1-click command and run it in the terminal of your node server:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh | sudo bash -s -- --auto --panel "http://YOUR_PANEL_IP:8000" --token "YOUR_JOIN_TOKEN" --role "foreign"
+   ```
+4. The node will automatically download CA certs, allocate free ports, identify its GeoIP country, register itself with the panel, and appear live in your table!
 
-### Quick Install
+---
+
+### 💻 Method 2: Interactive Installer
 
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh)"
 ```
 
-<details>
-<summary><strong>Manual Install</strong></summary>
-
-1. Navigate to node directory:
-```bash
-cd node
-```
-
-2. Copy Panel CA certificate:
-```bash
-mkdir -p certs
-# For Iran nodes, use ca.crt
-cp /path/to/panel/ca.crt certs/ca.crt
-# For Foreign servers, use ca-server.crt
-# cp /path/to/panel/ca-server.crt certs/ca.crt
-```
-
-3. Create `.env` file:
-```bash
-cat > .env << EOF
-NODE_API_PORT=8888
-NODE_NAME=node-1
-PANEL_CA_PATH=/etc/smite-node/certs/ca.crt
-PANEL_ADDRESS=panel.example.com:443
-EOF
-```
-
-> **Note**: The panel validates node roles during registration. Each node must have a consistent role (iran or foreign) to prevent conflicts.
-
-4. Start node:
-```bash
-docker compose up -d
-```
-
-</details>
-
 ---
 
-## 🛠️ CLI Tools
+## 🛠️ CLI Management Tools
 
 ### Panel CLI (`smite`)
 
-**Admin Management:**
 ```bash
-smite admin create      # Create admin user
-smite admin update      # Update admin password
-```
-
-**Panel Management:**
-```bash
-smite status            # Show system status
-smite update            # Update panel (pull images and recreate)
-smite restart           # Restart panel (recreate to pick up .env changes)
+smite status            # Show system status and running containers
+smite update            # Update panel to latest version
+smite restart           # Restart panel services
 smite logs              # View panel logs
-```
-
-**Configuration:**
-```bash
 smite edit              # Edit docker-compose.yml
-smite edit-env          # Edit .env file
+smite edit-env          # Edit .env configuration file
+smite admin create      # Create a new admin account
+smite admin update      # Reset admin password
 ```
 
 ### Node CLI (`smite-node`)
 
-The Node CLI supports both single-instance and multi-instance environments:
+The Node CLI natively manages single and multi-instance deployments on the same VPS:
 
-**Node Management:**
 ```bash
-smite-node status            # Show status table of all installed nodes
-smite-node update [N]        # Safely update node (N = instance index or 'all')
-smite-node restart [N]       # Restart node (recreate to pick up .env changes)
-smite-node logs [N] [-f]     # View or stream node logs
-smite-node uninstall [N]     # Safely uninstall a specific node instance
-```
-
-**Configuration:**
-```bash
-smite-node edit [N]          # Edit docker-compose.yml for node instance
-smite-node edit-env [N]      # Edit .env file for node instance
+smite-node status            # Show status table of all installed node instances
+smite-node update [all|N]    # Safely update core adapters and recreate containers
+smite-node restart [all|N]   # Restart node instance (N = instance index or 'all')
+smite-node logs [N] [-f]     # View or live-stream node logs
+smite-node edit [N]          # Edit docker-compose.yml for instance N
+smite-node edit-env [N]      # Edit .env file for instance N
+smite-node uninstall [N]     # Safely uninstall a specific node instance with volume cleanup
 ```
 
 ---
 
-## 📖 Tunnel Types
+## 📖 Supported Tunnel Cores
 
-### GOST Tunnels (Advanced Tunneling)
-- **Dual-Node Reverse Architecture**: Server role on foreign nodes and Client role on domestic nodes to mask traffic directionality
-- **Yamux Multiplexing**: Advanced Yamux muxing over WebSocket to consolidate connections and prevent traffic analysis
-- **Cloudflare CDN Mode**: Dynamic WebSocket path, custom Host headers, and SNI spoofing for seamless CDN routing
-- **Supported Protocols**: TCP, UDP, WebSocket (WS), gRPC, and TCPMux
-
-GOST tunnels support both straightforward port forwarding and advanced Dual-Node Reverse tunneling. In reverse mode, the foreign server listens for incoming connections from the Iran node, allowing you to bypass strict DPI systems effectively.
-
-### Backhaul Tunnels (Reverse Tunnel)
-- **TCP / UDP**: Low-latency reverse tunnels with optional UDP-over-TCP
-- **WS / WSMux**: WebSocket transports for CDN-friendly deployments
-- **TCPMux**: TCP multiplexing support
-- **Advanced Controls**: Configure multiplexing, keepalive, sniffer, and custom port maps per tunnel
-
-The panel automatically configures both Iran and Foreign nodes when creating a tunnel.
-
-### Rathole Tunnels (Reverse Tunnel)
-- **TCP**: Standard TCP reverse tunnel
-- **WebSocket (WS)**: WebSocket transport support
-
-Rathole tunnels allow you to expose services running on the Foreign node's network through the Iran node.
-
-### Chisel Tunnels (Reverse Tunnel)
-Chisel tunnels provide fast TCP reverse tunnel functionality, enabling you to expose services running on the Foreign node's network through the Iran node with high performance.
-
-### FRP Tunnels (Reverse Tunnel)
-FRP (Fast Reverse Proxy) tunnels provide reliable TCP/UDP reverse tunnel functionality. FRP supports both TCP and UDP protocols, with optional IPv6 support for tunneling IPv6 traffic over IPv4 networks.
+| Core | Transport Protocols | Reverse Tunnel | Encryption / Security | Features |
+| :--- | :--- | :---: | :---: | :--- |
+| **GOST** | TCP, UDP, WS, WSS, gRPC, TCPMux | ✅ | TLS, Yamux, Cloudflare CDN | Dual-Node reverse routing, CDN SNI spoofing |
+| **Backhaul** | TCP, UDP, WS, WSMux, TCPMux | ✅ | Sniffer, Keepalive | UDP-over-TCP, low overhead, port-forwarding |
+| **Rathole** | TCP, WS, WSS, Noise | ✅ | Noise Protocol (`Noise_KK_25519_ChaChaPoly_BLAKE2s`) | Auto-isolated core ports, high throughput |
+| **Chisel** | HTTP, WS, WSS | ✅ | SSH / TLS | High-performance TCP reverse tunneling |
+| **FRP** | TCP, UDP, KCP, QUIC, WS | ✅ | TLS, Token Auth | Multi-port mapping, IPv6 over IPv4 |
 
 ---
 
@@ -231,13 +171,6 @@ If you find Smite useful and want to support its development, consider making a 
 - **Tron (TRX)**: `TSAsosG9oHMAjAr3JxPQStj32uAgAUmMp3`
 - **USDT (BEP20)**: `0x5B2eE8970E3B233F79D8c765E75f0705278098a0`
 - **TON**: `UQA-95WAUn_8pig7rsA9mqnuM5juEswKONSlu-jkbUBUhku6`
-
-### Other Ways to Support
-
-- ⭐ Star the repository if you find it useful
-- 🐛 Report bugs and suggest improvements
-- 📖 Improve documentation and translations
-- 🔗 Share with others who might benefit
 
 ---
 
