@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
+import { LatencyBadge } from '../components/LatencyBadge'
 
 // ─── Reapply Progress Types ────────────────────────────────────────────────
 type ReapplyStatus = 'pending' | 'running' | 'success' | 'error'
@@ -273,6 +274,27 @@ const Tunnels = () => {
     }
   }
 
+  const [testingTunnelId, setTestingTunnelId] = useState<string | null>(null)
+
+  const handleTestActiveTunnel = async (tunnel: Tunnel) => {
+    setTestingTunnelId(tunnel.id)
+    try {
+      const response = await api.post(`/tunnels/${tunnel.id}/test`)
+      if (response.data?.status === 'active') {
+        const latency = response.data.latency_ms
+        showToast('success', 'Tunnel Connection Active', `${tunnel.name}: ${latency ? `${latency} ms` : 'Online'} — Healthy and routing traffic`)
+        setTunnels(prev => prev.map(t => t.id === tunnel.id ? { ...t, spec: { ...t.spec, latency_ms: latency } } : t))
+      } else {
+        showToast('error', 'Tunnel Ping Failed', response.data?.message || 'Tunnel is not responding')
+      }
+    } catch (error: any) {
+      const msg = error.response?.data?.detail || error.message || 'Could not test tunnel'
+      showToast('error', 'Test Failed', msg)
+    } finally {
+      setTestingTunnelId(null)
+    }
+  }
+
   // ─── Reapply All — opens progress modal, applies sequentially ──────────
   const handleReapplyAll = () => {
     setShowConfirmReapplyAll(true)
@@ -496,6 +518,7 @@ const Tunnels = () => {
                           <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Ports:</span>
                           <span className="text-sm font-mono font-semibold text-gray-700 dark:text-gray-300">{ports}</span>
                         </div>
+                        <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
                       </div>
 
                       {/* Core Port, Node and Server Info */}
@@ -555,6 +578,19 @@ const Tunnels = () => {
 
                   {/* Action Buttons */}
                   <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleTestActiveTunnel(tunnel)}
+                      disabled={isReapplying || testingTunnelId === tunnel.id}
+                      className="p-2 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      title="Test Live Connection & Ping"
+                      aria-label="Test Live Connection & Ping"
+                    >
+                      {testingTunnelId === tunnel.id ? (
+                        <Loader2 size={18} className="animate-spin text-amber-600" />
+                      ) : (
+                        <Zap size={18} />
+                      )}
+                    </button>
                     <button
                       onClick={() => reapplyTunnel(tunnel)}
                       disabled={isReapplying || !!reapplyingTunnelId}
@@ -866,6 +902,44 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(parsedBackhaul.state)
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(parsedBackhaul.advanced)
   const [showBackhaulAdvanced, setShowBackhaulAdvanced] = useState(false)
+  const [isTestingConfig, setIsTestingConfig] = useState(false)
+  const [testResult, setTestResult] = useState<any | null>(null)
+
+  const handleTestConfig = async () => {
+    setIsTestingConfig(true)
+    setTestResult(null)
+    try {
+      const payload: any = {
+        core: tunnel.core,
+        iran_node_id: tunnel.iran_node_id || tunnel.node_id,
+        foreign_node_id: tunnel.foreign_node_id,
+        ports: tunnel.core === 'backhaul' ? backhaulState.public_port : formData.ports,
+        rathole_token: formData.rathole_token,
+        rathole_transport: formData.rathole_transport,
+        rathole_remote_addr: formData.rathole_remote_addr,
+        frp_token: formData.frp_token,
+        transport: tunnel.core === 'backhaul' ? backhaulState.transport : (tunnel.core === 'rathole' ? formData.rathole_transport : formData.transport_type),
+        is_reverse: formData.is_reverse,
+      }
+      const response = await api.post('/tunnels/test-config', payload)
+      setTestResult(response.data)
+      if (response.data?.valid) {
+        showToast('success', 'Configuration Valid', response.data.summary || 'All checks passed!')
+      } else {
+        showToast('warning', 'Configuration Warning', response.data.summary || 'Some checks failed')
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Could not perform test'
+      showToast('error', 'Test Failed', msg)
+      setTestResult({
+        valid: false,
+        summary: msg,
+        checks: [{ title: 'Connection Error', status: 'failed', detail: msg }]
+      })
+    } finally {
+      setIsTestingConfig(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1571,20 +1645,89 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
             </div>
           )}
 
-          <div className="flex gap-3 justify-end">
+          {/* Pre-flight Diagnostic Box */}
+          {isTestingConfig && (
+            <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 flex items-center gap-3">
+              <Loader2 className="animate-spin text-blue-600 dark:text-blue-400 shrink-0" size={20} />
+              <span className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                Testing node reachability, network ping, and protocol specifications...
+              </span>
+            </div>
+          )}
+
+          {testResult && !isTestingConfig && (
+            <div className={`p-4 rounded-xl border transition-all ${
+              testResult.valid 
+                ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800' 
+                : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  {testResult.valid ? (
+                    <CheckCircle2 className="text-emerald-600 dark:text-emerald-400 shrink-0" size={20} />
+                  ) : (
+                    <AlertTriangle className="text-amber-600 dark:text-amber-400 shrink-0" size={20} />
+                  )}
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                    {testResult.summary}
+                  </span>
+                </div>
+                {testResult.latency_ms && (
+                  <LatencyBadge latency={testResult.latency_ms} status="active" />
+                )}
+              </div>
+
+              <div className="space-y-2 mt-2">
+                {testResult.checks?.map((check: any, idx: number) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    {check.status === 'passed' ? (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold">✓</span>
+                    ) : check.status === 'warning' ? (
+                      <span className="text-amber-600 dark:text-amber-400 font-bold">⚠️</span>
+                    ) : (
+                      <span className="text-rose-600 dark:text-rose-400 font-bold">✕</span>
+                    )}
+                    <div className="flex-1">
+                      <span className="font-semibold text-gray-800 dark:text-gray-200">{check.title}: </span>
+                      <span className="text-gray-600 dark:text-gray-300">{check.detail}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3 justify-between items-center pt-2">
             <button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              onClick={handleTestConfig}
+              disabled={isTestingConfig}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-sm font-medium transition-colors"
             >
-              {t.tunnels.cancel}
+              {isTestingConfig ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Zap size={16} />
+              )}
+              <span>{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
             </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Save Changes
-            </button>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+              >
+                {t.tunnels.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={isTestingConfig}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                Save Changes
+              </button>
+            </div>
           </div>
         </form>
         <BackhaulAdvancedDrawer
@@ -1650,6 +1793,44 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(createDefaultBackhaulState())
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(createDefaultBackhaulAdvancedState())
   const [showBackhaulAdvanced, setShowBackhaulAdvanced] = useState(false)
+  const [isTestingConfig, setIsTestingConfig] = useState(false)
+  const [testResult, setTestResult] = useState<any | null>(null)
+
+  const handleTestConfig = async () => {
+    setIsTestingConfig(true)
+    setTestResult(null)
+    try {
+      const payload: any = {
+        core: formData.core,
+        iran_node_id: formData.iran_node_id || formData.node_id,
+        foreign_node_id: formData.foreign_node_id,
+        ports: formData.core === 'backhaul' ? backhaulState.public_port : formData.ports,
+        rathole_token: formData.rathole_token,
+        rathole_transport: formData.rathole_transport,
+        rathole_remote_addr: formData.rathole_remote_addr,
+        frp_token: formData.frp_token,
+        transport: formData.core === 'backhaul' ? backhaulState.transport : (formData.core === 'rathole' ? formData.rathole_transport : formData.transport_type),
+        is_reverse: formData.is_reverse,
+      }
+      const response = await api.post('/tunnels/test-config', payload)
+      setTestResult(response.data)
+      if (response.data?.valid) {
+        showToast('success', 'Configuration Valid', response.data.summary || 'All checks passed!')
+      } else {
+        showToast('warning', 'Configuration Warning', response.data.summary || 'Some checks failed')
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Could not perform test'
+      showToast('error', 'Test Failed', msg)
+      setTestResult({
+        valid: false,
+        summary: msg,
+        checks: [{ title: 'Connection Error', status: 'failed', detail: msg }]
+      })
+    } finally {
+      setIsTestingConfig(false)
+    }
+  }
 
   // Auto-populate remote_ip with foreign server IP when GOST is selected
   useEffect(() => {
@@ -2561,20 +2742,89 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
             </div>
           )}
 
-          <div className="flex gap-3 justify-end">
+          {/* Pre-flight Diagnostic Box */}
+          {isTestingConfig && (
+            <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 flex items-center gap-3">
+              <Loader2 className="animate-spin text-blue-600 dark:text-blue-400 shrink-0" size={20} />
+              <span className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                Testing node reachability, network ping, and protocol specifications...
+              </span>
+            </div>
+          )}
+
+          {testResult && !isTestingConfig && (
+            <div className={`p-4 rounded-xl border transition-all ${
+              testResult.valid 
+                ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800' 
+                : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  {testResult.valid ? (
+                    <CheckCircle2 className="text-emerald-600 dark:text-emerald-400 shrink-0" size={20} />
+                  ) : (
+                    <AlertTriangle className="text-amber-600 dark:text-amber-400 shrink-0" size={20} />
+                  )}
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                    {testResult.summary}
+                  </span>
+                </div>
+                {testResult.latency_ms && (
+                  <LatencyBadge latency={testResult.latency_ms} status="active" />
+                )}
+              </div>
+
+              <div className="space-y-2 mt-2">
+                {testResult.checks?.map((check: any, idx: number) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    {check.status === 'passed' ? (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold">✓</span>
+                    ) : check.status === 'warning' ? (
+                      <span className="text-amber-600 dark:text-amber-400 font-bold">⚠️</span>
+                    ) : (
+                      <span className="text-rose-600 dark:text-rose-400 font-bold">✕</span>
+                    )}
+                    <div className="flex-1">
+                      <span className="font-semibold text-gray-800 dark:text-gray-200">{check.title}: </span>
+                      <span className="text-gray-600 dark:text-gray-300">{check.detail}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3 justify-between items-center pt-2">
             <button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              onClick={handleTestConfig}
+              disabled={isTestingConfig}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-sm font-medium transition-colors"
             >
-              {t.tunnels.cancel}
+              {isTestingConfig ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Zap size={16} />
+              )}
+              <span>{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
             </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              {t.tunnels.createTunnel}
-            </button>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+              >
+                {t.tunnels.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={isTestingConfig}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {t.tunnels.createTunnel}
+              </button>
+            </div>
           </div>
         </form>
         <BackhaulAdvancedDrawer

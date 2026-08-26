@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 import { Activity, Zap } from 'lucide-react'
 
 interface LatencyBadgeProps {
@@ -7,7 +7,8 @@ interface LatencyBadgeProps {
 }
 
 export const LatencyBadge: React.FC<LatencyBadgeProps> = ({ latency, status }) => {
-  if (status !== 'connected' || latency === undefined || latency === null || latency <= 0) {
+  const isOnline = !status || status === 'connected' || status === 'active'
+  if (!isOnline || latency === undefined || latency === null || latency <= 0) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-mono text-gray-400 dark:text-gray-500 select-none">
         <span className="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600"></span>
