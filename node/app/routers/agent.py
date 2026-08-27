@@ -75,3 +75,25 @@ async def get_status(request: Request):
         "tunnels": list(adapter_manager.active_tunnels.keys())
     }
 
+
+class AdapterSync(BaseModel):
+    code: str
+
+
+@router.post("/system/sync_adapters")
+async def sync_adapters(data: AdapterSync):
+    """Sync and hot-update core adapters from panel"""
+    try:
+        from pathlib import Path
+        for target in ["/app/app/core_adapters.py", "/opt/smite-node/app/core_adapters.py", "app/core_adapters.py"]:
+            p = Path(target)
+            if p.parent.exists():
+                p.write_text(data.code, encoding="utf-8")
+                logger.info(f"Successfully updated adapters at {target}")
+                return {"status": "success", "message": f"Adapters updated at {target}"}
+        return {"status": "error", "message": "Target path not found"}
+    except Exception as e:
+        logger.error(f"Failed to sync adapters: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
