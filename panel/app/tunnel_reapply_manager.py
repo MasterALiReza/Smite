@@ -187,6 +187,7 @@ class TunnelReapplyManager:
                 except Exception as e:
                     logger.error(f"Error reapplying tunnel {tunnel.id}: {e}", exc_info=True)
                     failed += 1
+                await asyncio.sleep(0.15)
             
             logger.info(f"Auto reapply completed: {applied} applied, {failed} failed")
 

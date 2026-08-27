@@ -667,20 +667,6 @@ class BackhaulAdapter:
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"server": server_config}), encoding="utf-8")
-            
-            # Free ports before starting Backhaul server
-            try:
-                _, b_port, _ = parse_address_port(bind_addr)
-                if b_port:
-                    await free_port(b_port)
-            except Exception:
-                pass
-            for p in ports:
-                try:
-                    p_str = str(p).split('=')[0].strip()
-                    await free_port(int(p_str))
-                except Exception:
-                    pass
 
             binary_path = self._resolve_binary_path()
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
@@ -790,20 +776,7 @@ class BackhaulAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        if config_path.exists():
-            try:
-                content = config_path.read_text(encoding="utf-8", errors="ignore")
-                for line in content.splitlines():
-                    if any(k in line for k in ["bind_addr", "web_port", "ports"]) and ":" in line:
-                        for part in line.replace('"', '').replace("'", "").replace("[", "").replace("]", "").split(","):
-                            if ":" in part:
-                                p_str = part.split(":")[-1].strip()
-                                if p_str.isdigit():
-                                    await free_port(int(p_str))
-            except Exception:
-                pass
-
-        await safe_stop_subprocess(proc, patterns=[f"backhaul.*{tunnel_id}"])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id])
 
         if config_path.exists():
             try:
@@ -905,39 +878,24 @@ class ChiselAdapter:
         mode = spec.get('mode', 'client')
         
         if mode == 'server':
-            server_port = spec.get('server_port') or spec.get('control_port') or spec.get('listen_port')
-            if not server_port:
-                raise ValueError("Chisel server requires 'server_port' or 'control_port' in spec")
+            control_port = spec.get('control_port') or spec.get('listen_port') or 8080
+            auth_token = spec.get('token') or spec.get('auth_token')
+            key = spec.get('key')
+            reverse_only = spec.get('reverse_only', True)
             
-            reverse_port = spec.get('reverse_port') or spec.get('remote_port') or spec.get('listen_port')
-            if not reverse_port:
-                raise ValueError("Chisel server requires 'reverse_port' or 'remote_port' in spec")
-            
-            host = "0.0.0.0"
-            binary_path = self._resolve_binary_path()
-            cmd = [
-                str(binary_path),
-                "server",
-                "--host", host,
-                "--port", str(server_port),
-                "--reverse",
-                "--keepalive", "25s"
-            ]
-            
-            auth = spec.get('auth')
-            if auth:
-                cmd.extend(["--auth", auth])
-            
-            fingerprint = spec.get('fingerprint')
-            if fingerprint:
-                cmd.extend(["--fingerprint", fingerprint])
+            cmd = ["chisel", "server", "--port", str(control_port)]
+            if auth_token:
+                cmd.extend(["--auth", auth_token])
+            if key:
+                cmd.extend(["--key", key])
+            if reverse_only:
+                cmd.append("--reverse")
             
             log_file = self.config_dir / f"{tunnel_id}.log"
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
-                log_f.write(f"server_port={server_port}, reverse_port={reverse_port}\n")
                 log_f.flush()
                 proc = await asyncio.create_subprocess_exec(*cmd,
                     stdout=log_f,
@@ -949,67 +907,67 @@ class ChiselAdapter:
                 log_f.close()
                 raise RuntimeError("chisel binary not found. Please install chisel.")
         else:
-            server_url = spec.get('server_url', '').strip()
+            server_url = spec.get('server_url') or spec.get('remote_addr') or spec.get('server_addr')
+            if not server_url:
+                raise ValueError("Chisel client requires 'server_url' or 'remote_addr' in spec")
             
-            # Support multiple ports
+            if not server_url.startswith("http://") and not server_url.startswith("https://"):
+                server_url = f"http://{server_url}"
+            
+            auth_token = spec.get('token') or spec.get('auth_token')
+            fingerprint = spec.get('fingerprint')
+            keepalive = spec.get('keepalive', '25s')
+            max_retry_count = spec.get('max_retry_count')
+            max_retry_interval = spec.get('max_retry_interval')
+            
+            reverse_specs = []
             ports = spec.get('ports') or []
             if not ports:
-                # Fallback to single port for backward compatibility
-                reverse_port = spec.get('reverse_port') or spec.get('remote_port') or spec.get('listen_port') or spec.get('server_port')
-                if reverse_port:
-                    ports = [int(reverse_port) if isinstance(reverse_port, (int, str)) and str(reverse_port).isdigit() else reverse_port]
+                local_port = spec.get('local_port') or spec.get('port')
+                remote_port = spec.get('remote_port')
+                if local_port and remote_port:
+                    reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
+                elif local_port:
+                    reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
+            else:
+                for port_item in ports:
+                    if isinstance(port_item, dict):
+                        local_p = port_item.get('local_port') or port_item.get('port')
+                        remote_p = port_item.get('remote_port') or local_p
+                        if local_p:
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
+                    elif isinstance(port_item, str) and ":" in port_item:
+                        parts = port_item.split(":")
+                        if len(parts) == 2:
+                            remote_p, local_p = parts
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
+                    else:
+                        port_num = int(port_item) if isinstance(port_item, (int, str)) and str(port_item).isdigit() else port_item
+                        reverse_specs.append(f"R:{port_num}:127.0.0.1:{port_num}")
             
-            if not server_url:
-                raise ValueError("Chisel client requires 'server_url' (foreign server address) in spec")
-            if not ports:
-                raise ValueError("Chisel client requires 'ports' array or 'reverse_port'/'remote_port'/'listen_port' in spec")
+            if not reverse_specs:
+                raise ValueError("Chisel client requires at least one port mapping (R:remote:local)")
             
-            binary_path = self._resolve_binary_path()
-            cmd = [
-                str(binary_path),
-                "client",
-                "--keepalive", "25s",
-                "--max-retry-count", "5",
-                "--max-retry-interval", "30s"
-            ]
-            
-            auth = spec.get('auth')
-            if auth:
-                cmd.extend(["--auth", auth])
-            
-            fingerprint = spec.get('fingerprint')
+            cmd = ["chisel", "client"]
+            if auth_token:
+                cmd.extend(["--auth", auth_token])
             if fingerprint:
                 cmd.extend(["--fingerprint", fingerprint])
+            if keepalive:
+                cmd.extend(["--keepalive", keepalive])
+            if max_retry_count is not None:
+                cmd.extend(["--max-retry-count", str(max_retry_count)])
+            if max_retry_interval:
+                cmd.extend(["--max-retry-interval", max_retry_interval])
             
             cmd.append(server_url)
-            
-            # Add multiple reverse specs for multiple ports
-            for port in ports:
-                port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                local_addr = spec.get('local_addr')
-                if not local_addr:
-                    local_addr = f"127.0.0.1:{port_num}"
-                
-                host, local_port, is_ipv6 = parse_address_port(local_addr)
-                if not local_port:
-                    host = "127.0.0.1"
-                    local_port = port_num
-                
-                if is_ipv6:
-                    reverse_spec = f"R:{port_num}:[{host}]:{local_port}"
-                else:
-                    reverse_spec = f"R:{port_num}:{host}:{local_port}"
-                cmd.append(reverse_spec)
-            
-            reverse_specs = [f"R:{port}:127.0.0.1:{port}" for port in ports]
-            logger.info(f"Chisel tunnel {tunnel_id}: ports={ports}, server_url={server_url}")
+            cmd.extend(reverse_specs)
             
             log_file = self.config_dir / f"{tunnel_id}.log"
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
-                log_f.write(f"server_url={server_url}, reverse_specs={', '.join(reverse_specs)}\n")
                 log_f.flush()
                 proc = await asyncio.create_subprocess_exec(*cmd,
                     stdout=log_f,
@@ -1023,7 +981,7 @@ class ChiselAdapter:
         
         self.log_handles[tunnel_id] = log_f
         self.processes[tunnel_id] = proc
-        await asyncio.sleep(1.0)  # Give it more time to start
+        await asyncio.sleep(1.0)
         if proc.returncode is not None:
             stderr = ""
             if log_file.exists():
@@ -1047,7 +1005,7 @@ class ChiselAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        await safe_stop_subprocess(proc, patterns=[f"chisel.*{tunnel_id}"])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id])
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -1113,7 +1071,6 @@ class FrpAdapter:
                 bind_port = int(bind_port)
             elif not isinstance(bind_port, int):
                 bind_port = 7000
-            await free_port(bind_port)
             token = spec.get('token')
             force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls'])
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
@@ -1362,25 +1319,9 @@ transport:
                 pass
             del self.log_handles[tunnel_id]
 
-        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
-            cfg_path = self.config_dir / cfg_name
-            if cfg_path.exists():
-                try:
-                    content = cfg_path.read_text(encoding="utf-8", errors="ignore")
-                    for line in content.splitlines():
-                        if any(k in line for k in ["bindPort", "bind_port", "remotePort", "remote_port", "localPort", "local_port", "listenPort"]) and ":" in line:
-                            p_str = line.split(":")[-1].replace('"', '').replace("'", "").strip()
-                            if p_str.isdigit():
-                                await free_port(int(p_str))
-                except Exception:
-                    pass
-
         await safe_stop_subprocess(
             proc,
-            patterns=[
-                f"frps.*{tunnel_id}",
-                f"frpc.*{tunnel_id}",
-            ]
+            patterns=[tunnel_id]
         )
 
         for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
@@ -1460,13 +1401,7 @@ class GostAdapter:
         security_type = spec.get('security_type', 'none')
         use_ipv6 = spec.get('use_ipv6', False)
         
-        # CDN Mode Logic
-        if spec.get("cdn_mode") and transport_type in ["tcp", "tcp+udp"]:
-            transport_type = "ws"
-        
-        if transport_type == "websocket":
-            transport_type = "ws"
-        elif transport_type in ["multiplex ws", "multiplex_ws"]:
+        if transport_type in ["multiplex ws", "multiplex_ws"]:
             transport_type = "mws"
 
         gost_type = transport_type
@@ -1914,18 +1849,6 @@ class GostAdapter:
         except Exception:
             pass
 
-        # Free all listening ports before starting GOST
-        if mode == 'server':
-            await free_port(control_port)
-        else:
-            for p in ports:
-                try:
-                    await free_port(int(p))
-                except Exception:
-                    pass
-            if is_reverse:
-                await free_port(control_port)
-
         binary_path = self._resolve_binary_path()
         cmd = [str(binary_path), "-C", str(config_file)]
         
@@ -1977,20 +1900,8 @@ class GostAdapter:
             del self.log_handles[tunnel_id]
 
         config_file = self.config_dir / f"{tunnel_id}.json"
-        if config_file.exists():
-            try:
-                import json
-                cfg_data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
-                for srv in cfg_data.get("services", []):
-                    addr = srv.get("addr", "")
-                    if ":" in addr:
-                        p_str = addr.split(":")[-1].strip()
-                        if p_str.isdigit():
-                            await free_port(int(p_str))
-            except Exception:
-                pass
-
-        await safe_stop_subprocess(proc, patterns=[f"gost.*{tunnel_id}"])
+        
+        await safe_stop_subprocess(proc, patterns=[tunnel_id])
 
         if config_file.exists():
             try:
