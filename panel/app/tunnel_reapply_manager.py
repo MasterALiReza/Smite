@@ -410,8 +410,14 @@ class TunnelReapplyManager:
                             client_spec["remote_addr"] = f"[{iran_node_ip}]:{control_port}"
                         else:
                             client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
+                    
+                    tunnel_type = tunnel.type.lower() if tunnel.type else (server_spec.get("tunnel_type") or "tcp")
+                    server_spec["tunnel_type"] = tunnel_type
+                    server_spec["type"] = tunnel_type
                     client_spec["token"] = token
                     client_spec["transport"] = transport
+                    client_spec["tunnel_type"] = tunnel_type
+                    client_spec["type"] = tunnel_type
                     client_spec["ports"] = ports
                 
                 elif tunnel.core == "gost":

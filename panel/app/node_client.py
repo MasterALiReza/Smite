@@ -37,25 +37,29 @@ class NodeClient:
         frp_settings = await self._get_frp_settings()
         
         if frp_settings and frp_settings.get("enabled"):
+            node_role = node.node_metadata.get("role") if node.node_metadata else None
+            node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
+            
+            # Local or collocated Iran nodes should always use direct local connection
+            if node_role == "iran" or node_ip in ["127.0.0.1", "localhost"]:
+                node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
+                if not node_address.startswith("http"):
+                    node_address = f"http://{node_address}"
+                return (node_address, False)
+
             frp_remote_port = node.node_metadata.get("frp_remote_port") if node.node_metadata else None
             if frp_remote_port:
-                # Verify FRP server is running before using FRP
                 from app.frp_comm_manager import frp_comm_manager
                 if not frp_comm_manager.is_running():
                     logger.warning(f"[HTTP] FRP enabled but FRP server not running, falling back to HTTP for node {node.id}")
-                    # Fall through to HTTP
                 else:
-                    # Use FRP - the server is running, tunnel should be available
-                    # Note: If connection fails, retry logic will handle it
                     logger.info(f"[FRP] Using FRP tunnel to communicate with node {node.id} (remote_port={frp_remote_port})")
                     return (f"http://127.0.0.1:{frp_remote_port}", True)
             else:
-                # FRP is enabled but node hasn't reported its remote port yet (during initial setup)
                 logger.warning(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
-                logger.warning(f"[HTTP] This should only happen during node registration. After FRP setup, all communication will use FRP.")
         
-        # FRP is not enabled or not available - use HTTP
-        node_address = node.node_metadata.get("api_address", f"http://localhost:8888") if node.node_metadata else f"http://localhost:8888"
+        # Direct HTTP
+        node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
         if not node_address.startswith("http"):
             node_address = f"http://{node_address}"
         logger.info(f"[HTTP] Using direct HTTP to communicate with node {node.id} at {node_address}")
