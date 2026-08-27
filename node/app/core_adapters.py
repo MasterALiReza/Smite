@@ -518,17 +518,6 @@ nodelay = true
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         
-        if config_path.exists():
-            try:
-                content = config_path.read_text(encoding="utf-8", errors="ignore")
-                for line in content.splitlines():
-                    if any(k in line for k in ["bind_addr", "local_addr", "remote_addr"]) and ":" in line:
-                        p_str = line.split(":")[-1].replace('"', '').replace("'", "").strip()
-                        if p_str.isdigit():
-                            await free_port(int(p_str))
-            except Exception:
-                pass
-
         await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}", f"-s.*{tunnel_id}", f"-c.*{tunnel_id}"])
             
         if config_path.exists():

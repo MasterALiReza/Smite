@@ -41,7 +41,9 @@ class NodeClient:
             node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
             
             # Local or collocated Iran nodes should always use direct local connection
-            if node_role == "iran" or node_ip in ["127.0.0.1", "localhost"]:
+            if node_role == "iran" or node_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
+                if node_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
+                    return ("http://127.0.0.1:8888", False)
                 node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
                 if not node_address.startswith("http"):
                     node_address = f"http://{node_address}"
@@ -59,13 +61,20 @@ class NodeClient:
                 logger.warning(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
         
         # Direct HTTP
+        if node.node_metadata and node.node_metadata.get("ip_address") in ["127.0.0.1", "localhost", "178.239.146.188"]:
+            return ("http://127.0.0.1:8888", False)
         node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
         if not node_address.startswith("http"):
             node_address = f"http://{node_address}"
         logger.info(f"[HTTP] Using direct HTTP to communicate with node {node.id} at {node_address}")
         return (node_address, False)
     
-    async def send_to_node(self, node_id: str, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_to_node(
+        self, 
+        node_id: str, 
+        endpoint: str, 
+        data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Send request to node via HTTPS or FRP
         """
@@ -83,8 +92,8 @@ class NodeClient:
             logger.debug(f"[{comm_type}] Sending request to node {node_id}: {endpoint}")
             
             try:
-                # Retry logic for FRP connections which may need a moment to stabilize
-                max_retries = 5 if using_frp else 1
+                # Retry logic for connections
+                max_retries = 5 if using_frp else 3
                 last_error = None
                 
                 for attempt in range(max_retries):
