@@ -811,6 +811,19 @@ class BackhaulAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
+        if config_path.exists():
+            try:
+                content = config_path.read_text(encoding="utf-8", errors="ignore")
+                for line in content.splitlines():
+                    if any(k in line for k in ["bind_addr", "web_port", "ports"]) and ":" in line:
+                        for part in line.replace('"', '').replace("'", "").replace("[", "").replace("]", "").split(","):
+                            if ":" in part:
+                                p_str = part.split(":")[-1].strip()
+                                if p_str.isdigit():
+                                    await free_port(int(p_str))
+            except Exception:
+                pass
+
         await safe_stop_subprocess(proc, patterns=[f"backhaul.*{tunnel_id}"])
 
         if config_path.exists():
@@ -1369,6 +1382,19 @@ transport:
             except Exception:
                 pass
             del self.log_handles[tunnel_id]
+
+        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
+            cfg_path = self.config_dir / cfg_name
+            if cfg_path.exists():
+                try:
+                    content = cfg_path.read_text(encoding="utf-8", errors="ignore")
+                    for line in content.splitlines():
+                        if any(k in line for k in ["bindPort", "bind_port", "remotePort", "remote_port", "localPort", "local_port", "listenPort"]) and ":" in line:
+                            p_str = line.split(":")[-1].replace('"', '').replace("'", "").strip()
+                            if p_str.isdigit():
+                                await free_port(int(p_str))
+                except Exception:
+                    pass
 
         await safe_stop_subprocess(
             proc,
@@ -1971,9 +1997,22 @@ class GostAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
+        config_file = self.config_dir / f"{tunnel_id}.json"
+        if config_file.exists():
+            try:
+                import json
+                cfg_data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
+                for srv in cfg_data.get("services", []):
+                    addr = srv.get("addr", "")
+                    if ":" in addr:
+                        p_str = addr.split(":")[-1].strip()
+                        if p_str.isdigit():
+                            await free_port(int(p_str))
+            except Exception:
+                pass
+
         await safe_stop_subprocess(proc, patterns=[f"gost.*{tunnel_id}"])
 
-        config_file = self.config_dir / f"{tunnel_id}.json"
         if config_file.exists():
             try:
                 config_file.unlink()
