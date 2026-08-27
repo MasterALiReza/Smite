@@ -66,8 +66,26 @@ def _find_pids_by_port_procfs(port: int) -> Set[int]:
     return pids
 
 
+ALLOWED_CORE_BINARIES = {"rathole", "backhaul", "frps", "frpc", "gost", "chisel"}
+
+
+def _is_safe_core_process(pid: int) -> bool:
+    """Check if a process belongs to a known proxy core binary before terminating."""
+    try:
+        p = psutil.Process(pid)
+        name = p.name().lower()
+        if any(c in name for c in ALLOWED_CORE_BINARIES):
+            return True
+        cmdline = " ".join(p.cmdline()).lower()
+        if any(c in cmdline for c in ALLOWED_CORE_BINARIES):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def free_port(port: Optional[Any]) -> None:
-    """Safely and aggressively terminate any process holding the specified port."""
+    """Safely terminate any core proxy process holding the specified port without affecting system or node services."""
     if not port:
         return
     try:
@@ -78,15 +96,14 @@ async def free_port(port: Optional[Any]) -> None:
         return
     
     current_pid = os.getpid()
-    
     ignored_pids = {current_pid, os.getppid(), 1}
     
-    # Method 1: Linux /proc/net + /proc/{pid}/fd scan (direct kernel socket lookup)
+    # Method 1: Linux /proc/net + /proc/{pid}/fd scan
     try:
         pids = _find_pids_by_port_procfs(port_num)
         for pid in pids:
-            if pid not in ignored_pids:
-                logger.warning(f"Kernel socket scan: terminating process {pid} holding port {port_num}")
+            if pid not in ignored_pids and _is_safe_core_process(pid):
+                logger.warning(f"Kernel socket scan: terminating core process {pid} holding port {port_num}")
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except Exception:
@@ -97,12 +114,14 @@ async def free_port(port: Optional[Any]) -> None:
     # Method 2: psutil process and connection scanning
     try:
         for p in psutil.process_iter(['pid', 'name']):
-            if p.pid == current_pid:
+            if p.pid in ignored_pids:
                 continue
             try:
+                if not _is_safe_core_process(p.pid):
+                    continue
                 for conn in p.net_connections(kind='all'):
                     if conn.laddr and conn.laddr.port == port_num:
-                        logger.warning(f"psutil: Terminating process {p.pid} ({p.name()}) holding port {port_num}")
+                        logger.warning(f"psutil: Terminating core process {p.pid} ({p.name()}) holding port {port_num}")
                         p.kill()
                         try:
                             p.wait(timeout=0.5)
@@ -115,17 +134,6 @@ async def free_port(port: Optional[Any]) -> None:
     except Exception as e:
         logger.debug(f"Error freeing port {port_num} via psutil: {e}")
 
-    # Method 3: fuser tool fallback if available
-    for proto in ["tcp", "udp"]:
-        try:
-            fuser_proc = await asyncio.create_subprocess_exec(
-                "fuser", "-k", "-9", f"{port_num}/{proto}",
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            await asyncio.wait_for(fuser_proc.wait(), timeout=0.5)
-        except Exception:
-            pass
 
 
 async def safe_stop_subprocess(
@@ -173,34 +181,24 @@ async def safe_stop_subprocess(
 
     if patterns:
         current_pid = os.getpid()
+        ignored_pids = {current_pid, os.getppid(), 1}
         for p in psutil.process_iter(['pid', 'name', 'cmdline']):
-            if p.pid == current_pid:
+            if p.pid in ignored_pids:
                 continue
             try:
+                if not _is_safe_core_process(p.pid):
+                    continue
                 cmdline_str = " ".join(p.info.get('cmdline') or [])
                 for pat in patterns:
-                    if pat and pat in cmdline_str:
-                        logger.info(f"Terminating orphan process {p.pid} matching '{pat}'")
+                    if pat and str(pat).strip() in cmdline_str:
+                        logger.info(f"Terminating orphan core process {p.pid} matching '{pat}'")
                         p.kill()
                         try:
-                            p.wait(timeout=1.0)
+                            p.wait(timeout=0.5)
                         except Exception:
                             pass
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-            except Exception:
-                pass
-
-        for pat in patterns:
-            if not pat or not str(pat).strip():
-                continue
-            try:
-                kill_proc = await asyncio.create_subprocess_exec(
-                    "pkill", "-9", "-f", str(pat),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                await asyncio.wait_for(kill_proc.wait(), timeout=2.0)
             except Exception:
                 pass
 
@@ -375,16 +373,6 @@ nodelay = true
             config_path = self.config_dir / f"{tunnel_id}.toml"
             with open(config_path, "w") as f:
                 f.write(config)
-            
-            # Free ports before launching rathole server
-            await free_port(bind_port)
-            for port in ports:
-                try:
-                    p_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
-                    await free_port(p_num)
-                except Exception:
-                    pass
-            await asyncio.sleep(0.3)
 
             try:
                 proc = await asyncio.create_subprocess_exec(*["/usr/local/bin/rathole", "-s", str(config_path)],
@@ -518,7 +506,7 @@ nodelay = true
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         
-        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}", f"-s.*{tunnel_id}", f"-c.*{tunnel_id}"])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id])
             
         if config_path.exists():
             try:
