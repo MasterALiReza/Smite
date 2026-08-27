@@ -79,11 +79,13 @@ async def free_port(port: Optional[Any]) -> None:
     
     current_pid = os.getpid()
     
+    ignored_pids = {current_pid, os.getppid(), 1}
+    
     # Method 1: Linux /proc/net + /proc/{pid}/fd scan (direct kernel socket lookup)
     try:
         pids = _find_pids_by_port_procfs(port_num)
         for pid in pids:
-            if pid != current_pid:
+            if pid not in ignored_pids:
                 logger.warning(f"Kernel socket scan: terminating process {pid} holding port {port_num}")
                 try:
                     os.kill(pid, signal.SIGKILL)
@@ -165,7 +167,7 @@ async def safe_stop_subprocess(
                     pass
             try:
                 proc.kill()
-                await proc.wait()
+                await asyncio.wait_for(proc.wait(), timeout=1.5)
             except Exception:
                 pass
 

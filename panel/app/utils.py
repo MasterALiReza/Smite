@@ -161,10 +161,12 @@ def generate_noise_keypair() -> tuple[str, str]:
             base64.b64encode(pub_bytes).decode("utf-8")
         )
     except Exception:
-        # Fallback in case cryptography module fails
+        import secrets
+        rnd_priv = secrets.token_bytes(32)
+        rnd_pub = secrets.token_bytes(32)
         return (
-            base64.b64encode(priv_bytes).decode("utf-8"),
-            base64.b64encode(priv_bytes).decode("utf-8")
+            base64.b64encode(rnd_priv).decode("utf-8"),
+            base64.b64encode(rnd_pub).decode("utf-8")
         )
 
 
