@@ -9,6 +9,7 @@ services:
       dockerfile: Dockerfile
     container_name: smite-node
     network_mode: host
+    pid: host
     cap_add:
       - NET_ADMIN
       - SYS_MODULE

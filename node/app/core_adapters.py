@@ -1,5 +1,5 @@
 """Core adapters for different tunnel types"""
-from typing import Protocol, Dict, Any, Optional, List
+from typing import Protocol, Dict, Any, Optional, List, Set
 from pathlib import Path
 import subprocess
 import asyncio
@@ -18,6 +18,54 @@ def sanitize_config_str(val: Any) -> str:
         return ""
     return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
 
+def _find_pids_by_port_procfs(port: int) -> Set[int]:
+    """Find process IDs holding a port by scanning Linux /proc net entries and fds directly."""
+    hex_p = f"{port:04X}"
+    inodes: Set[str] = set()
+    for proto in ["tcp", "tcp6", "udp", "udp6"]:
+        path = f"/proc/net/{proto}"
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 10:
+                        local_addr = parts[1]
+                        if ":" in local_addr and local_addr.split(":")[1].upper() == hex_p:
+                            inode = parts[9]
+                            if inode != "0":
+                                inodes.add(inode)
+        except Exception:
+            pass
+    
+    if not inodes:
+        return set()
+    
+    pids: Set[int] = set()
+    if os.path.exists("/proc"):
+        try:
+            for proc_entry in os.scandir("/proc"):
+                if proc_entry.is_dir() and proc_entry.name.isdigit():
+                    pid = int(proc_entry.name)
+                    fd_dir = f"/proc/{pid}/fd"
+                    try:
+                        for fd_entry in os.scandir(fd_dir):
+                            try:
+                                target = os.readlink(fd_entry.path)
+                                for inode in inodes:
+                                    if f"[{inode}]" in target:
+                                        pids.add(pid)
+                                        break
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return pids
+
+
 async def free_port(port: Optional[Any]) -> None:
     """Safely and aggressively terminate any process holding the specified port."""
     if not port:
@@ -30,6 +78,21 @@ async def free_port(port: Optional[Any]) -> None:
         return
     
     current_pid = os.getpid()
+    
+    # Method 1: Linux /proc/net + /proc/{pid}/fd scan (direct kernel socket lookup)
+    try:
+        pids = _find_pids_by_port_procfs(port_num)
+        for pid in pids:
+            if pid != current_pid:
+                logger.warning(f"Kernel socket scan: terminating process {pid} holding port {port_num}")
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug(f"Error in procfs port scan for port {port_num}: {e}")
+
+    # Method 2: psutil process and connection scanning
     try:
         for p in psutil.process_iter(['pid', 'name']):
             if p.pid == current_pid:
@@ -37,10 +100,10 @@ async def free_port(port: Optional[Any]) -> None:
             try:
                 for conn in p.net_connections(kind='all'):
                     if conn.laddr and conn.laddr.port == port_num:
-                        logger.warning(f"Terminating process {p.pid} ({p.name()}) holding port {port_num}")
+                        logger.warning(f"psutil: Terminating process {p.pid} ({p.name()}) holding port {port_num}")
                         p.kill()
                         try:
-                            p.wait(timeout=1.0)
+                            p.wait(timeout=0.5)
                         except Exception:
                             pass
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -48,27 +111,19 @@ async def free_port(port: Optional[Any]) -> None:
             except Exception:
                 pass
     except Exception as e:
-        logger.debug(f"Error freeing port {port_num}: {e}")
+        logger.debug(f"Error freeing port {port_num} via psutil: {e}")
 
-    try:
-        fuser_proc = await asyncio.create_subprocess_exec(
-            "fuser", "-k", "-9", f"{port_num}/tcp",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        await asyncio.wait_for(fuser_proc.wait(), timeout=1.0)
-    except Exception:
-        pass
-
-    try:
-        fuser_udp = await asyncio.create_subprocess_exec(
-            "fuser", "-k", "-9", f"{port_num}/udp",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        await asyncio.wait_for(fuser_udp.wait(), timeout=1.0)
-    except Exception:
-        pass
+    # Method 3: fuser tool fallback if available
+    for proto in ["tcp", "udp"]:
+        try:
+            fuser_proc = await asyncio.create_subprocess_exec(
+                "fuser", "-k", "-9", f"{port_num}/{proto}",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            await asyncio.wait_for(fuser_proc.wait(), timeout=0.5)
+        except Exception:
+            pass
 
 
 async def safe_stop_subprocess(
@@ -460,16 +515,22 @@ nodelay = true
         """Remove Rathole tunnel"""
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
-        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}", f"-s.*{tunnel_id}", f"-c.*{tunnel_id}"])
-            
+        
         if config_path.exists():
             try:
                 content = config_path.read_text(encoding="utf-8", errors="ignore")
                 for line in content.splitlines():
-                    if "bind_addr" in line and ":" in line:
+                    if any(k in line for k in ["bind_addr", "local_addr", "remote_addr"]) and ":" in line:
                         p_str = line.split(":")[-1].replace('"', '').replace("'", "").strip()
                         if p_str.isdigit():
                             await free_port(int(p_str))
+            except Exception:
+                pass
+
+        await safe_stop_subprocess(proc, patterns=[f"rathole.*{tunnel_id}", f"-s.*{tunnel_id}", f"-c.*{tunnel_id}"])
+            
+        if config_path.exists():
+            try:
                 config_path.unlink()
             except Exception:
                 pass
