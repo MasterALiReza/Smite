@@ -84,6 +84,72 @@ def _is_safe_core_process(pid: int) -> bool:
     return False
 
 
+def _get_pid_dir() -> Path:
+    base = Path("/var/lib/smite-node/pids")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    except Exception:
+        fallback = Path("./data/pids")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def _save_tunnel_pid(tunnel_id: str, pid: int) -> None:
+    """Save running tunnel process PID to disk for zero-downtime adoption across restarts."""
+    try:
+        pdir = _get_pid_dir()
+        (pdir / f"{tunnel_id}.pid").write_text(str(pid))
+    except Exception as e:
+        logger.debug(f"Failed to save PID for tunnel {tunnel_id}: {e}")
+
+
+def _remove_tunnel_pid(tunnel_id: str) -> None:
+    """Remove tunnel PID record from disk."""
+    try:
+        pdir = _get_pid_dir()
+        pid_file = pdir / f"{tunnel_id}.pid"
+        if pid_file.exists():
+            pid_file.unlink()
+    except Exception:
+        pass
+
+
+def _get_tunnel_pid(tunnel_id: str) -> Optional[int]:
+    """Retrieve recorded PID for a tunnel."""
+    try:
+        pdir = _get_pid_dir()
+        pid_file = pdir / f"{tunnel_id}.pid"
+        if pid_file.exists():
+            content = pid_file.read_text().strip()
+            if content.isdigit():
+                return int(content)
+    except Exception:
+        pass
+    return None
+
+
+def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> bool:
+    """Check if the detached tunnel process is still active and healthy on the host."""
+    pid = _get_tunnel_pid(tunnel_id)
+    if not pid:
+        return False
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        p = psutil.Process(pid)
+        if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
+            return False
+        if not _is_safe_core_process(pid):
+            return False
+        cmdline = " ".join(p.cmdline()).lower()
+        if tunnel_id.lower() in cmdline or (core_name and core_name.lower() in p.name().lower()):
+            return True
+        return True
+    except Exception:
+        return False
+
+
 async def free_port(port: Optional[Any]) -> None:
     """Safely terminate any core proxy process holding the specified port without affecting system or node services."""
     if not port:
@@ -149,7 +215,9 @@ async def safe_stop_subprocess(
         if os.name == 'posix':
             try:
                 pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, signal.SIGTERM)
+                my_pgid = os.getpgid(os.getpid())
+                if pgid != my_pgid and pgid > 1:
+                    os.killpg(pgid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
             except Exception as e:
@@ -168,7 +236,9 @@ async def safe_stop_subprocess(
             if os.name == 'posix':
                 try:
                     pgid = os.getpgid(proc.pid)
-                    os.killpg(pgid, signal.SIGKILL)
+                    my_pgid = os.getpgid(os.getpid())
+                    if pgid != my_pgid and pgid > 1:
+                        os.killpg(pgid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
                 except Exception:
@@ -201,6 +271,14 @@ async def safe_stop_subprocess(
                 continue
             except Exception:
                 pass
+
+async def _spawn_core_subprocess(cmd: List[str]) -> asyncio.subprocess.Process:
+    """Spawns a core process with a dedicated process group so signals never hit uvicorn"""
+    kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    if os.name == 'posix':
+        kwargs["start_new_session"] = True
+    return await asyncio.create_subprocess_exec(*cmd, **kwargs)
+
 
 def parse_address_port(address_str: str):
     """Parse address:port string, returns (host, port, is_ipv6)"""
@@ -375,15 +453,9 @@ nodelay = true
                 f.write(config)
 
             try:
-                proc = await asyncio.create_subprocess_exec(*["/usr/local/bin/rathole", "-s", str(config_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
+                proc = await _spawn_core_subprocess(["/usr/local/bin/rathole", "-s", str(config_path)])
             except FileNotFoundError:
-                proc = await asyncio.create_subprocess_exec(*["rathole", "-s", str(config_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
+                proc = await _spawn_core_subprocess(["rathole", "-s", str(config_path)])
         else:
             remote_addr = spec.get('remote_addr', '').strip()
             token = spec.get('token', '').strip()
@@ -485,24 +557,21 @@ nodelay = true
                 f.write(config)
             
             try:
-                proc = await asyncio.create_subprocess_exec(*["/usr/local/bin/rathole", "-c", str(config_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
+                proc = await _spawn_core_subprocess(["/usr/local/bin/rathole", "-c", str(config_path)])
             except FileNotFoundError:
-                proc = await asyncio.create_subprocess_exec(*["rathole", "-c", str(config_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
+                proc = await _spawn_core_subprocess(["rathole", "-c", str(config_path)])
         
         self.processes[tunnel_id] = proc
+        _save_tunnel_pid(tunnel_id, proc.pid)
         await asyncio.sleep(0.5)
         if proc.returncode is not None:
+            _remove_tunnel_pid(tunnel_id)
             stderr = (await proc.stderr.read()).decode() if proc.stderr else "Unknown error"
             raise RuntimeError(f"rathole failed to start: {stderr}")
     
     async def remove(self, tunnel_id: str):
         """Remove Rathole tunnel"""
+        _remove_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         
@@ -522,6 +591,9 @@ nodelay = true
         if tunnel_id in self.processes:
             proc = self.processes[tunnel_id]
             is_running = proc.returncode is None
+        
+        if not is_running:
+            is_running = _is_tunnel_pid_alive(tunnel_id, "rathole")
         
         return {
             "active": config_path.exists() and is_running,
@@ -761,12 +833,15 @@ class BackhaulAdapter:
             except Exception:
                 pass
             log_fh.close()
+            _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"backhaul failed to start: {error_output}")
 
         self.processes[tunnel_id] = proc
+        _save_tunnel_pid(tunnel_id, proc.pid)
         self.log_handles[tunnel_id] = log_fh
 
     async def remove(self, tunnel_id: str):
+        _remove_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -788,6 +863,8 @@ class BackhaulAdapter:
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.get(tunnel_id)
         is_running = proc is not None and proc.returncode is None
+        if not is_running:
+            is_running = _is_tunnel_pid_alive(tunnel_id, "backhaul")
         return {
             "active": config_path.exists() and is_running,
             "type": "backhaul",
@@ -981,6 +1058,7 @@ class ChiselAdapter:
         
         self.log_handles[tunnel_id] = log_f
         self.processes[tunnel_id] = proc
+        _save_tunnel_pid(tunnel_id, proc.pid)
         await asyncio.sleep(1.0)
         if proc.returncode is not None:
             stderr = ""
@@ -993,10 +1071,12 @@ class ChiselAdapter:
                 except:
                     pass
                 del self.log_handles[tunnel_id]
+            _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"chisel failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str):
         """Remove Chisel tunnel"""
+        _remove_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1014,6 +1094,9 @@ class ChiselAdapter:
         if tunnel_id in self.processes:
             proc = self.processes[tunnel_id]
             is_running = proc.returncode is None
+        
+        if not is_running:
+            is_running = _is_tunnel_pid_alive(tunnel_id, "chisel")
         
         return {
             "active": is_running,
@@ -1295,6 +1378,7 @@ transport:
         
         self.log_handles[tunnel_id] = log_f
         self.processes[tunnel_id] = proc
+        _save_tunnel_pid(tunnel_id, proc.pid)
         await asyncio.sleep(1.0)
         if proc.returncode is not None:
             stderr = ""
@@ -1307,10 +1391,12 @@ transport:
                 except:
                     pass
                 del self.log_handles[tunnel_id]
+            _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"FRP failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str):
         """Remove FRP tunnel (handles both server and client modes)"""
+        _remove_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1339,6 +1425,9 @@ transport:
         if tunnel_id in self.processes:
             proc = self.processes[tunnel_id]
             is_running = proc.returncode is None
+        
+        if not is_running:
+            is_running = _is_tunnel_pid_alive(tunnel_id, "frp")
         
         return {
             "active": is_running,
@@ -1872,6 +1961,7 @@ class GostAdapter:
         
         self.log_handles[tunnel_id] = log_f
         self.processes[tunnel_id] = proc
+        _save_tunnel_pid(tunnel_id, proc.pid)
         
         await asyncio.sleep(1.5)
         if proc.returncode is not None:
@@ -1885,12 +1975,14 @@ class GostAdapter:
                 except:
                     pass
                 del self.log_handles[tunnel_id]
+            _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"GOST failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
         
         logger.info(f"GOST v3 forwarding started for tunnel {tunnel_id} (Mode: {mode})")
     
     async def remove(self, tunnel_id: str):
         """Remove GOST tunnel"""
+        _remove_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1923,6 +2015,9 @@ class GostAdapter:
         if tunnel_id in self.processes:
             proc = self.processes[tunnel_id]
             is_running = proc.returncode is None
+        
+        if not is_running:
+            is_running = _is_tunnel_pid_alive(tunnel_id, "gost")
         
         return {
             "active": is_running,
@@ -2182,8 +2277,12 @@ class AdapterManager:
         return {"active": False}
     
     async def cleanup(self):
-        """Cleanup all tunnels"""
+        """Cleanup all running tunnel processes on shutdown without wiping persisted configuration file"""
         self.stop_watchdog()
-        for tunnel_id in list(self.active_tunnels.keys()):
-            await self.remove_tunnel(tunnel_id)
+        for tunnel_id, adapter in list(self.active_tunnels.items()):
+            try:
+                await adapter.remove(tunnel_id)
+            except Exception:
+                pass
+        self.active_tunnels.clear()
 
