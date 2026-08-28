@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import asyncio
 import os
+import socket
+import errno
 import psutil
 import time
 import logging
@@ -200,6 +202,19 @@ async def free_port(port: Optional[Any]) -> None:
     except Exception as e:
         logger.debug(f"Error freeing port {port_num} via psutil: {e}")
 
+    # Method 3: Tear down lingering half-open kernel TCP sockets on Linux via ss -K (SOCK_DESTROY)
+    if os.name == 'posix':
+        try:
+            proc_kill = await asyncio.create_subprocess_exec(
+                "ss", "-K", f"( sport = :{port_num} or dport = :{port_num} )",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            await asyncio.wait_for(proc_kill.wait(), timeout=1.0)
+        except Exception:
+            pass
+
+
 
 
 async def safe_stop_subprocess(
@@ -278,6 +293,82 @@ async def _spawn_core_subprocess(cmd: List[str]) -> asyncio.subprocess.Process:
     if os.name == 'posix':
         kwargs["start_new_session"] = True
     return await asyncio.create_subprocess_exec(*cmd, **kwargs)
+
+
+def is_port_listening_locally(port: int, proto: str = "any") -> bool:
+    """Check if port is actively listening in Linux kernel /proc/net, psutil, or via socket probe"""
+    if not port or int(port) <= 0:
+        return False
+    
+    port_int = int(port)
+    port_hex = f"{port_int:04X}"
+    
+    # 1. Check POSIX /proc/net tables (Ultra-fast, container-friendly)
+    files_to_check = []
+    if proto in ["tcp", "any"]:
+        files_to_check.extend(["/proc/net/tcp", "/proc/net/tcp6"])
+    if proto in ["udp", "any"]:
+        files_to_check.extend(["/proc/net/udp", "/proc/net/udp6"])
+        
+    for pfile in files_to_check:
+        try:
+            if os.path.exists(pfile):
+                with open(pfile, "r") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 4:
+                            local_addr = parts[1]
+                            state = parts[3]
+                            if local_addr.endswith(f":{port_hex}"):
+                                if "tcp" in pfile:
+                                    if state == "0A":  # TCP_LISTEN
+                                        return True
+                                else:
+                                    return True
+        except Exception:
+            pass
+            
+    # 2. psutil check (cross-platform)
+    try:
+        import psutil
+        for c in psutil.net_connections(kind='inet'):
+            if c.laddr and c.laddr.port == port_int:
+                if proto == "tcp" and c.type == socket.SOCK_STREAM and c.status == psutil.CONN_LISTEN:
+                    return True
+                elif proto == "udp" and c.type == socket.SOCK_DGRAM:
+                    return True
+                elif proto == "any":
+                    return True
+    except Exception:
+        pass
+        
+    # 3. Direct socket probe fallback (cross-platform Windows & Linux)
+    if proto in ["tcp", "any"]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.1)
+            res = s.connect_ex(('127.0.0.1', port_int))
+            s.close()
+            if res == 0:
+                return True
+        except Exception:
+            pass
+            
+    if proto in ["udp", "any"]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.bind(('127.0.0.1', port_int))
+                s.close()
+            except OSError as err:
+                s.close()
+                import errno
+                if err.errno in (getattr(errno, 'EADDRINUSE', 98), 10048, getattr(errno, 'EACCES', 13)):
+                    return True
+        except Exception:
+            pass
+
+    return False
 
 
 def parse_address_port(address_str: str):
@@ -390,6 +481,11 @@ class RatholeAdapter:
             if not bind_port:
                 bind_host = "0.0.0.0"
                 bind_port = 23333
+            
+            # Forcefully free control port and all service ports before spawning
+            await free_port(bind_port)
+            for p in ports:
+                await free_port(p)
             
             config = f"""[server]
 bind_addr = "{bind_host}:{bind_port}"
@@ -671,6 +767,10 @@ class BackhaulAdapter:
                 control_port = spec.get("control_port") or spec.get("listen_port") or 3080
                 bind_ip = spec.get("bind_ip", "0.0.0.0")
                 bind_addr = f"{bind_ip}:{control_port}"
+            
+            bind_host, bind_port_num, _ = parse_address_port(bind_addr)
+            if bind_port_num:
+                await free_port(bind_port_num)
             
             ports = spec.get("ports")
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: received ports from spec: {ports} (type: {type(ports)})")
@@ -956,6 +1056,7 @@ class ChiselAdapter:
         
         if mode == 'server':
             control_port = spec.get('control_port') or spec.get('listen_port') or 8080
+            await free_port(control_port)
             auth_token = spec.get('token') or spec.get('auth_token')
             key = spec.get('key')
             reverse_only = spec.get('reverse_only', True)
@@ -1525,6 +1626,8 @@ class GostAdapter:
         
         if mode == 'server':
             # 1. Server Configuration (Foreign Node)
+            if control_port:
+                await free_port(control_port)
             bind_addr = f"[::]:{control_port}" if use_ipv6 else f"0.0.0.0:{control_port}"
             
             # Handler & Protocol Selection
@@ -1649,6 +1752,9 @@ class GostAdapter:
             
             if not ports:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
+            
+            for p in ports:
+                await free_port(p)
                 
             server_ip = spec.get('server_ip') or spec.get('remote_ip')
             if not server_ip:
@@ -2293,6 +2399,67 @@ class AdapterManager:
             return adapter.status(tunnel_id)
         return {"active": False}
     
+    async def inspect_tunnel_health(
+        self,
+        tunnel_id: str,
+        tunnel_core: Optional[str] = None,
+        mode: str = "server",
+        ports: Optional[List[int]] = None,
+        control_port: Optional[int] = None,
+        proto: str = "udp"
+    ) -> Dict[str, Any]:
+        """Inspect running process and listening sockets for a tunnel with high precision"""
+        config = self.tunnel_configs.get(tunnel_id, {})
+        core = tunnel_core or config.get("core", "")
+        spec = config.get("spec", {})
+        actual_mode = mode or spec.get("mode", "server")
+        
+        adapter = self.active_tunnels.get(tunnel_id) or (self.get_adapter(core) if core else None)
+        proc_alive = False
+        if adapter:
+            st = adapter.status(tunnel_id)
+            proc_alive = bool(st.get("process_running", False) or st.get("active", False))
+        if not proc_alive:
+            proc_alive = bool(_is_tunnel_pid_alive(tunnel_id, core))
+            
+        checked_ports = ports or spec.get("ports", [])
+        if not checked_ports and spec.get("remote_port"):
+            checked_ports = [spec.get("remote_port")]
+            
+        ctrl_port = control_port or spec.get("control_port")
+        
+        listening_ports = []
+        missing_ports = []
+        
+        if actual_mode == "server":
+            if ctrl_port:
+                if is_port_listening_locally(int(ctrl_port), proto="tcp"):
+                    listening_ports.append({"port": int(ctrl_port), "type": "control_tcp"})
+                else:
+                    missing_ports.append({"port": int(ctrl_port), "type": "control_tcp"})
+                    
+            for p in checked_ports:
+                try:
+                    p_num = int(p) if isinstance(p, (int, str)) and str(p).isdigit() else None
+                    if p_num:
+                        if is_port_listening_locally(p_num, proto=proto):
+                            listening_ports.append({"port": p_num, "type": f"service_{proto}"})
+                        else:
+                            missing_ports.append({"port": p_num, "type": f"service_{proto}"})
+                except Exception:
+                    pass
+                        
+        is_healthy = proc_alive and (len(missing_ports) == 0 if actual_mode == "server" else True)
+        
+        return {
+            "healthy": is_healthy,
+            "process_running": proc_alive,
+            "mode": actual_mode,
+            "core": core,
+            "listening_ports": listening_ports,
+            "missing_ports": missing_ports
+        }
+
     async def cleanup(self, kill_processes: bool = False):
         """Cleanup on agent shutdown. Preserves running background proxy processes for zero-downtime adoption on next startup."""
         self.stop_watchdog()

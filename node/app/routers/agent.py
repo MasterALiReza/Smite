@@ -1,7 +1,7 @@
 """Agent API endpoints"""
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 import logging
 
 router = APIRouter()
@@ -18,6 +18,34 @@ class TunnelApply(BaseModel):
 
 class TunnelRemove(BaseModel):
     tunnel_id: str
+
+
+class TunnelVerify(BaseModel):
+    tunnel_id: str
+    core: Optional[str] = None
+    mode: Optional[str] = "server"
+    ports: Optional[List[int]] = None
+    control_port: Optional[int] = None
+    proto: Optional[str] = "udp"
+
+
+@router.post("/tunnels/verify")
+async def verify_tunnel(data: TunnelVerify, request: Request):
+    """Verify tunnel process health and listening sockets"""
+    adapter_manager = request.app.state.adapter_manager
+    try:
+        health = await adapter_manager.inspect_tunnel_health(
+            tunnel_id=data.tunnel_id,
+            tunnel_core=data.core,
+            mode=data.mode or "server",
+            ports=data.ports,
+            control_port=data.control_port,
+            proto=data.proto or "udp"
+        )
+        return {"status": "success", "data": health}
+    except Exception as e:
+        logger.error(f"Failed to verify tunnel {data.tunnel_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/tunnels/apply")

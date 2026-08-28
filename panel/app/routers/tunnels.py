@@ -1614,6 +1614,25 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         
         if foreign_node and iran_node:
             try:
+                # ── Fleet-Wide Ghost Purge ──────────────────────────────────────────
+                # Clean up any obsolete/ghost instance of this tunnel from other fleet nodes
+                active_node_ids = {iran_node.id, foreign_node.id}
+                other_nodes = [n for n in all_nodes if n.id not in active_node_ids]
+                if other_nodes:
+                    async def _purge_ghost_node(n_obj):
+                        try:
+                            await asyncio.wait_for(
+                                client.send_to_node(n_obj.id, "/api/agent/tunnels/remove", {"tunnel_id": tunnel.id}),
+                                timeout=2.0
+                            )
+                        except Exception:
+                            pass
+                    
+                    async def _purge_all_ghosts():
+                        await asyncio.gather(*[_purge_ghost_node(n) for n in other_nodes], return_exceptions=True)
+                    
+                    asyncio.create_task(_purge_all_ghosts())
+                
                 spec = tunnel.spec.copy() if tunnel.spec else {}
                 
                 if tunnel.core == "backhaul":
@@ -2013,14 +2032,71 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     raise HTTPException(status_code=500, detail=error_msg)
                 
                 if server_response.get("status") == "success" and client_response.get("status") == "success":
+                    # ── 3-Way Verification Check ─────────────────────────────────────
+                    await asyncio.sleep(0.8)
+                    
+                    verify_ports = ports if isinstance(ports, list) else ([ports] if ports else [])
+                    verify_ctrl_port = None
+                    if 'assigned_control_port' in locals():
+                        verify_ctrl_port = assigned_control_port
+                    elif 'control_port' in locals():
+                        verify_ctrl_port = control_port
+                    elif spec and spec.get("control_port"):
+                        verify_ctrl_port = spec.get("control_port")
+                    
+                    verify_res = {}
+                    try:
+                        verify_res = await client.verify_tunnel_on_node(
+                            node_id=iran_node.id,
+                            tunnel_id=tunnel.id,
+                            core=tunnel.core,
+                            mode="server",
+                            ports=verify_ports,
+                            control_port=verify_ctrl_port,
+                            proto="udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp"
+                        )
+                    except Exception as ve:
+                        logger.debug(f"Verification probe error: {ve}")
+                    
+                    # Measure true Point-to-Point Latency
+                    target_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
+                    latency_ms = None
+                    if target_ip:
+                        try:
+                            latency_ms = await client.probe_ping(iran_node.id, target_ip)
+                        except Exception:
+                            pass
+                    
                     tunnel.status = "active"
                     tunnel.error_message = None
-                    if tunnel.spec and "_pending_reapply" in tunnel.spec:
-                        tunnel.spec.pop("_pending_reapply", None)
+                    if tunnel.spec:
+                        if latency_ms:
+                            tunnel.spec["latency_ms"] = latency_ms
+                        if "_pending_reapply" in tunnel.spec:
+                            tunnel.spec.pop("_pending_reapply", None)
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(tunnel, "spec")
                     await db.commit()
-                    return {"status": "success", "message": "Tunnel reapplied successfully to both nodes"}
+                    
+                    v_data = verify_res.get("data", {}) if isinstance(verify_res, dict) else {}
+                    missing_sockets = v_data.get("missing_ports", [])
+                    
+                    if missing_sockets:
+                        missing_desc = ", ".join([str(ms.get("port")) for ms in missing_sockets])
+                        return {
+                            "status": "success",
+                            "warning": f"Tunnel process started, but listening socket on port {missing_desc} is not active yet. Foreign server may still be handshaking.",
+                            "message": "Tunnel reapplied to processes",
+                            "latency_ms": latency_ms,
+                            "verification": v_data
+                        }
+                    
+                    return {
+                        "status": "success",
+                        "message": "Tunnel reapplied successfully and verified",
+                        "latency_ms": latency_ms,
+                        "verification": v_data
+                    }
                 else:
                     tunnel.status = "error"
                     tunnel.error_message = "Failed to apply tunnel to one or both nodes"

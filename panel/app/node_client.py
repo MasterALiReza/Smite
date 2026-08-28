@@ -3,7 +3,7 @@ import httpx
 import ssl
 import logging
 import asyncio
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -123,15 +123,11 @@ class NodeClient:
                             return response.json()
                     except httpx.RequestError as e:
                         last_error = e
-                        if attempt < max_retries - 1:
-                            if not using_frp:
-                                await asyncio.sleep(0.5)
-                            continue
-                        elif using_frp and node.node_metadata:
-                            # Fallback to direct HTTP if FRP connection fails
+                        # Fast fallback to direct HTTP if FRP connection fails on early attempts
+                        if using_frp and node.node_metadata:
                             direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
                             if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
-                                logger.warning(f"[FRP->HTTP Fallback] FRP connection failed for node {node_id}, falling back to direct {direct_addr}")
+                                logger.warning(f"[FRP->HTTP Fallback] FRP attempt {attempt + 1} failed for node {node_id}, attempting direct {direct_addr}")
                                 try:
                                     direct_url = f"{direct_addr.rstrip('/')}{endpoint}"
                                     async with httpx.AsyncClient(timeout=self.timeout, verify=False) as direct_client:
@@ -140,11 +136,15 @@ class NodeClient:
                                         return direct_resp.json()
                                 except Exception as fallback_err:
                                     logger.warning(f"[FRP->HTTP Fallback] Direct connection to {direct_addr} also failed: {fallback_err}")
+                        if attempt < max_retries - 1:
+                            if not using_frp:
+                                await asyncio.sleep(0.5)
+                            continue
                         
                         error_msg = f"Network error: {str(e)}"
                         if using_frp:
                             remote_port = url.split(":")[-1].split("/")[0] if ":" in url else "unknown"
-                            error_msg += f" (FRP tunnel connection failed after {max_retries} attempts. The panel may not be able to reach FRP server on 127.0.0.1:{remote_port}. Check if panel and FRP server are in the same network namespace, or check FRP server logs.)"
+                            error_msg += f" (FRP tunnel connection failed after {max_retries} attempts. The panel may not be able to reach FRP server on 127.0.0.1:{remote_port}.)"
                         return {"status": "error", "message": error_msg}
                 
                 # Should not reach here, but just in case
@@ -204,6 +204,27 @@ class NodeClient:
     async def apply_tunnel(self, node_id: str, tunnel_data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply tunnel to node"""
         return await self.send_to_node(node_id, "/api/agent/tunnels/apply", tunnel_data)
+
+    async def verify_tunnel_on_node(
+        self,
+        node_id: str,
+        tunnel_id: str,
+        core: Optional[str] = None,
+        mode: str = "server",
+        ports: Optional[List[int]] = None,
+        control_port: Optional[int] = None,
+        proto: str = "udp"
+    ) -> Dict[str, Any]:
+        """Verify tunnel process and listening sockets on node"""
+        payload = {
+            "tunnel_id": tunnel_id,
+            "core": core,
+            "mode": mode,
+            "ports": ports or [],
+            "control_port": control_port,
+            "proto": proto
+        }
+        return await self.send_to_node(node_id, "/api/agent/tunnels/verify", payload)
 
     async def probe_ping(self, node_id: str, target_ip: str, port: Optional[int] = None) -> Optional[int]:
         """Ask node agent to measure precise layer-3/4 ping directly to target IP"""
