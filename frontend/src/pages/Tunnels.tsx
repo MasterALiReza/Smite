@@ -528,17 +528,27 @@ const Tunnels = () => {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4 flex-1 min-w-0">
                     {/* Status Badge */}
-                    <span
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
-                        tunnel.status === 'active'
-                          ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                          : tunnel.status === 'error'
-                          ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                      }`}
-                    >
-                      {tunnel.status}
-                    </span>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <span
+                        className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap text-center ${
+                          tunnel.status === 'active'
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                            : tunnel.status === 'error'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                        }`}
+                      >
+                        {tunnel.status}
+                      </span>
+                      {Boolean(tunnel.spec?._pending_reapply) && (
+                        <span
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-tight bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-center animate-pulse"
+                          title="Configuration modified. Click Reapply to apply changes to live core."
+                        >
+                          Pending Reapply
+                        </span>
+                      )}
+                    </div>
 
                     <div className="flex-1 min-w-0">
                       {/* Name, Core Badge, Transmission Badge, Ports */}
@@ -663,14 +673,18 @@ const Tunnels = () => {
                     <button
                       onClick={() => reapplyTunnel(tunnel)}
                       disabled={isReapplying || !!reapplyingTunnelId}
-                      className="p-2 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center"
-                      title="Reapply tunnel"
+                      className={`p-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center ${
+                        Boolean(tunnel.spec?._pending_reapply)
+                          ? 'text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 ring-2 ring-amber-400 dark:ring-amber-500 shadow-sm hover:bg-amber-200/80'
+                          : 'text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20'
+                      }`}
+                      title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
                       aria-label="Reapply tunnel"
                     >
                       {isReapplying ? (
                         <Loader2 size={18} className="animate-spin" />
                       ) : (
-                        <RotateCw size={18} />
+                        <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
                       )}
                     </button>
                     <button
@@ -1161,7 +1175,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
         iran_node_id: formData.iran_node_id,
         foreign_node_id: formData.foreign_node_id
       })
-      showToast('success', 'Tunnel Updated', `${formData.name} was updated successfully`)
+      showToast('success', 'Configuration Saved', `${formData.name} was saved safely. Active tunnel remains live until you click Reapply.`)
       onSuccess()
     } catch (error) {
       console.error('Failed to update tunnel:', error)
@@ -1172,7 +1186,12 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] overflow-auto p-4">
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Edit Tunnel</h2>
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">Edit Tunnel</h2>
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
+            <span>🛡️</span> Zero-Downtime: Saving changes will not drop live connections until you click Reapply.
+          </p>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

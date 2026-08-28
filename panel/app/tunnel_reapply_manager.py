@@ -568,7 +568,13 @@ class TunnelReapplyManager:
                     logger.error(f"Failed to reapply tunnel {tunnel.id} to foreign node: {client_response.get('message')}")
                     return False
                 
-                return server_response.get("status") == "success" and client_response.get("status") == "success"
+                ok = server_response.get("status") == "success" and client_response.get("status") == "success"
+                if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+                    tunnel.spec.pop("_pending_reapply", None)
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(tunnel, "spec")
+                    await session.commit()
+                return ok
         else:
             result = await session.execute(select(Node).where(Node.id == tunnel.node_id))
             node = result.scalar_one_or_none()
@@ -594,7 +600,13 @@ class TunnelReapplyManager:
                 }
             )
             
-            return response.get("status") == "success"
+            ok = response.get("status") == "success"
+            if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+                tunnel.spec.pop("_pending_reapply", None)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(tunnel, "spec")
+                await session.commit()
+            return ok
     
     def set_request(self, request: Request):
         """Set request object for reapply operations"""

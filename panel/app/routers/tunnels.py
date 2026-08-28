@@ -1561,241 +1561,14 @@ async def update_tunnel(
     await db.refresh(tunnel)
     
     if spec_changed:
-        try:
-            needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and tunnel.core == "gost" and not tunnel.is_reverse and not tunnel.node_id
-            needs_rathole_server = tunnel.core == "rathole"
-            needs_backhaul_server = tunnel.core == "backhaul"
-            needs_chisel_server = tunnel.core == "chisel"
-            needs_frp_server = tunnel.core == "frp"
-            needs_node_apply = tunnel.core in {"rathole", "backhaul", "chisel", "frp", "gost"}
-            
-            if needs_gost_forwarding:
-                listen_port = tunnel.spec.get("listen_port")
-                forward_to = tunnel.spec.get("forward_to")
-                
-                if not forward_to:
-                    from app.utils import format_address_port
-                    remote_ip = tunnel.spec.get("remote_ip", "127.0.0.1")
-                    remote_port = tunnel.spec.get("remote_port", 8080)
-                    forward_to = format_address_port(remote_ip, remote_port)
-                
-                panel_port = listen_port or tunnel.spec.get("remote_port")
-                use_ipv6 = tunnel.spec.get("use_ipv6", False)
-                
-                if panel_port and forward_to and hasattr(request.app.state, 'gost_forwarder'):
-                    try:
-                        await request.app.state.gost_forwarder.stop_forward(tunnel.id)
-                        await asyncio.sleep(0.5)
-                        logger.info(f"Restarting gost forwarding for tunnel {tunnel.id}: {tunnel.type}://:{panel_port} -> {forward_to}, use_ipv6={use_ipv6}")
-                        await request.app.state.gost_forwarder.start_forward(
-                            tunnel_id=tunnel.id,
-                            local_port=int(panel_port),
-                            forward_to=forward_to,
-                            tunnel_type=tunnel.type,
-                            use_ipv6=bool(use_ipv6)
-                        )
-                        tunnel.status = "active"
-                        tunnel.error_message = None
-                        logger.info(f"Successfully restarted gost forwarding for tunnel {tunnel.id}")
-                    except Exception as e:
-                        error_msg = str(e)
-                        logger.error(f"Failed to restart gost forwarding for tunnel {tunnel.id}: {error_msg}", exc_info=True)
-                        tunnel.status = "error"
-                        tunnel.error_message = f"Gost forwarding error: {error_msg}"
-                else:
-                    if not forward_to:
-                        tunnel.status = "error"
-                        tunnel.error_message = "forward_to is required for gost tunnels"
-            else:
-                if tunnel.core == "gost" and hasattr(request.app.state, 'gost_forwarder'):
-                    try:
-                        await request.app.state.gost_forwarder.stop_forward(tunnel.id)
-                    except Exception:
-                        pass
-            
-            if needs_rathole_server:
-                if hasattr(request.app.state, 'rathole_server_manager'):
-                    remote_addr = tunnel.spec.get("remote_addr")
-                    token = tunnel.spec.get("token")
-                    proxy_port = tunnel.spec.get("remote_port") or tunnel.spec.get("listen_port")
-                    
-                    if remote_addr and token and proxy_port:
-                        try:
-                            await request.app.state.rathole_server_manager.stop_server(tunnel.id)
-                            transport_type = getattr(tunnel, "transport_type", None) or tunnel.spec.get("transport_type") or tunnel.spec.get("transport") or "tcp"
-                            tunnel_type = getattr(tunnel, "type", None) or tunnel.spec.get("tunnel_type") or "tcp"
-                            
-                            server_priv = tunnel.spec.get("server_private_key", "")
-                            client_pub = tunnel.spec.get("client_public_key", "")
-                            if transport_type.lower() == "noise" and not (server_priv and client_pub):
-                                from app.utils import generate_noise_keypair
-                                s_priv, s_pub = generate_noise_keypair()
-                                c_priv, c_pub = generate_noise_keypair()
-                                tunnel.spec["server_private_key"] = s_priv
-                                tunnel.spec["server_public_key"] = s_pub
-                                tunnel.spec["client_private_key"] = c_priv
-                                tunnel.spec["client_public_key"] = c_pub
-                                from sqlalchemy.orm.attributes import flag_modified
-                                flag_modified(tunnel, "spec")
-                                server_priv, client_pub = s_priv, c_pub
-
-                            await request.app.state.rathole_server_manager.start_server(
-                                tunnel_id=tunnel.id,
-                                remote_addr=remote_addr,
-                                token=token,
-                                proxy_port=int(proxy_port) if proxy_port else None,
-                                ports=[int(proxy_port)] if proxy_port else None,
-                                tunnel_type=tunnel_type,
-                                transport_proto=transport_type,
-                                local_private_key=server_priv,
-                                remote_public_key=client_pub,
-                                websocket_tls=bool(tunnel.spec.get("websocket_tls") or tunnel.spec.get("tls"))
-                            )
-                            tunnel.status = "active"
-                            tunnel.error_message = None
-                        except Exception as e:
-                            logger.error(f"Failed to restart Rathole server: {e}")
-                            tunnel.status = "error"
-                            tunnel.error_message = f"Rathole server error: {str(e)}"
-            elif needs_backhaul_server:
-                manager = getattr(request.app.state, "backhaul_manager", None)
-                if manager:
-                    try:
-                        await manager.stop_server(tunnel.id)
-                    except Exception:
-                        pass
-                    try:
-                        await manager.start_server(tunnel.id, tunnel.spec or {})
-                        await asyncio.sleep(1.0)
-                        if not await manager.is_running(tunnel.id):
-                            raise RuntimeError("Backhaul process not running")
-                        tunnel.status = "active"
-                        tunnel.error_message = None
-                    except Exception as exc:
-                        logger.error("Failed to restart Backhaul server for tunnel %s: %s", tunnel.id, exc, exc_info=True)
-                        tunnel.status = "error"
-                        tunnel.error_message = f"Backhaul server error: {exc}"
-            elif needs_chisel_server:
-                if hasattr(request.app.state, 'chisel_server_manager'):
-                    server_port = tunnel.spec.get("control_port") or (int(tunnel.spec.get("listen_port", 0)) + 10000)
-                    auth = tunnel.spec.get("auth") or tunnel.spec.get("token")
-                    fingerprint = tunnel.spec.get("fingerprint")
-                    use_ipv6 = tunnel.spec.get("use_ipv6", False)
-                    
-                    if server_port and auth and fingerprint:
-                        try:
-                            await request.app.state.chisel_server_manager.stop_server(tunnel.id)
-                            await request.app.state.chisel_server_manager.start_server(
-                                tunnel_id=tunnel.id,
-                                server_port=int(server_port),
-                                auth=auth,
-                                fingerprint=fingerprint,
-                                use_ipv6=bool(use_ipv6)
-                            )
-                            tunnel.status = "active"
-                            tunnel.error_message = None
-                        except Exception as e:
-                            logger.error(f"Failed to restart Chisel server: {e}")
-                            tunnel.status = "error"
-                            tunnel.error_message = f"Chisel server error: {str(e)}"
-            elif needs_frp_server:
-                if hasattr(request.app.state, 'frp_server_manager'):
-                    bind_port = tunnel.spec.get("bind_port", 7000)
-                    token = tunnel.spec.get("token")
-                    
-                    if bind_port:
-                        try:
-                            await request.app.state.frp_server_manager.stop_server(tunnel.id)
-                            transport_type = getattr(tunnel, "transport_type", None) or tunnel.spec.get("transport_type") or tunnel.spec.get("transport") or "tcp"
-                            security_type = getattr(tunnel, "security_type", None) or tunnel.spec.get("security_type") or "tls"
-                            force_tls = bool(tunnel.spec.get("force_tls")) or (security_type in ["tls", "force_tls"])
-                            await request.app.state.frp_server_manager.start_server(
-                                tunnel_id=tunnel.id,
-                                bind_port=int(bind_port),
-                                token=token,
-                                transport_proto=transport_type.lower(),
-                                force_tls=force_tls
-                            )
-                            await asyncio.sleep(1.0)
-                            if not await request.app.state.frp_server_manager.is_running(tunnel.id):
-                                raise RuntimeError("FRP server process not running")
-                            tunnel.status = "active"
-                            tunnel.error_message = None
-                        except Exception as e:
-                            logger.error(f"Failed to restart FRP server: {e}")
-                            tunnel.status = "error"
-                            tunnel.error_message = f"FRP server error: {str(e)}"
-            
-            if needs_node_apply:
-                if tunnel.is_reverse:
-                    try:
-                        await apply_tunnel(tunnel.id, request, db)
-                    except Exception as e:
-                        logger.error(f"Failed to apply reverse tunnel on update: {e}")
-                        tunnel.status = "error"
-                        tunnel.error_message = f"Apply error: {str(e)}"
-                elif tunnel.node_id:
-                    result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                    node = result.scalar_one_or_none()
-                    if node:
-                        client = NodeClient()
-                        try:
-                            spec_for_node = tunnel.spec.copy() if tunnel.spec else {}
-                            frp_prep_failed = False
-                            if tunnel.core == "frp":
-                                try:
-                                    spec_for_node = prepare_frp_spec_for_node(spec_for_node, node, request)
-                                    logger.info(f"FRP spec prepared for tunnel {tunnel.id}: server_addr={spec_for_node.get('server_addr')}")
-                                except Exception as e:
-                                    error_msg = f"Failed to prepare FRP spec: {str(e)}"
-                                    logger.error(f"Tunnel {tunnel.id}: {error_msg}", exc_info=True)
-                                    tunnel.status = "error"
-                                    tunnel.error_message = f"FRP configuration error: {error_msg}"
-                                    await db.commit()
-                                    await db.refresh(tunnel)
-                                    frp_prep_failed = True
-                            
-                            if not frp_prep_failed:
-                                response = await client.send_to_node(
-                                    node_id=node.id,
-                                    endpoint="/api/agent/tunnels/apply",
-                                    data={
-                                        "tunnel_id": tunnel.id,
-                                        "core": tunnel.core,
-                                        "type": tunnel.type,
-                                        "spec": spec_for_node
-                                    }
-                                )
-                                
-                                if response.get("status") == "success":
-                                    tunnel.status = "active"
-                                    tunnel.error_message = None
-                                else:
-                                    tunnel.status = "error"
-                                    tunnel.error_message = f"Node error: {response.get('message', 'Unknown error')}"
-                                    if needs_backhaul_server and hasattr(request.app.state, "backhaul_manager"):
-                                        try:
-                                            await request.app.state.backhaul_manager.stop_server(tunnel.id)
-                                        except Exception:
-                                            pass
-                        except Exception as e:
-                            logger.error(f"Failed to re-apply tunnel to node: {e}")
-                            tunnel.status = "error"
-                            tunnel.error_message = f"Node error: {str(e)}"
-                            if needs_backhaul_server and hasattr(request.app.state, "backhaul_manager"):
-                                try:
-                                    await request.app.state.backhaul_manager.stop_server(tunnel.id)
-                                except Exception:
-                                    pass
-            
-            await db.commit()
-            await db.refresh(tunnel)
-        except Exception as e:
-            logger.error(f"Failed to re-apply tunnel: {e}", exc_info=True)
-            tunnel.status = "error"
-            tunnel.error_message = f"Re-apply error: {str(e)}"
-            await db.commit()
-            await db.refresh(tunnel)
+        if not tunnel.spec:
+            tunnel.spec = {}
+        tunnel.spec["_pending_reapply"] = True
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(tunnel, "spec")
+        await db.commit()
+        await db.refresh(tunnel)
+        logger.info(f"Tunnel {tunnel_id} spec updated and staged (_pending_reapply=True). Live running tunnel is untouched until explicit Reapply.")
     
     return tunnel
 
@@ -2242,6 +2015,10 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 if server_response.get("status") == "success" and client_response.get("status") == "success":
                     tunnel.status = "active"
                     tunnel.error_message = None
+                    if tunnel.spec and "_pending_reapply" in tunnel.spec:
+                        tunnel.spec.pop("_pending_reapply", None)
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(tunnel, "spec")
                     await db.commit()
                     return {"status": "success", "message": "Tunnel reapplied successfully to both nodes"}
                 else:
@@ -2309,6 +2086,10 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         if response.get("status") == "success":
             tunnel.status = "active"
             tunnel.error_message = None
+            if tunnel.spec and "_pending_reapply" in tunnel.spec:
+                tunnel.spec.pop("_pending_reapply", None)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(tunnel, "spec")
             await db.commit()
             return {"status": "success", "message": "Tunnel reapplied successfully"}
         else:
@@ -2417,26 +2198,24 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
                 import logging
                 logging.error(f"Failed to stop FRP server: {e}")
     
-    if tunnel.status == "active":
-        client = NodeClient()
-        if tunnel.node_id:
-            try:
-                await client.send_to_node(
-                    node_id=tunnel.node_id,
-                    endpoint="/api/agent/tunnels/remove",
-                    data={"tunnel_id": tunnel.id}
-                )
-            except:
-                pass
-        if tunnel.is_reverse and tunnel.foreign_node_id:
-            try:
-                await client.send_to_node(
-                    node_id=tunnel.foreign_node_id,
-                    endpoint="/api/agent/tunnels/remove",
-                    data={"tunnel_id": tunnel.id}
-                )
-            except:
-                pass
+    client = NodeClient()
+    nodes_to_notify = set()
+    if tunnel.node_id:
+        nodes_to_notify.add(tunnel.node_id)
+    if tunnel.foreign_node_id:
+        nodes_to_notify.add(tunnel.foreign_node_id)
+    if getattr(tunnel, "iran_node_id", None):
+        nodes_to_notify.add(tunnel.iran_node_id)
+
+    for n_id in nodes_to_notify:
+        try:
+            await client.send_to_node(
+                node_id=n_id,
+                endpoint="/api/agent/tunnels/remove",
+                data={"tunnel_id": tunnel.id}
+            )
+        except Exception:
+            pass
     
     await db.delete(tunnel)
     await db.commit()

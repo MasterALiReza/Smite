@@ -2153,6 +2153,14 @@ class AdapterManager:
                     failed += 1
                     continue
                 
+                # Check if process is ALREADY running and healthy (non-destructive adoption)
+                tunnel_status = adapter.status(tunnel_id)
+                if tunnel_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                    self.active_tunnels[tunnel_id] = adapter
+                    restored += 1
+                    logger.info(f"Tunnel {tunnel_id} core ({tunnel_core}) is ALREADY running healthy (PID {_get_tunnel_pid(tunnel_id)}). Preserved connection without restart.")
+                    continue
+
                 mode = spec.get('mode', 'N/A')
                 logger.info(f"Restoring tunnel {tunnel_id}: core={tunnel_core}, mode={mode}, spec_keys={list(spec.keys())}")
                 
@@ -2230,14 +2238,10 @@ class AdapterManager:
             self._watchdog_task.cancel()
     
     async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
-        """Apply tunnel using appropriate adapter"""
+        """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Applying tunnel {tunnel_id}: core={tunnel_core}")
-        
-        if tunnel_id in self.active_tunnels:
-            logger.info(f"Tunnel {tunnel_id} already exists, removing it first")
-            await self.remove_tunnel(tunnel_id)
         
         adapter = self.get_adapter(tunnel_core)
         if not adapter:
@@ -2245,7 +2249,20 @@ class AdapterManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
         
-        logger.info(f"Using adapter: {adapter.name}, mode={spec.get('mode', 'N/A')}")
+        # Check if already running with exact same configuration (Idempotent Apply)
+        if tunnel_id in self.active_tunnels:
+            existing_config = self.tunnel_configs.get(tunnel_id, {})
+            if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
+                t_status = adapter.status(tunnel_id)
+                if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                    logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
+                    return
+            
+            logger.info(f"Tunnel {tunnel_id} configuration changed or process inactive, applying new configuration")
+            await self.remove_tunnel(tunnel_id)
+        
+        adapter_name = getattr(adapter, "name", tunnel_core)
+        logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
         await adapter.apply(tunnel_id, spec)
         self.active_tunnels[tunnel_id] = adapter
         
@@ -2276,13 +2293,14 @@ class AdapterManager:
             return adapter.status(tunnel_id)
         return {"active": False}
     
-    async def cleanup(self):
-        """Cleanup all running tunnel processes on shutdown without wiping persisted configuration file"""
+    async def cleanup(self, kill_processes: bool = False):
+        """Cleanup on agent shutdown. Preserves running background proxy processes for zero-downtime adoption on next startup."""
         self.stop_watchdog()
-        for tunnel_id, adapter in list(self.active_tunnels.items()):
-            try:
-                await adapter.remove(tunnel_id)
-            except Exception:
-                pass
+        if kill_processes:
+            for tunnel_id, adapter in list(self.active_tunnels.items()):
+                try:
+                    await adapter.remove(tunnel_id)
+                except Exception:
+                    pass
         self.active_tunnels.clear()
 

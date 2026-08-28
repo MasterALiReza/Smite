@@ -505,17 +505,25 @@ async def _restore_node_tunnels():
                         iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
                     
-                    logger.info(f"Restoring tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
-                    server_response = await client.send_to_node(
-                        node_id=iran_node.id,
-                        endpoint="/api/agent/tunnels/apply",
-                        data={
-                            "tunnel_id": tunnel.id,
-                            "core": tunnel.core,
-                            "type": tunnel.type,
-                            "spec": server_spec
-                        }
-                    )
+                    try:
+                        ir_status = await client.get_tunnel_status(iran_node.id, tunnel.id)
+                        if ir_status and ir_status.get("status") == "success" and ir_status.get("data", {}).get("active"):
+                            server_response = {"status": "success", "message": "Already active"}
+                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on Iran node {iran_node.id}, skipping disruptive apply")
+                        else:
+                            logger.info(f"Restoring tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
+                            server_response = await client.send_to_node(
+                                node_id=iran_node.id,
+                                endpoint="/api/agent/tunnels/apply",
+                                data={
+                                    "tunnel_id": tunnel.id,
+                                    "core": tunnel.core,
+                                    "type": tunnel.type,
+                                    "spec": server_spec
+                                }
+                            )
+                    except Exception as e:
+                        server_response = {"status": "error", "message": str(e)}
                     
                     if server_response.get("status") == "error":
                         error_msg = server_response.get("message", "Unknown error from iran node")
@@ -527,24 +535,32 @@ async def _restore_node_tunnels():
                         foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
                     
-                    logger.info(f"Restoring tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
-                    client_response = await client.send_to_node(
-                        node_id=foreign_node.id,
-                        endpoint="/api/agent/tunnels/apply",
-                        data={
-                            "tunnel_id": tunnel.id,
-                            "core": tunnel.core,
-                            "type": tunnel.type,
-                            "spec": client_spec
-                        }
-                    )
+                    try:
+                        fn_status = await client.get_tunnel_status(foreign_node.id, tunnel.id)
+                        if fn_status and fn_status.get("status") == "success" and fn_status.get("data", {}).get("active"):
+                            client_response = {"status": "success", "message": "Already active"}
+                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on foreign node {foreign_node.id}, skipping disruptive apply")
+                        else:
+                            logger.info(f"Restoring tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
+                            client_response = await client.send_to_node(
+                                node_id=foreign_node.id,
+                                endpoint="/api/agent/tunnels/apply",
+                                data={
+                                    "tunnel_id": tunnel.id,
+                                    "core": tunnel.core,
+                                    "type": tunnel.type,
+                                    "spec": client_spec
+                                }
+                            )
+                    except Exception as e:
+                        client_response = {"status": "error", "message": str(e)}
                     
                     if client_response.get("status") == "error":
                         error_msg = client_response.get("message", "Unknown error from foreign node")
                         logger.error(f"Failed to restore tunnel {tunnel.id} on foreign node {foreign_node.id}: {error_msg}")
                         failed_count += 1
                     else:
-                        logger.info(f"Successfully restored tunnel {tunnel.id} on both nodes")
+                        logger.info(f"Successfully restored/confirmed tunnel {tunnel.id} on both nodes")
                         restored_count += 1
                         
                 except Exception as e:
@@ -628,24 +644,32 @@ async def _restore_node_tunnels():
                         iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
                     
-                    logger.info(f"Restoring GOST tunnel {tunnel.id}: applying to iran node {iran_node.id}, spec={gost_spec}")
-                    response = await client.send_to_node(
-                        node_id=iran_node.id,
-                        endpoint="/api/agent/tunnels/apply",
-                        data={
-                            "tunnel_id": tunnel.id,
-                            "core": "gost",
-                            "type": tunnel.type,
-                            "spec": gost_spec
-                        }
-                    )
+                    try:
+                        gost_status = await client.get_tunnel_status(iran_node.id, tunnel.id)
+                        if gost_status and gost_status.get("status") == "success" and gost_status.get("data", {}).get("active"):
+                            response = {"status": "success", "message": "Already active"}
+                            logger.info(f"GOST tunnel {tunnel.id} is ALREADY active on Iran node {iran_node.id}, skipping disruptive apply")
+                        else:
+                            logger.info(f"Restoring GOST tunnel {tunnel.id}: applying to iran node {iran_node.id}, spec={gost_spec}")
+                            response = await client.send_to_node(
+                                node_id=iran_node.id,
+                                endpoint="/api/agent/tunnels/apply",
+                                data={
+                                    "tunnel_id": tunnel.id,
+                                    "core": "gost",
+                                    "type": tunnel.type,
+                                    "spec": gost_spec
+                                }
+                            )
+                    except Exception as e:
+                        response = {"status": "error", "message": str(e)}
                     
                     if response.get("status") != "success":
                         error_msg = response.get("message", "Unknown error from iran node")
                         logger.error(f"Failed to restore GOST tunnel {tunnel.id} on iran node {iran_node.id}: {error_msg}")
                         failed_count += 1
                     else:
-                        logger.info(f"Successfully restored GOST tunnel {tunnel.id} on iran node {iran_node.id}")
+                        logger.info(f"Successfully restored/confirmed GOST tunnel {tunnel.id} on iran node {iran_node.id}")
                         restored_count += 1
                         
                 except Exception as e:

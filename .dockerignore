@@ -44,6 +44,20 @@ tests/
 *.test.*
 *_test.*
 
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+build/
+
+# Archives & Temporary
+*.zip
+*.tar.gz
+*.exe
+scratch/
+temp_*/
+
 # Misc
 *.log
 *.tmp
