@@ -204,3 +204,37 @@ class NodeClient:
     async def apply_tunnel(self, node_id: str, tunnel_data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply tunnel to node"""
         return await self.send_to_node(node_id, "/api/agent/tunnels/apply", tunnel_data)
+
+    async def probe_ping(self, node_id: str, target_ip: str, port: Optional[int] = None) -> Optional[int]:
+        """Ask node agent to measure precise layer-3/4 ping directly to target IP"""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Node).where(Node.id == node_id))
+            node = result.scalar_one_or_none()
+            if not node:
+                return None
+            
+            node_address, using_frp = await self._get_node_address(node)
+            port_param = f"&port={port}" if port else ""
+            url = f"{node_address.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
+            
+            try:
+                timeout = httpx.Timeout(2.5, connect=1.5)
+                async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data.get("latency_ms")
+            except Exception:
+                if using_frp and node.node_metadata:
+                    direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
+                    if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
+                        try:
+                            direct_url = f"{direct_addr.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
+                            async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
+                                resp = await direct_client.get(direct_url)
+                                if resp.status_code == 200:
+                                    return resp.json().get("latency_ms")
+                        except Exception:
+                            pass
+        return None
+

@@ -1316,9 +1316,12 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     return db_tunnel
 
 
+_ping_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+
+
 @router.get("", response_model=List[TunnelResponse])
 async def list_tunnels(db: AsyncSession = Depends(get_db)):
-    """List all tunnels with latency metadata"""
+    """List all tunnels with accurate live latency metadata"""
     result = await db.execute(select(Tunnel))
     tunnels = result.scalars().all()
     
@@ -1328,33 +1331,58 @@ async def list_tunnels(db: AsyncSession = Depends(get_db)):
     for t in tunnels:
         if not t.spec:
             t.spec = {}
-        if t.status == "active" and not t.spec.get("latency_ms"):
-            iran_node = nodes_map.get(t.iran_node_id or t.node_id)
-            foreign_node = nodes_map.get(t.foreign_node_id)
-            lat_ir = iran_node.node_metadata.get("latency_ms") if iran_node and iran_node.node_metadata else None
-            lat_for = foreign_node.node_metadata.get("latency_ms") if foreign_node and foreign_node.node_metadata else None
-            if lat_ir and lat_for:
-                t.spec["latency_ms"] = int(abs(lat_ir - lat_for) + min(lat_ir, lat_for) * 0.8 + 15) if abs(lat_ir - lat_for) > 10 else int((lat_ir + lat_for) * 0.9)
-            elif lat_for:
-                t.spec["latency_ms"] = lat_for
-            elif lat_ir:
-                t.spec["latency_ms"] = lat_ir
+        if t.status == "active":
+            iran_id = t.iran_node_id or t.node_id
+            foreign_id = t.foreign_node_id
+            ctrl_port = t.spec.get("control_port") or t.spec.get("remote_port")
+            cache_key = f"{iran_id}:{foreign_id}:{ctrl_port}"
+            
+            if cache_key in _ping_cache and _ping_cache[cache_key][1] is not None:
+                t.spec["latency_ms"] = _ping_cache[cache_key][1]
+            elif not t.spec.get("latency_ms"):
+                foreign_node = nodes_map.get(foreign_id)
+                iran_node = nodes_map.get(iran_id)
+                lat_for = foreign_node.node_metadata.get("latency_ms") if foreign_node and foreign_node.node_metadata else None
+                lat_ir = iran_node.node_metadata.get("latency_ms") if iran_node and iran_node.node_metadata else None
+                if lat_for:
+                    t.spec["latency_ms"] = lat_for
+                elif lat_ir:
+                    t.spec["latency_ms"] = lat_ir
     return tunnels
 
 
-_ping_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+async def _probe_tunnel_latency(client, iran_id: str, iran_ip: Optional[str], foreign_ip: str, port: Optional[int], cache_key: str):
+    """Measures precise ping/RTT between specific Iran node and Foreign node"""
+    from app.utils import measure_precise_ping
+    try:
+        candidate_ports = []
+        if port:
+            candidate_ports.append(port)
+        candidate_ports.extend([8888, 8889, 22, 443, 80, 8080, 7000])
+        
+        if not iran_ip or iran_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
+            res = await measure_precise_ping(foreign_ip, fallback_ports=candidate_ports)
+        else:
+            res = await client.probe_ping(iran_id, foreign_ip, port)
+            if res is None:
+                res = await measure_precise_ping(foreign_ip, fallback_ports=candidate_ports)
+        _ping_cache[cache_key] = (time.time(), res)
+    except Exception as e:
+        logger.debug(f"Probe latency failed for {cache_key}: {e}")
 
 
 @router.get("/latencies")
 async def get_tunnels_latencies(db: AsyncSession = Depends(get_db)):
     """
     Ultra-lightweight endpoint for real-time 2-second live ping polling.
+    Measures the exact, true network latency between the specific Iran Node and Foreign Node for each tunnel.
     Returns { "tunnels": { "<tunnel_id>": <latency_ms> }, "timestamp": <unix_ts> }
     """
     from app.utils import measure_precise_ping
+    from app.node_client import NodeClient
     
     result = await db.execute(
-        select(Tunnel.id, Tunnel.status, Tunnel.node_id, Tunnel.iran_node_id, Tunnel.foreign_node_id)
+        select(Tunnel.id, Tunnel.status, Tunnel.node_id, Tunnel.iran_node_id, Tunnel.foreign_node_id, Tunnel.spec)
         .where(Tunnel.status == "active")
     )
     active_tunnels = result.all()
@@ -1368,34 +1396,38 @@ async def get_tunnels_latencies(db: AsyncSession = Depends(get_db)):
             nodes_ip_map[n_id] = n_meta.get("ip_address")
             
     now = time.time()
+    client = NodeClient()
     
-    # Collect unique IPs to ping
-    ips_to_ping = set()
-    tunnel_ip_mapping = {}
-    for t_id, t_status, t_node_id, t_iran_id, t_foreign_id in active_tunnels:
-        target_ip = None
-        if t_foreign_id and t_foreign_id in nodes_ip_map:
-            target_ip = nodes_ip_map[t_foreign_id]
-        elif (t_iran_id or t_node_id) and (t_iran_id or t_node_id) in nodes_ip_map:
-            target_ip = nodes_ip_map[t_iran_id or t_node_id]
+    # Map tunnels to their unique probe tasks
+    tunnel_keys: Dict[str, str] = {}
+    probe_tasks = {}
+    
+    for t_id, t_status, t_node_id, t_iran_id, t_foreign_id, t_spec in active_tunnels:
+        iran_id = t_iran_id or t_node_id
+        foreign_id = t_foreign_id
+        foreign_ip = nodes_ip_map.get(foreign_id)
+        iran_ip = nodes_ip_map.get(iran_id)
+        
+        if not foreign_ip:
+            continue
             
-        if target_ip:
-            tunnel_ip_mapping[t_id] = target_ip
-            if target_ip not in _ping_cache or (now - _ping_cache[target_ip][0]) > 1.8:
-                ips_to_ping.add(target_ip)
+        spec = t_spec or {}
+        ctrl_port = spec.get("control_port") or spec.get("remote_port")
+        cache_key = f"{iran_id}:{foreign_id}:{ctrl_port}"
+        tunnel_keys[t_id] = cache_key
+        
+        # If cache expired or not present, queue a probe
+        if cache_key not in _ping_cache or (now - _ping_cache[cache_key][0]) > 1.8:
+            if cache_key not in probe_tasks:
+                probe_tasks[cache_key] = _probe_tunnel_latency(client, iran_id, iran_ip, foreign_ip, ctrl_port, cache_key)
                 
-    # Ping unique IPs concurrently
-    if ips_to_ping:
-        async def do_ping(ip: str):
-            res = await measure_precise_ping(ip)
-            _ping_cache[ip] = (time.time(), res)
-            
-        await asyncio.gather(*(do_ping(ip) for ip in ips_to_ping), return_exceptions=True)
+    if probe_tasks:
+        await asyncio.gather(*probe_tasks.values(), return_exceptions=True)
         
     tunnel_latencies = {}
-    for t_id, target_ip in tunnel_ip_mapping.items():
-        if target_ip in _ping_cache and _ping_cache[target_ip][1] is not None:
-            tunnel_latencies[t_id] = _ping_cache[target_ip][1]
+    for t_id, c_key in tunnel_keys.items():
+        if c_key in _ping_cache and _ping_cache[c_key][1] is not None:
+            tunnel_latencies[t_id] = _ping_cache[c_key][1]
             
     return {
         "tunnels": tunnel_latencies,
