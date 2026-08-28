@@ -224,7 +224,7 @@ const Nodes = () => {
                 </tr>
               ) : (
                 nodes.map((node) => {
-                  const cc = extractCountryCode(node.name, node.metadata?.country_code || 'IR') || 'IR'
+                  const cc = extractCountryCode(node.name, node.metadata?.country_code, 'iran') || 'IR'
                   const flag = getCountryFlag(cc)
                   return (
                     <tr key={node.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
@@ -241,12 +241,12 @@ const Nodes = () => {
                             />
                             <span className="text-[11px] font-mono font-bold text-gray-700 dark:text-gray-300">{cc}</span>
                           </div>
-                          <div className="flex flex-col">
+                          <div className="flex flex-col gap-0.5">
                             <span className="text-sm font-semibold text-gray-900 dark:text-white">
                               {formatLocalizedNodeName(node.name, language === 'fa', cc)}
                             </span>
-                            <span className="text-[11px] text-gray-400 font-mono">
-                              Port: {node.metadata?.api_port || '8888'}
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                              Port: <span className="font-medium text-gray-700 dark:text-gray-300">{node.metadata?.api_port || '8888'}</span>
                             </span>
                           </div>
                         </div>

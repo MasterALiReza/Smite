@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 
 // Country code to localized names in Persian
 export const countryNamesFa: Record<string, string> = {
@@ -40,25 +40,50 @@ export const countryNamesFa: Record<string, string> = {
 }
 
 // Robust country code extractor from metadata or server name
-export function extractCountryCode(name?: string, metadataCode?: string): string {
+export function extractCountryCode(name?: string, metadataCode?: string, fallbackRole?: string): string {
   if (metadataCode && typeof metadataCode === 'string' && metadataCode.trim().length === 2) {
     return metadataCode.trim().toUpperCase()
   }
-  if (!name) return ''
-  const upper = name.toUpperCase()
-  if (upper.includes('USA') || upper.includes('US-') || upper.startsWith('US ') || upper.includes('UNITED STATES')) return 'US'
-  if (upper.includes('TR-') || upper.startsWith('TR ') || upper.includes('TURKEY')) return 'TR'
-  if (upper.includes('FN-') || upper.includes('FI-') || upper.startsWith('FI ') || upper.includes('FINLAND') || upper.includes('HETZ')) return 'FI'
-  if (upper.includes('DE-') || upper.startsWith('DE ') || upper.includes('GERMANY')) return 'DE'
-  if (upper.includes('NL-') || upper.startsWith('NL ') || upper.includes('NETHERLANDS')) return 'NL'
-  if (upper.includes('FR-') || upper.startsWith('FR ') || upper.includes('FRANCE')) return 'FR'
-  if (upper.includes('GB-') || upper.includes('UK-') || upper.startsWith('GB ') || upper.includes('ENGLAND')) return 'GB'
-  if (upper.includes('IR-') || upper.startsWith('IR ') || upper.includes('IRAN')) return 'IR'
-  
-  const match = name.match(/^([A-Za-z]{2})[\s\-_]/)
-  if (match) {
-    return match[1].toUpperCase()
+  if (!name) {
+    return fallbackRole === 'iran' ? 'IR' : ''
   }
+  
+  const upper = name.toUpperCase()
+  
+  // 1. Explicit country keywords (highest priority)
+  if (upper.includes('IRAN') || upper.startsWith('IR-') || upper.startsWith('IR_') || upper.startsWith('IR ')) return 'IR'
+  if (upper.includes('TURKEY') || upper.startsWith('TR-') || upper.startsWith('TR_') || upper.startsWith('TR ')) return 'TR'
+  if (upper.includes('GERMANY') || upper.includes('DEUTSCH') || upper.startsWith('DE-') || upper.startsWith('DE_') || upper.startsWith('DE ')) return 'DE'
+  if (upper.includes('FINLAND') || upper.startsWith('FI-') || upper.startsWith('FI_') || upper.startsWith('FI ') || upper.startsWith('FN-')) return 'FI'
+  if (upper.includes('USA') || upper.includes('UNITED STATES') || upper.startsWith('US-') || upper.startsWith('US_') || upper.startsWith('US ')) return 'US'
+  if (upper.includes('NETHERLAND') || upper.startsWith('NL-') || upper.startsWith('NL_') || upper.startsWith('NL ')) return 'NL'
+  if (upper.includes('FRANCE') || upper.startsWith('FR-') || upper.startsWith('FR_') || upper.startsWith('FR ')) return 'FR'
+  if (upper.includes('ENGLAND') || upper.includes('BRITAIN') || upper.startsWith('GB-') || upper.startsWith('UK-')) return 'GB'
+  if (upper.includes('RUSSIA') || upper.startsWith('RU-') || upper.startsWith('RU_') || upper.startsWith('RU ')) return 'RU'
+  if (upper.includes('SWEDEN') || upper.startsWith('SE-') || upper.startsWith('SE_') || upper.startsWith('SE ')) return 'SE'
+  if (upper.includes('SWITZERLAND') || upper.startsWith('CH-') || upper.startsWith('CH_') || upper.startsWith('CH ')) return 'CH'
+  if (upper.includes('CANADA') || upper.startsWith('CA-') || upper.startsWith('CA_') || upper.startsWith('CA ')) return 'CA'
+  if (upper.includes('AUSTRIA') || upper.startsWith('AT-') || upper.startsWith('AT_') || upper.startsWith('AT ')) return 'AT'
+  if (upper.includes('POLAND') || upper.startsWith('PL-') || upper.startsWith('PL_') || upper.startsWith('PL ')) return 'PL'
+  if (upper.includes('ITALY') || upper.startsWith('IT-') || upper.startsWith('IT_') || upper.startsWith('IT ')) return 'IT'
+  if (upper.includes('SPAIN') || upper.startsWith('ES-') || upper.startsWith('ES_') || upper.startsWith('ES ')) return 'ES'
+  if (upper.includes('DUBAI') || upper.includes('EMIRATES') || upper.startsWith('AE-') || upper.startsWith('AE_') || upper.startsWith('AE ')) return 'AE'
+  if (upper.includes('SINGAPORE') || upper.startsWith('SG-') || upper.startsWith('SG_') || upper.startsWith('SG ')) return 'SG'
+  if (upper.includes('JAPAN') || upper.startsWith('JP-') || upper.startsWith('JP_') || upper.startsWith('JP ')) return 'JP'
+  if (upper.includes('KOREA') || upper.startsWith('KR-') || upper.startsWith('KR_') || upper.startsWith('KR ')) return 'KR'
+  if (upper.includes('HETZ')) return 'DE'
+
+  // 2. Token-aware match: check individual tokens separated by whitespace or hyphens
+  const tokens = upper.split(/[\s\-_\/]+/)
+  for (const token of tokens) {
+    if (token in countryNamesFa) {
+      return token
+    }
+  }
+
+  // 3. Fallback to role if provided
+  if (fallbackRole === 'iran') return 'IR'
+
   return ''
 }
 

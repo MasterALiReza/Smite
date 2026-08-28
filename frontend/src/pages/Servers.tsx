@@ -217,7 +217,7 @@ const Servers = () => {
                 </tr>
               ) : (
                 servers.map((server) => {
-                  const cc = extractCountryCode(server.name, server.metadata?.country_code)
+                  const cc = extractCountryCode(server.name, server.metadata?.country_code, 'foreign')
                   const flag = getCountryFlag(cc)
                   return (
                     <tr key={server.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
@@ -240,12 +240,12 @@ const Servers = () => {
                               🌐
                             </div>
                           )}
-                          <div className="flex flex-col">
+                          <div className="flex flex-col gap-0.5">
                             <span className="text-sm font-semibold text-gray-900 dark:text-white">
                               {formatLocalizedNodeName(server.name, language === 'fa', cc)}
                             </span>
-                            <span className="text-[11px] text-gray-400 font-mono">
-                              Port: {server.metadata?.api_port || '8888'}
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                              Port: <span className="font-medium text-gray-700 dark:text-gray-300">{server.metadata?.api_port || '8888'}</span>
                             </span>
                           </div>
                         </div>

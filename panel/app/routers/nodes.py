@@ -119,14 +119,14 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     # GeoIP resolution & Intelligent Naming
     country_code = metadata.get("country_code", "")
     country_name = metadata.get("country_name", "")
-    if not country_code:
+    if incoming_role == "iran" or (payload.name and "IRAN" in payload.name.upper()):
+        country_code = "IR"
+        country_name = "Iran"
+    elif not country_code:
         cc, cn = await get_country_info(payload.ip_address)
         if cc:
             country_code = cc
             country_name = cn
-        elif incoming_role == "iran":
-            country_code = "IR"
-            country_name = "Iran"
             
     if country_code:
         metadata["country_code"] = country_code
@@ -400,30 +400,35 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
         metadata["connection_status"] = connection_status
         metadata["latency_ms"] = latency_ms
         
-        if not metadata.get("country_code"):
-            uname = (node.name or "").upper()
-            if "USA" in uname or "US-" in uname or uname.startswith("US ") or "UNITED STATES" in uname:
+        uname = (node.name or "").upper()
+        if metadata.get("role") == "iran" or "IRAN" in uname or uname.startswith("IR-") or uname.startswith("IR_") or uname.startswith("IR "):
+            metadata["country_code"] = "IR"
+            metadata["country_name"] = "Iran"
+        elif not metadata.get("country_code") or metadata.get("country_code") == "DE" and metadata.get("role") == "iran":
+            if "USA" in uname or "UNITED STATES" in uname or uname.startswith("US-") or uname.startswith("US ") or uname.startswith("US_"):
                 metadata["country_code"] = "US"
-            elif "TR-" in uname or uname.startswith("TR ") or "TURKEY" in uname:
+            elif "TR-" in uname or uname.startswith("TR ") or uname.startswith("TR_") or "TURKEY" in uname:
                 metadata["country_code"] = "TR"
-            elif "FN-" in uname or "FI-" in uname or uname.startswith("FI ") or "HETZ" in uname or "FINLAND" in uname:
+            elif "FN-" in uname or "FI-" in uname or uname.startswith("FI ") or uname.startswith("FI_") or "FINLAND" in uname:
                 metadata["country_code"] = "FI"
-            elif "DE-" in uname or uname.startswith("DE ") or "GERMANY" in uname:
+            elif "GERMANY" in uname or uname.startswith("DE-") or uname.startswith("DE ") or uname.startswith("DE_"):
                 metadata["country_code"] = "DE"
-            elif "NL-" in uname or uname.startswith("NL ") or "NETHERLANDS" in uname:
+            elif "NETHERLAND" in uname or uname.startswith("NL-") or uname.startswith("NL ") or uname.startswith("NL_"):
                 metadata["country_code"] = "NL"
-            elif "FR-" in uname or uname.startswith("FR ") or "FRANCE" in uname:
+            elif "FRANCE" in uname or uname.startswith("FR-") or uname.startswith("FR ") or uname.startswith("FR_"):
                 metadata["country_code"] = "FR"
-            elif "GB-" in uname or "UK-" in uname or uname.startswith("GB "):
+            elif "GB-" in uname or "UK-" in uname or uname.startswith("GB ") or "ENGLAND" in uname or "BRITAIN" in uname:
                 metadata["country_code"] = "GB"
-            elif "IR-" in uname or uname.startswith("IR ") or metadata.get("role") == "iran":
-                metadata["country_code"] = "IR"
+            elif "HETZ" in uname:
+                metadata["country_code"] = "DE"
             else:
                 parts = (node.name or "").split()
                 if len(parts) >= 2 and len(parts[0]) == 2 and parts[0].isupper():
                     metadata["country_code"] = parts[0]
                 elif metadata.get("role") == "iran":
                     metadata["country_code"] = "IR"
+                else:
+                    metadata["country_code"] = "US"
         
         node.node_metadata = metadata
         from sqlalchemy.orm.attributes import flag_modified
