@@ -512,6 +512,12 @@ deploy_auto_one_click() {
         progress "CA certificate downloaded"
     fi
 
+    # Extract port from panel_addr if specified
+    local panel_api_port="8000"
+    if [[ "$clean_addr" =~ :([0-9]+)$ ]]; then
+        panel_api_port="${BASH_REMATCH[1]}"
+    fi
+
     # Write .env file
     cat > "$target_dir/.env" << EOF
 NODE_API_PORT=$node_port
@@ -521,7 +527,7 @@ SMITE_VERSION=${SMITE_VERSION:-latest}
 
 PANEL_CA_PATH=/etc/smite-node/certs/ca.crt
 PANEL_ADDRESS=$panel_addr
-PANEL_API_PORT=8000
+PANEL_API_PORT=$panel_api_port
 EOF
     progress "Configuration written to ${target_dir}/.env"
 

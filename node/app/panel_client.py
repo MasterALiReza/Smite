@@ -46,29 +46,27 @@ class PanelClient:
             await self.client.aclose()
             self.client = None
     
+    def _get_panel_api_url(self) -> str:
+        """Get base HTTP/HTTPS URL for panel API"""
+        addr = self.panel_address.strip()
+        protocol = "https" if addr.startswith("https://") else "http"
+        clean_addr = addr.replace("http://", "").replace("https://", "")
+        
+        if ":" in clean_addr:
+            host, port_str = clean_addr.split(":", 1)
+            port = int(port_str)
+        else:
+            host = clean_addr
+            port = settings.panel_api_port
+            
+        return f"{protocol}://{host}:{port}"
+
     async def register_with_panel(self):
         """Auto-register with panel"""
         if not self.client:
             await self.start()
         
-        if "://" in self.panel_address:
-            protocol, rest = self.panel_address.split("://", 1)
-            if ":" in rest:
-                panel_host, panel_hysteria_port = rest.split(":", 1)
-            else:
-                panel_host = rest
-                panel_hysteria_port = "443"
-        else:
-            protocol = "http"
-            if ":" in self.panel_address:
-                panel_host, panel_hysteria_port = self.panel_address.split(":", 1)
-            else:
-                panel_host = self.panel_address
-                panel_hysteria_port = "443"
-        
-        panel_api_port = settings.panel_api_port
-        
-        panel_api_url = f"http://{panel_host}:{panel_api_port}"
+        panel_api_url = self._get_panel_api_url()
         
         import socket
         try:
@@ -186,21 +184,7 @@ class PanelClient:
             return
         
         try:
-            if "://" in self.panel_address:
-                protocol, rest = self.panel_address.split("://", 1)
-                if ":" in rest:
-                    panel_host, _ = rest.split(":", 1)
-                else:
-                    panel_host = rest
-            else:
-                if ":" in self.panel_address:
-                    panel_host, _ = self.panel_address.split(":", 1)
-                else:
-                    panel_host = self.panel_address
-            
-            panel_api_port = settings.panel_api_port
-            panel_api_url = f"http://{panel_host}:{panel_api_port}"
-            
+            panel_api_url = self._get_panel_api_url()
             url = f"{panel_api_url}/api/nodes/{self.node_id}/frp-status"
             response = await self.client.put(url, json={
                 "connected": True,
