@@ -51,11 +51,55 @@ if ! command -v docker &> /dev/null; then
     progress "Docker installed"
 fi
 
-# Check docker compose
-if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
-    warn "Installing docker-compose-plugin..."
-    apt-get update -qq && apt-get install -y docker-compose-plugin > /dev/null 2>&1 || true
-fi
+# Export non-interactive git
+export GIT_TERMINAL_PROMPT=0
+
+# Ensure Docker Compose is available
+ensure_docker_compose() {
+    if docker compose version &> /dev/null; then
+        return 0
+    fi
+
+    if command -v docker-compose &> /dev/null; then
+        # Create CLI plugin symlinks so 'docker compose' works natively
+        mkdir -p /usr/local/lib/docker/cli-plugins ~/.docker/cli-plugins /usr/lib/docker/cli-plugins
+        local dc_bin="$(command -v docker-compose)"
+        ln -sf "$dc_bin" /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null || true
+        ln -sf "$dc_bin" ~/.docker/cli-plugins/docker-compose 2>/dev/null || true
+        ln -sf "$dc_bin" /usr/lib/docker/cli-plugins/docker-compose 2>/dev/null || true
+        if docker compose version &> /dev/null; then
+            return 0
+        fi
+    fi
+
+    warn "Docker Compose not detected. Installing..."
+    apt-get update -qq && (apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null) || true
+    
+    if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+        local arch="x86_64"
+        case "$(uname -m)" in
+            aarch64|arm64) arch="aarch64" ;;
+            armv7l|armhf)  arch="armv7" ;;
+            *)             arch="x86_64" ;;
+        esac
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${arch}" -o /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null || true
+        chmod +x /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null || true
+    fi
+}
+ensure_docker_compose
+
+# Helper: Universal docker compose execution
+run_compose() {
+    if docker compose version &> /dev/null; then
+        docker compose "$@"
+    elif command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    else
+        err "Docker Compose is required but not found."
+        exit 1
+    fi
+}
 
 # -------------------------------------------------------------
 # CLI Arguments Parsing (One-Click Auto Join Support)
@@ -541,11 +585,18 @@ EOF
     fi
 
     TEMP_DIR=$(mktemp -d)
-    if git clone --depth 1 $GIT_BRANCH https://github.com/MasterALiReza/Smite.git "$TEMP_DIR" 2>/dev/null; then
+    if GIT_TERMINAL_PROMPT=0 git clone --depth 1 $GIT_BRANCH https://github.com/MasterALiReza/Smite.git "$TEMP_DIR" 2>/dev/null; then
         cp -r "$TEMP_DIR/node"/* "$target_dir/" 2>/dev/null || true
         rm -rf "$TEMP_DIR"
     else
         rm -rf "$TEMP_DIR"
+        local branch="${GIT_BRANCH#-b }"
+        [ -z "$branch" ] && branch="main"
+        if curl -fsSL "https://github.com/MasterALiReza/Smite/archive/refs/heads/${branch}.tar.gz" -o "/tmp/smite-${branch}.tar.gz" 2>/dev/null; then
+            tar -xzf "/tmp/smite-${branch}.tar.gz" -C /tmp 2>/dev/null || true
+            cp -r /tmp/Smite-${branch}/node/* "$target_dir/" 2>/dev/null || true
+            rm -rf "/tmp/smite-${branch}.tar.gz" "/tmp/Smite-${branch}" 2>/dev/null || true
+        fi
     fi
 
     # Re-apply compose file
@@ -560,12 +611,12 @@ EOF
     fi
 
     if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
-        (cd "$target_dir" && docker compose build 2>&1 || true)
+        (cd "$target_dir" && run_compose build 2>&1 || true)
     fi
 
     # Start the container
     info "Starting node container (${c_name})..."
-    (cd "$target_dir" && docker compose up -d)
+    (cd "$target_dir" && run_compose up -d)
 
     # Install CLI tool
     install_cli_tool "$target_dir"
@@ -714,11 +765,18 @@ EOF
 
     info "Downloading latest node code from GitHub..."
     TEMP_DIR=$(mktemp -d)
-    if git clone --depth 1 $GIT_BRANCH https://github.com/MasterALiReza/Smite.git "$TEMP_DIR" 2>/dev/null; then
+    if GIT_TERMINAL_PROMPT=0 git clone --depth 1 $GIT_BRANCH https://github.com/MasterALiReza/Smite.git "$TEMP_DIR" 2>/dev/null; then
         cp -r "$TEMP_DIR/node"/* "$target_dir/" 2>/dev/null || true
         rm -rf "$TEMP_DIR"
     else
         rm -rf "$TEMP_DIR"
+        local branch="${GIT_BRANCH#-b }"
+        [ -z "$branch" ] && branch="main"
+        if curl -fsSL "https://github.com/MasterALiReza/Smite/archive/refs/heads/${branch}.tar.gz" -o "/tmp/smite-${branch}.tar.gz" 2>/dev/null; then
+            tar -xzf "/tmp/smite-${branch}.tar.gz" -C /tmp 2>/dev/null || true
+            cp -r /tmp/Smite-${branch}/node/* "$target_dir/" 2>/dev/null || true
+            rm -rf "/tmp/smite-${branch}.tar.gz" "/tmp/Smite-${branch}" 2>/dev/null || true
+        fi
     fi
 
     create_compose_file "$target_dir" "$c_name" "$v_name"
@@ -731,11 +789,11 @@ EOF
     fi
 
     if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
-        (cd "$target_dir" && docker compose build 2>&1 || true)
+        (cd "$target_dir" && run_compose build 2>&1 || true)
     fi
 
     info "Starting node container (${c_name})..."
-    (cd "$target_dir" && docker compose up -d)
+    (cd "$target_dir" && run_compose up -d)
 
     install_cli_tool "$target_dir"
 
@@ -752,7 +810,7 @@ EOF
         echo ""
     else
         err "Installation completed, but container ${c_name} is not running."
-        echo "Check logs with: cd ${target_dir} && docker compose logs"
+        echo "Check logs with: cd ${target_dir} && smite-node logs"
         exit 1
     fi
 }
@@ -777,8 +835,8 @@ update_existing_node() {
 
     (
         cd "$target_dir"
-        docker compose pull 2>/dev/null || true
-        docker compose up -d --force-recreate
+        run_compose pull 2>/dev/null || true
+        run_compose up -d --force-recreate
     )
 
     install_cli_tool "$target_dir"
@@ -886,7 +944,7 @@ else
             cp -r "$target_d" "$BACKUP_PATH"
             progress "Backup created"
 
-            (cd "$target_d" && docker compose down 2>/dev/null || true)
+            (cd "$target_d" && run_compose down 2>/dev/null || true)
             docker stop "$target_c" 2>/dev/null || true
             docker rm -f "$target_c" 2>/dev/null || true
 

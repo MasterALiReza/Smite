@@ -70,10 +70,29 @@ if ! command -v docker &> /dev/null; then
     progress "Docker installed"
 fi
 
-# Check docker-compose
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo -e "${RED}docker-compose not found. Please install it separately${NC}"
-    exit 1
+# Check docker compose
+export GIT_TERMINAL_PROMPT=0
+
+run_compose() {
+    if docker compose version &> /dev/null; then
+        docker compose "$@"
+    elif command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    else
+        echo -e "${RED}docker-compose not found. Please install it separately${NC}"
+        exit 1
+    fi
+}
+
+if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+    echo "Installing docker-compose..."
+    apt-get update -qq && (apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null) || true
+fi
+
+if ! docker compose version &> /dev/null && command -v docker-compose &> /dev/null; then
+    mkdir -p /usr/local/lib/docker/cli-plugins ~/.docker/cli-plugins /usr/lib/docker/cli-plugins
+    ln -sf "$(command -v docker-compose)" /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null || true
+    ln -sf "$(command -v docker-compose)" ~/.docker/cli-plugins/docker-compose 2>/dev/null || true
 fi
 
 # Get installation directory
@@ -303,7 +322,7 @@ if docker pull ghcr.io/masteralireza/smite-panel:${SMITE_VERSION} 2>/dev/null; t
 else
     echo -e "${YELLOW}Prebuilt image not found, will build locally...${NC}"
     echo "  Building images locally..."
-    if docker compose build --parallel 2>&1; then
+    if run_compose build --parallel 2>&1; then
         progress "Docker images built locally"
     else
         echo -e "${YELLOW}Build completed with warnings${NC}"
@@ -318,7 +337,7 @@ if [ "$NGINX_ENABLED" = "true" ]; then
     export NGINX_ENABLED=true
     
     # First start panel (will use host networking)
-    docker compose up -d smite-panel
+    run_compose up -d smite-panel
     
     # Wait a bit for panel to start
     echo "Waiting for panel to start..."
@@ -340,13 +359,13 @@ if [ "$NGINX_ENABLED" = "true" ]; then
     fi
     
     # Now start nginx with https profile
-    docker compose --profile https up -d nginx
+    run_compose --profile https up -d nginx
     
     # Wait for nginx
     sleep 3
 else
     # Start without nginx (direct access)
-    docker compose up -d
+    run_compose up -d
 fi
 
 # Wait for services
