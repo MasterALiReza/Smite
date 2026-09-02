@@ -143,74 +143,76 @@ const Nodes = () => {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
+    <div className="w-full max-w-7xl mx-auto space-y-5 sm:space-y-6">
+      {/* Header & Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.nodes.title}</h1>
-          <p className="text-gray-500 dark:text-gray-400">{t.nodes.subtitle}</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white tracking-tight">{t.nodes.title}</h1>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t.nodes.subtitle}</p>
         </div>
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           <button
             onClick={() => setShowJoinModal(true)}
-            className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
+            className="flex-1 sm:flex-none px-3.5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl hover:from-purple-700 hover:to-indigo-700 transition-all font-semibold shadow-xs hover:shadow-md flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95"
             title="One-Click Automatic Node Join Command"
           >
-            <Sparkles size={18} />
-            Auto Join Command
+            <Sparkles size={16} />
+            <span>Auto Join</span>
           </button>
           <button
             onClick={showCA}
-            className="px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
+            className="px-3.5 py-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-all font-semibold shadow-xs hover:shadow-md flex items-center justify-center gap-1.5 text-xs sm:text-sm min-h-[44px] active:scale-95"
           >
-            <Copy size={18} />
-            {t.nodes.viewCACertificate}
+            <Copy size={16} />
+            <span>{t.nodes.viewCACertificate}</span>
           </button>
           <button
             onClick={downloadCA}
-            className="px-4 py-2.5 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-all duration-200 font-medium border border-gray-200 dark:border-gray-600 flex items-center gap-2 text-sm"
+            className="px-3.5 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-xl transition-all font-semibold border border-gray-200/80 dark:border-gray-700/80 flex items-center justify-center gap-1.5 text-xs sm:text-sm min-h-[44px] active:scale-95"
+            title={t.nodes.downloadCA}
           >
-            <Download size={18} />
-            {t.nodes.downloadCA}
+            <Download size={16} />
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md flex items-center gap-2 text-sm"
+            className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-semibold shadow-xs hover:shadow-md flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95"
           >
             <Plus size={18} />
-            {t.nodes.addNode}
+            <span>{t.nodes.addNode}</span>
           </button>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
+      {/* Desktop Table View */}
+      <div className="hidden md:block bg-white dark:bg-gray-800 rounded-2xl border border-gray-200/80 dark:border-gray-700/80 overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
+            <thead className="bg-gray-50/80 dark:bg-gray-750/50 border-b border-gray-200 dark:border-gray-700">
               <tr>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Name
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Fingerprint
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Ping
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   IP Address
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Last Seen
                 </th>
-                <th className="px-6 py-3 text-start text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3.5 text-start text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-100 dark:divide-gray-700">
               {nodes.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-0">
@@ -227,7 +229,7 @@ const Nodes = () => {
                   const cc = extractCountryCode(node.name, node.metadata?.country_code, 'iran') || 'IR'
                   const flag = getCountryFlag(cc)
                   return (
-                    <tr key={node.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <tr key={node.id} className="hover:bg-gray-50/70 dark:hover:bg-gray-700/50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-700/70 rounded-lg border border-gray-200/60 dark:border-gray-600/60 shadow-2xs">
@@ -256,7 +258,7 @@ const Nodes = () => {
                           <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">{node.fingerprint}</code>
                           <button
                             onClick={() => copyToClipboard(node.fingerprint)}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-400 min-w-[36px] min-h-[36px] flex items-center justify-center"
+                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-400 min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
                             title="Copy fingerprint"
                             aria-label="Copy fingerprint"
                           >
@@ -265,50 +267,7 @@ const Nodes = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {(() => {
-                          const connStatus = node.metadata?.connection_status || 'failed'
-                          const getStatusColor = (status: string) => {
-                            switch (status) {
-                              case 'connected':
-                                return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                              case 'connecting':
-                              case 'reconnecting':
-                                return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200'
-                              case 'failed':
-                                return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-                              default:
-                                return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                            }
-                          }
-                          const getStatusIcon = (status: string) => {
-                            switch (status) {
-                              case 'connected':
-                                return <CheckCircle size={12} className="text-green-600 dark:text-green-400" />
-                              case 'connecting':
-                              case 'reconnecting':
-                                return <AlertCircle size={12} className="text-yellow-600 dark:text-yellow-400" />
-                              case 'failed':
-                                return <XCircle size={12} className="text-red-600 dark:text-red-400" />
-                              default:
-                                return <XCircle size={12} />
-                            }
-                          }
-                          const getStatusText = (status: string) => {
-                            switch (status) {
-                              case 'connected': return 'Connected'
-                              case 'connecting': return 'Connecting'
-                              case 'reconnecting': return 'Reconnecting'
-                              case 'failed': return 'Failed'
-                              default: return status
-                            }
-                          }
-                          return (
-                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(connStatus)}`}>
-                              {getStatusIcon(connStatus)}
-                              {getStatusText(connStatus)}
-                            </span>
-                          )
-                        })()}
+                        {renderConnectionStatusBadge(node.metadata?.connection_status || 'failed')}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <LatencyBadge
@@ -316,7 +275,7 @@ const Nodes = () => {
                           status={node.metadata?.connection_status || 'failed'}
                         />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
                         {node.metadata?.ip_address || 'N/A'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
@@ -326,7 +285,7 @@ const Nodes = () => {
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => setEditingNode(node)}
-                            className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                            className="p-2 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors"
                             title="Edit Node Name"
                             aria-label="Edit Node Name"
                           >
@@ -334,7 +293,7 @@ const Nodes = () => {
                           </button>
                           <button
                             onClick={() => deleteNode(node.id)}
-                            className="p-1.5 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center transition-colors"
+                            className="p-2 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors"
                             title="Delete node"
                             aria-label="Delete node"
                           >
@@ -349,6 +308,111 @@ const Nodes = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Mobile Card View */}
+      <div className="block md:hidden space-y-3">
+        {nodes.length === 0 ? (
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200/80 dark:border-gray-700/80 p-4">
+            <EmptyState 
+              icon={<Server size={32} />} 
+              title="No Iran nodes" 
+              description="Add an Iran node to get started." 
+              action={{ label: 'Add Node', onClick: () => setShowAddModal(true) }} 
+            />
+          </div>
+        ) : (
+          nodes.map((node) => {
+            const cc = extractCountryCode(node.name, node.metadata?.country_code, 'iran') || 'IR'
+            return (
+              <div 
+                key={node.id} 
+                className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200/80 dark:border-gray-700/80 p-4 shadow-xs space-y-3.5 transition-shadow hover:shadow-md"
+              >
+                {/* Header: Flag, Name, Status */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700/70 rounded-md border border-gray-200/60 dark:border-gray-600/60 shrink-0">
+                      <img
+                        src={`https://purecatamphetamine.github.io/country-flag-icons/3x2/${cc}.svg`}
+                        alt={cc}
+                        className="w-3.5 h-2.5 object-cover rounded-xs"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none'
+                        }}
+                      />
+                      <span className="text-[10px] font-mono font-bold text-gray-700 dark:text-gray-300">{cc}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate">
+                        {formatLocalizedNodeName(node.name, language === 'fa', cc)}
+                      </h3>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 font-mono">
+                        Port: {node.metadata?.api_port || '8888'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0">
+                    {renderConnectionStatusBadge(node.metadata?.connection_status || 'failed')}
+                  </div>
+                </div>
+
+                {/* Metadata Row: IP & Ping */}
+                <div className="flex items-center justify-between gap-2 p-2.5 bg-gray-50 dark:bg-gray-750/50 rounded-xl text-xs">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-gray-400 dark:text-gray-500 font-medium">IP:</span>
+                    <span className="font-mono text-gray-800 dark:text-gray-200 truncate">{node.metadata?.ip_address || 'N/A'}</span>
+                  </div>
+                  <div className="shrink-0">
+                    <LatencyBadge
+                      latency={node.metadata?.latency_ms}
+                      status={node.metadata?.connection_status || 'failed'}
+                    />
+                  </div>
+                </div>
+
+                {/* Fingerprint Box */}
+                <div className="flex items-center justify-between gap-2 px-3 py-2 bg-gray-100/70 dark:bg-gray-900/60 rounded-xl border border-gray-200/50 dark:border-gray-700/50">
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[10px] uppercase font-semibold text-gray-400 dark:text-gray-500">Fingerprint</span>
+                    <span className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate">{node.fingerprint}</span>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(node.fingerprint)}
+                    className="p-2 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg shadow-2xs border border-gray-200/80 dark:border-gray-700 min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0 active:scale-95 transition-all"
+                    title="Copy Fingerprint"
+                    aria-label="Copy Fingerprint"
+                  >
+                    <Copy size={15} />
+                  </button>
+                </div>
+
+                {/* Footer: Last Seen & Actions */}
+                <div className="flex items-center justify-between pt-1 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-700/60">
+                  <span className="truncate">{new Date(node.last_seen).toLocaleDateString()} {new Date(node.last_seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setEditingNode(node)}
+                      className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95"
+                      title="Edit Node Name"
+                      aria-label="Edit Node Name"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => deleteNode(node.id)}
+                      className="p-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95"
+                      title="Delete Node"
+                      aria-label="Delete Node"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
       </div>
 
       {showAddModal && (
@@ -391,12 +455,57 @@ const Nodes = () => {
   )
 }
 
+const renderConnectionStatusBadge = (connStatus: string) => {
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'connected':
+        return 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/60'
+      case 'connecting':
+      case 'reconnecting':
+        return 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-200/80 dark:border-amber-800/60'
+      case 'failed':
+        return 'bg-rose-100 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border-rose-200/80 dark:border-rose-800/60'
+      default:
+        return 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-200 dark:border-gray-700'
+    }
+  }
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'connected':
+        return <CheckCircle size={12} className="text-emerald-600 dark:text-emerald-400" />
+      case 'connecting':
+      case 'reconnecting':
+        return <AlertCircle size={12} className="text-amber-600 dark:text-amber-400" />
+      case 'failed':
+        return <XCircle size={12} className="text-rose-600 dark:text-rose-400" />
+      default:
+        return <XCircle size={12} />
+    }
+  }
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'connected': return 'Connected'
+      case 'connecting': return 'Connecting'
+      case 'reconnecting': return 'Reconnecting'
+      case 'failed': return 'Failed'
+      default: return status
+    }
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getStatusColor(connStatus)}`}>
+      {getStatusIcon(connStatus)}
+      <span>{getStatusText(connStatus)}</span>
+    </span>
+  )
+}
+
 interface AddNodeModalProps {
   onClose: () => void
   onSuccess: () => void
 }
 
 const AddNodeModal = ({ onClose, onSuccess }: AddNodeModalProps) => {
+  const { t } = useLanguage()
   const { showToast } = useToast()
   const [name, setName] = useState('')
   const [ipAddress, setIpAddress] = useState('')
@@ -420,61 +529,62 @@ const AddNodeModal = ({ onClose, onSuccess }: AddNodeModalProps) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-md max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.nodes.addNode}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
               Node Name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400"
+              className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-750 text-gray-900 dark:text-white placeholder-gray-400 text-base sm:text-sm transition-all"
               required
+              placeholder="e.g. Tehran Server 1"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
               IP Address
             </label>
             <input
               type="text"
               value={ipAddress}
               onChange={(e) => setIpAddress(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400"
-              placeholder="e.g., 192.168.1.100"
+              className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-750 text-gray-900 dark:text-white placeholder-gray-400 text-base sm:text-sm font-mono transition-all"
+              placeholder="e.g., 185.100.x.x"
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
               API Port
             </label>
             <input
               type="number"
               value={apiPort}
               onChange={(e) => setApiPort(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400"
+              className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-750 text-gray-900 dark:text-white placeholder-gray-400 text-base sm:text-sm font-mono transition-all"
               placeholder="8888"
               min="1"
               max="65535"
               required
             />
           </div>
-          <div className="flex gap-3 justify-end">
+          <div className="flex gap-2.5 justify-end pt-3 border-t border-gray-100 dark:border-gray-700">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              className="px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 font-medium text-sm min-h-[44px]"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-medium shadow-sm hover:shadow-md"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-semibold shadow-xs hover:shadow-md text-sm min-h-[44px]"
             >
               {t.nodes.addNode}
             </button>
@@ -497,39 +607,40 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
   const { showToast } = useToast()
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">CA Certificate</h2>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[90dvh] flex flex-col shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">CA Certificate</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="p-1 rounded-xl text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Close"
           >
-            <XCircle size={24} />
+            <XCircle size={22} />
           </button>
         </div>
         
-        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-lg">
-          <p className="text-sm text-blue-800 dark:text-blue-200">
-            <strong>Node Installation:</strong> Copy the certificate below (click "Copy Certificate" button). 
+        <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200/80 dark:border-blue-800/60 rounded-xl">
+          <p className="text-xs sm:text-sm text-blue-900 dark:text-blue-200 leading-relaxed">
+            <strong>Node Installation:</strong> Copy the certificate below. 
             During node installation, you will be prompted to paste this certificate.
           </p>
         </div>
 
         {loading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-gray-500 dark:text-gray-400">Loading certificate...</div>
+          <div className="flex-1 flex items-center justify-center py-12">
+            <div className="text-gray-500 dark:text-gray-400 text-sm animate-pulse">Loading certificate...</div>
           </div>
         ) : (
           <>
             <textarea
               readOnly
               value={certContent}
-              className="flex-1 w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 resize-none"
-              style={{ minHeight: '300px' }}
+              className="flex-1 w-full p-3.5 border border-gray-300 dark:border-gray-600 rounded-xl font-mono text-xs bg-gray-900 text-green-400 resize-none min-h-[220px] max-h-[40vh] focus:outline-none select-all"
+              onClick={(e) => (e.target as HTMLTextAreaElement).select()}
             />
             
-            <div className="flex justify-end gap-3 mt-4">
+            <div className="flex justify-end gap-2.5 mt-4 pt-3 border-t border-gray-100 dark:border-gray-700">
               <button
                 type="button"
                 onClick={async (e) => {
@@ -543,28 +654,21 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
                   if (success) {
                     onCopy()
                     showToast('success', 'Copied', 'Certificate copied to clipboard', 2000)
-                  } else {
-                    const textarea = e.currentTarget.closest('.bg-white, .dark\\:bg-gray-800')?.querySelector('textarea')
-                    if (textarea) {
-                      textarea.select()
-                      textarea.setSelectionRange(0, 99999)
-                    }
-                    showToast('error', 'Copy Failed', 'Please select and copy manually from the text area.')
                   }
                 }}
                 disabled={loading || !certContent || certContent.trim().length === 0}
-                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                className={`px-4 py-2.5 rounded-xl transition-all font-semibold flex items-center gap-2 text-sm min-h-[44px] ${
                   copied
-                    ? 'bg-green-600 text-white'
-                    : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50'
                 }`}
               >
                 <Copy size={16} />
-                {copied ? 'Copied!' : 'Copy Certificate'}
+                <span>{copied ? 'Copied!' : 'Copy Certificate'}</span>
               </button>
               <button
                 onClick={onClose}
-                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                className="px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium min-h-[44px]"
               >
                 Close
               </button>

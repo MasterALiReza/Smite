@@ -168,13 +168,13 @@ const CoreHealth = () => {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{t.coreHealth.title}</h1>
-        <p className="text-gray-600 dark:text-gray-400">{t.coreHealth.subtitle}</p>
+    <div className="w-full max-w-7xl mx-auto space-y-5 sm:space-y-6">
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white tracking-tight">{t.coreHealth.title}</h1>
+        <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t.coreHealth.subtitle}</p>
       </div>
 
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6">
         {health.map((coreHealth) => {
           const config = configs.find(c => c.core === coreHealth.core)
           const nodeCount = Object.keys(coreHealth.nodes_status).length
@@ -183,79 +183,83 @@ const CoreHealth = () => {
           return (
             <div
               key={coreHealth.core}
-              className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6"
+              className="bg-white dark:bg-gray-800 rounded-2xl shadow-xs border border-gray-200/80 dark:border-gray-700/80 p-5 sm:p-6 transition-shadow hover:shadow-md space-y-5"
             >
-              <div className="mb-4">
+              {/* Core Header */}
+              <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-                    <Activity className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                  <div className="p-2.5 bg-blue-100 dark:bg-blue-900/40 rounded-xl text-blue-600 dark:text-blue-400">
+                    <Activity className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white capitalize">
                       {coreHealth.core}
                     </h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">
                       {nodeCount} node(s), {serverCount} server(s)
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                    Node Status
+              {/* Status Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                {/* Iran Nodes */}
+                <div className="bg-gray-50 dark:bg-gray-750/50 p-3.5 sm:p-4 rounded-xl border border-gray-100 dark:border-gray-700/60">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                    Iran Nodes Status
                   </h3>
                   <div className="space-y-2">
                     {Object.entries(coreHealth.nodes_status).map(([nodeId, nodeInfo]) => (
                       <div key={nodeId} className="space-y-1">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600 dark:text-gray-400 truncate max-w-[200px]">
-                            {nodeInfo.name || nodeId.substring(0, 8)}...
+                        <div className="flex items-center justify-between text-xs sm:text-sm">
+                          <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[180px]">
+                            {nodeInfo.name || nodeId.substring(0, 8)}
                           </span>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 shrink-0">
                             {getStatusIcon(nodeInfo.status)}
-                            <span className={`text-sm font-medium ${getStatusColor(nodeInfo.status)}`}>
+                            <span className={`font-semibold ${getStatusColor(nodeInfo.status)}`}>
                               {getStatusText(nodeInfo.status)}
                             </span>
                           </div>
                         </div>
                         {nodeInfo.error_message && (
-                          <p className="text-xs text-red-600 dark:text-red-400 ml-2">
+                          <p className="text-[11px] text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-1.5 rounded-md">
                             {nodeInfo.error_message}
                           </p>
                         )}
                       </div>
                     ))}
                     {nodeCount === 0 && (
-                      <span className="text-sm text-gray-500 dark:text-gray-400">No active nodes</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 italic">No active Iran nodes</span>
                     )}
                   </div>
                 </div>
 
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                    Server Status
+                {/* Foreign Servers */}
+                <div className="bg-gray-50 dark:bg-gray-750/50 p-3.5 sm:p-4 rounded-xl border border-gray-100 dark:border-gray-700/60">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                    Foreign Servers Status
                   </h3>
                   <div className="space-y-2">
                     {serverCount === 0 ? (
-                      <span className="text-sm text-gray-500 dark:text-gray-400">No active servers</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 italic">No active foreign servers</span>
                     ) : (
                       Object.entries(coreHealth.servers_status).map(([serverId, serverInfo]) => (
                         <div key={serverId} className="space-y-1">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-600 dark:text-gray-400 truncate max-w-[200px]">
-                              {serverInfo.name || serverId.substring(0, 8)}...
+                          <div className="flex items-center justify-between text-xs sm:text-sm">
+                            <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[180px]">
+                              {serverInfo.name || serverId.substring(0, 8)}
                             </span>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 shrink-0">
                               {getStatusIcon(serverInfo.status)}
-                              <span className={`text-sm font-medium ${getStatusColor(serverInfo.status)}`}>
+                              <span className={`font-semibold ${getStatusColor(serverInfo.status)}`}>
                                 {getStatusText(serverInfo.status)}
                               </span>
                             </div>
                           </div>
                           {serverInfo.error_message && (
-                            <p className="text-xs text-red-600 dark:text-red-400 ml-2">
+                            <p className="text-[11px] text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-1.5 rounded-md">
                               {serverInfo.error_message}
                             </p>
                           )}
@@ -266,15 +270,16 @@ const CoreHealth = () => {
                 </div>
               </div>
 
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <div className="flex items-center justify-between mb-4">
+              {/* Auto Reset Timer & Actions */}
+              <div className="border-t border-gray-100 dark:border-gray-700/80 pt-4 space-y-4">
+                <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-gray-500 dark:text-gray-400" />
-                    <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    <Clock className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                    <h3 className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Auto Reset Timer
                     </h3>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
+                  <label className="relative inline-flex items-center cursor-pointer min-h-[44px] min-w-[44px] justify-end">
                     <input
                       type="checkbox"
                       checked={config?.enabled || false}
@@ -282,38 +287,36 @@ const CoreHealth = () => {
                       disabled={updating === coreHealth.core}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[11px] after:right-[22px] peer-checked:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
                   </label>
                 </div>
 
                 {config?.enabled && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3">
-                      <label className="text-sm text-gray-600 dark:text-gray-400">
-                        Interval (minutes):
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={config.interval_minutes}
-                        onChange={(e) => {
-                          const minutes = parseInt(e.target.value)
-                          if (minutes >= 1) {
-                            handleConfigUpdate(coreHealth.core, { interval_minutes: minutes })
-                          }
-                        }}
-                        disabled={updating === coreHealth.core}
-                        className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
+                  <div className="flex items-center gap-3 p-3 bg-blue-50/50 dark:bg-blue-950/30 rounded-xl border border-blue-100 dark:border-blue-900/40">
+                    <label className="text-xs sm:text-sm text-gray-700 dark:text-gray-300 font-medium">
+                      Interval (minutes):
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={config.interval_minutes}
+                      onChange={(e) => {
+                        const minutes = parseInt(e.target.value)
+                        if (minutes >= 1) {
+                          handleConfigUpdate(coreHealth.core, { interval_minutes: minutes })
+                        }
+                      }}
+                      disabled={updating === coreHealth.core}
+                      className="w-24 px-3 py-1.5 text-base sm:text-sm border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-750 text-gray-900 dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
                   </div>
                 )}
 
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-end pt-2">
                   <button
                     onClick={() => handleReset(coreHealth.core)}
                     disabled={updating === coreHealth.core}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl transition-all font-semibold shadow-xs hover:shadow-md text-xs sm:text-sm min-h-[44px] min-w-[120px] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {updating === coreHealth.core ? (
                       <>
