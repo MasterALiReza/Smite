@@ -86,14 +86,15 @@ local_private_key = "{safe_priv}"
 remote_public_key = "{safe_pub}"
 """
             elif transport_lower in ("websocket", "ws", "wss"):
+                is_tls = bool(websocket_tls or transport_lower == "wss")
+                tls_val = "true" if is_tls else "false"
                 config += f"""
 [server.transport]
 type = "websocket"
 
 [server.transport.websocket]
+tls = {tls_val}
 """
-                if websocket_tls or transport_lower == "wss":
-                    config += "tls = true\n"
             
             tunnel_type_lower = tunnel_type.lower()
             for i, p in enumerate(resolved_ports):

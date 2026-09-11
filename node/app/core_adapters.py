@@ -506,14 +506,14 @@ local_private_key = "{local_priv}"
 remote_public_key = "{remote_pub}"
 """
             elif use_websocket:
+                tls_val = "true" if websocket_tls else "false"
                 config += f"""
 [server.transport]
 type = "websocket"
 
 [server.transport.websocket]
+tls = {tls_val}
 """
-                if websocket_tls:
-                    config += "tls = true\n"
             
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
@@ -602,14 +602,15 @@ local_private_key = "{local_priv}"
 remote_public_key = "{remote_pub}"
 """
             elif use_websocket:
+                tls_val = "true" if websocket_tls else "false"
                 config += f"""
 [client.transport]
 type = "websocket"
 
 [client.transport.websocket]
+tls = {tls_val}
 """
                 if websocket_tls:
-                    config += "tls = true\n"
                     custom_sni = sanitize_config_str(spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('hostname'))
                     if custom_sni:
                         config += f"""
