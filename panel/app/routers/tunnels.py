@@ -1225,7 +1225,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         "tunnel_id": tunnel.id,
                         "core": tunnel.core,
                         "type": tunnel.type,
-                        "spec": server_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else spec
+                        "spec": server_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
                     }
                 )
                 
@@ -1251,7 +1251,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         "tunnel_id": tunnel.id,
                         "core": tunnel.core,
                         "type": tunnel.type,
-                        "spec": client_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else spec
+                        "spec": client_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
                     }
                 )
                 
@@ -1272,8 +1272,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         verify_ctrl_port = assigned_control_port
                     elif control_port is not None:
                         verify_ctrl_port = control_port
-                    elif spec and spec.get("control_port"):
-                        verify_ctrl_port = spec.get("control_port")
+                    elif tunnel.spec and tunnel.spec.get("control_port"):
+                        verify_ctrl_port = tunnel.spec.get("control_port")
                     
                     verify_res = {}
                     try:
