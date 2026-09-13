@@ -10,7 +10,7 @@ import time
 import asyncio
 
 from app.database import get_db
-from app.models import Tunnel, Node, Admin
+from app.models import Tunnel, Node, Admin, TunnelCategory
 from app.node_client import NodeClient
 from app.routers.auth import get_current_user
 
@@ -118,6 +118,7 @@ class TunnelCreate(BaseModel):
     relay_hops: list[dict] | None = None
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
+    category: str | None = None
 
 
 class TunnelUpdate(BaseModel):
@@ -146,6 +147,7 @@ class TunnelUpdate(BaseModel):
     relay_hops: list[dict] | None = None
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
+    category: str | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -177,6 +179,7 @@ class TunnelResponse(BaseModel):
     relay_hops: list[dict] | None = None
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
+    category: str | None = None
     status: str
     error_message: str | None = None
     revision: int
@@ -187,6 +190,29 @@ class TunnelResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class CategoryCreate(BaseModel):
+    name: str
+    color: str | None = "blue"
+    description: str | None = None
+
+
+class CategoryResponse(BaseModel):
+    id: str
+    name: str
+    color: str = "blue"
+    description: str | None = None
+    tunnel_count: int = 0
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BulkCategoryAssign(BaseModel):
+    tunnel_ids: list[str]
+    category: str | None = None
 
 
 def parse_ports_from_spec(spec: dict) -> list:
@@ -316,6 +342,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         relay_hops=tunnel.relay_hops,
         bypass_ips=tunnel.bypass_ips,
         dns_resolvers=tunnel.dns_resolvers,
+        category=tunnel.category,
         status="pending"
     )
     db.add(db_tunnel)
@@ -991,6 +1018,132 @@ async def get_tunnels_latencies(db: AsyncSession = Depends(get_db), current_user
     }
 
 
+@router.get("/categories", response_model=List[CategoryResponse])
+async def list_categories(
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
+):
+    """List all categories with dynamic count of tunnels in each"""
+    cat_result = await db.execute(select(TunnelCategory).order_by(TunnelCategory.name))
+    categories = cat_result.scalars().all()
+    cat_dict = {c.name: c for c in categories}
+    
+    tun_result = await db.execute(select(Tunnel.category))
+    tunnel_cats = tun_result.scalars().all()
+    
+    counts: dict[str, int] = {}
+    for c in tunnel_cats:
+        if c:
+            counts[c] = counts.get(c, 0) + 1
+            if c not in cat_dict:
+                new_cat = TunnelCategory(name=c, color="blue")
+                db.add(new_cat)
+                cat_dict[c] = new_cat
+    
+    if len(counts) > len(categories):
+        await db.commit()
+    
+    res = []
+    for name, cat in sorted(cat_dict.items(), key=lambda x: x[0].lower()):
+        res.append(CategoryResponse(
+            id=cat.id,
+            name=cat.name,
+            color=cat.color or "blue",
+            description=cat.description,
+            tunnel_count=counts.get(name, 0),
+            created_at=cat.created_at or datetime.utcnow()
+        ))
+    return res
+
+
+@router.post("/categories", response_model=CategoryResponse, status_code=201)
+async def create_category(
+    cat_in: CategoryCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
+):
+    """Create a new category"""
+    clean_name = cat_in.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Category name cannot be empty")
+    
+    result = await db.execute(select(TunnelCategory).where(TunnelCategory.name == clean_name))
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="Category already exists")
+    
+    new_cat = TunnelCategory(
+        name=clean_name,
+        color=cat_in.color or "blue",
+        description=cat_in.description
+    )
+    db.add(new_cat)
+    await db.commit()
+    await db.refresh(new_cat)
+    
+    return CategoryResponse(
+        id=new_cat.id,
+        name=new_cat.name,
+        color=new_cat.color or "blue",
+        description=new_cat.description,
+        tunnel_count=0,
+        created_at=new_cat.created_at
+    )
+
+
+@router.delete("/categories/{name}")
+async def delete_category(
+    name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
+):
+    """Delete a category and reset associated tunnels to None (uncategorized)"""
+    result = await db.execute(select(TunnelCategory).where(TunnelCategory.name == name))
+    cat = result.scalar_one_or_none()
+    if cat:
+        await db.delete(cat)
+    
+    tun_result = await db.execute(select(Tunnel).where(Tunnel.category == name))
+    tunnels = tun_result.scalars().all()
+    for t in tunnels:
+        t.category = None
+    
+    await db.commit()
+    return {"status": "success", "message": f"Category {name} deleted"}
+
+
+@router.post("/bulk-category")
+async def bulk_assign_category(
+    req: BulkCategoryAssign,
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
+):
+    """Assign or clear category for multiple tunnels atomically"""
+    if not req.tunnel_ids:
+        return {"status": "success", "updated_count": 0}
+    
+    clean_category = req.category.strip() if req.category and req.category.strip() else None
+    
+    if clean_category:
+        cat_res = await db.execute(select(TunnelCategory).where(TunnelCategory.name == clean_category))
+        if not cat_res.scalar_one_or_none():
+            new_cat = TunnelCategory(name=clean_category, color="blue")
+            db.add(new_cat)
+    
+    tun_result = await db.execute(select(Tunnel).where(Tunnel.id.in_(req.tunnel_ids)))
+    tunnels = tun_result.scalars().all()
+    
+    for t in tunnels:
+        t.category = clean_category
+        
+    await db.commit()
+    return {
+        "status": "success",
+        "updated_count": len(tunnels),
+        "category": clean_category
+    }
+
+
 @router.get("/{tunnel_id}", response_model=TunnelResponse)
 async def get_tunnel(tunnel_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Get tunnel by ID"""
@@ -1099,6 +1252,8 @@ async def update_tunnel(
         tunnel.bypass_ips = tunnel_update.bypass_ips
     if tunnel_update.dns_resolvers is not None:
         tunnel.dns_resolvers = tunnel_update.dns_resolvers
+    if tunnel_update.category is not None:
+        tunnel.category = tunnel_update.category.strip() if tunnel_update.category.strip() else None
         
     tunnel.revision += 1
     tunnel.updated_at = datetime.utcnow()

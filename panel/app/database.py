@@ -149,6 +149,10 @@ async def migrate_db():
             logger.info("Adding dns_resolvers column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN dns_resolvers JSON"))
 
+        if "category" not in columns:
+            logger.info("Adding category column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN category VARCHAR"))
+
 
 async def init_db():
     """Initialize database tables"""

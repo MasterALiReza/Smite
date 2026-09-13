@@ -63,8 +63,20 @@ class Tunnel(Base):
     bypass_ips = Column(JSON, nullable=True)          # List of IPs/CIDRs to bypass
     dns_resolvers = Column(JSON, nullable=True)       # Custom DNS resolvers
     
+    category = Column(String, nullable=True, index=True) # Category/Group name
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TunnelCategory(Base):
+    __tablename__ = "tunnel_categories"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, unique=True, nullable=False)
+    color = Column(String, default="blue")
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Admin(Base):

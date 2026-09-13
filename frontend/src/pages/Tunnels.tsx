@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, CheckSquare, Tag, Layers } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -17,6 +17,15 @@ interface TunnelReapplyState {
   error?: string
 }
 
+export interface TunnelCategory {
+  id: string
+  name: string
+  color: string
+  description?: string
+  tunnel_count: number
+  created_at?: string
+}
+
 interface Tunnel {
   id: string
   name: string
@@ -27,6 +36,7 @@ interface Tunnel {
   status: string
   error_message?: string | null
   revision: number
+  category?: string | null
   created_at: string
   updated_at: string
 }
@@ -185,6 +195,19 @@ const getBackhaulDisplayInfo = (spec: Record<string, any> | undefined): Backhaul
   }
 }
 
+export const getCategoryColorClasses = (color: string = 'blue') => {
+  const map: Record<string, { bg: string; text: string; border: string; activeBg: string }> = {
+    blue: { bg: 'bg-blue-50 dark:bg-blue-950/40', text: 'text-blue-700 dark:text-blue-300', border: 'border-blue-200 dark:border-blue-800', activeBg: 'bg-blue-600 text-white border-blue-600' },
+    emerald: { bg: 'bg-emerald-50 dark:bg-emerald-950/40', text: 'text-emerald-700 dark:text-emerald-300', border: 'border-emerald-200 dark:border-emerald-800', activeBg: 'bg-emerald-600 text-white border-emerald-600' },
+    purple: { bg: 'bg-purple-50 dark:bg-purple-950/40', text: 'text-purple-700 dark:text-purple-300', border: 'border-purple-200 dark:border-purple-800', activeBg: 'bg-purple-600 text-white border-purple-600' },
+    amber: { bg: 'bg-amber-50 dark:bg-amber-950/40', text: 'text-amber-700 dark:text-amber-300', border: 'border-amber-200 dark:border-amber-800', activeBg: 'bg-amber-600 text-white border-amber-600' },
+    rose: { bg: 'bg-rose-50 dark:bg-rose-950/40', text: 'text-rose-700 dark:text-rose-300', border: 'border-rose-200 dark:border-rose-800', activeBg: 'bg-rose-600 text-white border-rose-600' },
+    cyan: { bg: 'bg-cyan-50 dark:bg-cyan-950/40', text: 'text-cyan-700 dark:text-cyan-300', border: 'border-cyan-200 dark:border-cyan-800', activeBg: 'bg-cyan-600 text-white border-cyan-600' },
+    indigo: { bg: 'bg-indigo-50 dark:bg-indigo-950/40', text: 'text-indigo-700 dark:text-indigo-300', border: 'border-indigo-200 dark:border-indigo-800', activeBg: 'bg-indigo-600 text-white border-indigo-600' },
+  }
+  return map[color] || map.blue
+}
+
 const Tunnels = () => {
   const { t } = useLanguage()
   const { showToast, showConfirm } = useToast()
@@ -200,7 +223,17 @@ const Tunnels = () => {
   const [reapplyAllProgress, setReapplyAllProgress] = useState<TunnelReapplyState[] | null>(null)
   const [reapplyAllDone, setReapplyAllDone] = useState(false)
   const [showConfirmReapplyAll, setShowConfirmReapplyAll] = useState(false)
+  const [showConfirmReapplySelected, setShowConfirmReapplySelected] = useState(false)
   const [livePingEnabled, setLivePingEnabled] = useState(true)
+
+  // ─── Category & Multi-Selection States ───────────────────────
+  const [categories, setCategories] = useState<TunnelCategory[]>([])
+  const [activeCategoryTab, setActiveCategoryTab] = useState<string>('all')
+  const [selectedTunnelIds, setSelectedTunnelIds] = useState<Set<string>>(new Set())
+  const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false)
+  const [showAssignCategoryModal, setShowAssignCategoryModal] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [newCategoryColor, setNewCategoryColor] = useState('blue')
 
   useEffect(() => {
     fetchData()
@@ -262,11 +295,13 @@ const Tunnels = () => {
 
   const fetchData = async () => {
     try {
-      const [tunnelsRes, nodesRes] = await Promise.all([
+      const [tunnelsRes, nodesRes, categoriesRes] = await Promise.all([
         api.get('/tunnels'),
         api.get('/nodes'),
+        api.get('/tunnels/categories').catch(() => ({ data: [] })),
       ])
       setTunnels(tunnelsRes.data)
+      setCategories(categoriesRes.data || [])
       // Filter nodes: iran nodes and foreign servers
       const iranNodes = nodesRes.data.filter((node: any) => 
         node.metadata?.role === 'iran' || !node.metadata?.role  // Default to iran for backward compatibility
@@ -281,6 +316,133 @@ const Tunnels = () => {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ─── Category & Bulk Handlers ──────────────────────────────────────────
+  const createCategory = async (name: string, color: string = 'blue') => {
+    try {
+      const res = await api.post('/tunnels/categories', { name, color })
+      setCategories(prev => [...prev.filter(c => c.name !== name), res.data])
+      showToast('success', t.tunnels.categoryCreated || 'Category created', name)
+      return res.data
+    } catch (e: any) {
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to create category')
+      return null
+    }
+  }
+
+  const deleteCategory = async (name: string) => {
+    const ok = await showConfirm({
+      title: t.tunnels.deleteCategory || 'Delete Category',
+      message: `Delete "${name}" category? Tunnels in this category will become uncategorized.`,
+      variant: 'danger',
+      confirmText: 'Delete'
+    })
+    if (!ok) return
+    try {
+      await api.delete(`/tunnels/categories/${encodeURIComponent(name)}`)
+      fetchData()
+      if (activeCategoryTab === name) setActiveCategoryTab('all')
+      showToast('success', 'Deleted', `Category "${name}" deleted`)
+    } catch (e: any) {
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to delete category')
+    }
+  }
+
+  const bulkAssignCategory = async (categoryName: string | null) => {
+    if (selectedTunnelIds.size === 0) return
+    try {
+      await api.post('/tunnels/bulk-category', {
+        tunnel_ids: Array.from(selectedTunnelIds),
+        category: categoryName
+      })
+      showToast('success', 'Category Updated', `${selectedTunnelIds.size} tunnels updated`)
+      setSelectedTunnelIds(new Set())
+      setShowAssignCategoryModal(false)
+      fetchData()
+    } catch (e: any) {
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to assign category')
+    }
+  }
+
+  // ─── Multi-Selection & Selective Reapply ──────────────────────────────
+  const toggleSelectTunnel = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    setSelectedTunnelIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const filteredTunnels = tunnels.filter(t => {
+    if (activeCategoryTab === 'all') return true
+    if (activeCategoryTab === 'uncategorized') return !t.category
+    return t.category === activeCategoryTab
+  })
+
+  const toggleSelectAllFiltered = () => {
+    const filteredIds = filteredTunnels.map(t => t.id)
+    const allSelected = filteredIds.length > 0 && filteredIds.every(id => selectedTunnelIds.has(id))
+    setSelectedTunnelIds(prev => {
+      const next = new Set(prev)
+      if (allSelected) {
+        filteredIds.forEach(id => next.delete(id))
+      } else {
+        filteredIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const handleReapplySelected = () => {
+    if (selectedTunnelIds.size === 0) return
+    setShowConfirmReapplySelected(true)
+  }
+
+  const startReapplySelected = async () => {
+    setShowConfirmReapplySelected(false)
+    const targets = tunnels.filter(t => selectedTunnelIds.has(t.id))
+    if (targets.length === 0) return
+
+    const initial: TunnelReapplyState[] = targets.map(t => ({
+      id: t.id,
+      name: t.name,
+      status: 'pending',
+    }))
+    setReapplyAllProgress(initial)
+    setReapplyAllDone(false)
+
+    let current = [...initial]
+    for (let i = 0; i < targets.length; i++) {
+      const tunnel = targets[i]
+      current = current.map((item, idx) =>
+        idx === i ? { ...item, status: 'running' } : item
+      )
+      setReapplyAllProgress([...current])
+
+      try {
+        const response = await api.post(`/tunnels/${tunnel.id}/apply`)
+        const isSuccess = response.data && (response.data.status === 'success' || response.data.status === 'applied' || !response.data.status)
+        if (isSuccess) {
+          current = current.map((item, idx) =>
+            idx === i ? { ...item, status: 'success' } : item
+          )
+        } else {
+          throw new Error(response.data?.message || 'Failed')
+        }
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.detail || error.message || 'Failed to apply'
+        current = current.map((item, idx) =>
+          idx === i ? { ...item, status: 'error', error: errorMsg } : item
+        )
+      }
+      setReapplyAllProgress([...current])
+    }
+
+    setReapplyAllDone(true)
+    fetchData()
   }
 
   const deleteTunnel = async (id: string) => {
@@ -457,17 +619,172 @@ const Tunnels = () => {
         </div>
       </div>
 
+      {/* ── Category Filter Bar ──────────────────────────────────────── */}
+      <div className="flex items-center justify-between gap-3 overflow-x-auto pb-1 scrollbar-none">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          {/* All Tunnels Chip */}
+          <button
+            type="button"
+            onClick={() => setActiveCategoryTab('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border ${
+              activeCategoryTab === 'all'
+                ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-750'
+            }`}
+          >
+            <Layers size={13} />
+            <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+              activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+            }`}>
+              {tunnels.length}
+            </span>
+          </button>
+
+          {/* Category Chips */}
+          {categories.map((cat) => {
+            const count = tunnels.filter(t => t.category === cat.name).length
+            const colorStyle = getCategoryColorClasses(cat.color)
+            const isActive = activeCategoryTab === cat.name
+            return (
+              <div key={cat.id} className="relative group/cat shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveCategoryTab(cat.name)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 border ${
+                    isActive
+                      ? colorStyle.activeBg
+                      : `${colorStyle.bg} ${colorStyle.border} ${colorStyle.text} hover:opacity-90`
+                  }`}
+                >
+                  <Tag size={12} />
+                  <span>{cat.name}</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    isActive ? 'bg-white/20 text-white' : 'bg-black/5 dark:bg-white/10'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+                {/* Quick delete button on hover */}
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); deleteCategory(cat.name); }}
+                  className="absolute -top-1.5 -right-1.5 hidden group-hover/cat:flex w-4 h-4 rounded-full bg-rose-500 text-white items-center justify-center text-[10px] shadow-xs"
+                  title={t.tunnels.deleteCategory || 'Delete category'}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          })}
+
+          {/* Uncategorized Chip if any exist */}
+          {tunnels.some(t => !t.category) && (
+            <button
+              type="button"
+              onClick={() => setActiveCategoryTab('uncategorized')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border ${
+                activeCategoryTab === 'uncategorized'
+                  ? 'bg-gray-700 border-gray-700 text-white shadow-xs'
+                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-750'
+              }`}
+            >
+              <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                activeCategoryTab === 'uncategorized' ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+              }`}>
+                {tunnels.filter(t => !t.category).length}
+              </span>
+            </button>
+          )}
+
+          {/* Add Category Button */}
+          <button
+            type="button"
+            onClick={() => setShowCreateCategoryModal(true)}
+            className="px-2.5 py-1.5 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-500 text-gray-500 dark:text-gray-400 hover:text-blue-600 text-xs font-medium flex items-center gap-1 transition-all shrink-0"
+            title={t.tunnels.newCategory || 'New Category'}
+          >
+            <FolderPlus size={13} />
+            <span>{t.tunnels.newCategory || 'New Category'}</span>
+          </button>
+        </div>
+
+        {/* Select All Toggle */}
+        {filteredTunnels.length > 0 && (
+          <button
+            type="button"
+            onClick={toggleSelectAllFiltered}
+            className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white bg-gray-100 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700"
+          >
+            <CheckSquare size={14} className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-blue-600' : ''} />
+            <span>
+              {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                ? (t.tunnels.deselectAll || 'Deselect')
+                : (t.tunnels.selectAll || 'Select All')}
+            </span>
+          </button>
+        )}
+      </div>
+
+      {/* ── Sticky Floating Batch Action Bar ─────────────────────────── */}
+      {selectedTunnelIds.size > 0 && (
+        <div className="sticky top-4 z-30 p-3 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-900/90 via-indigo-900/90 to-purple-900/90 backdrop-blur-md text-white shadow-xl border border-white/20 flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-4 duration-200">
+          <div className="flex items-center gap-2.5">
+            <span className="w-7 h-7 rounded-lg bg-blue-500/30 flex items-center justify-center font-bold text-sm text-blue-200 border border-blue-400/30">
+              {selectedTunnelIds.size}
+            </span>
+            <span className="font-semibold text-sm">
+              {selectedTunnelIds.size} {t.tunnels.selectedCount || 'selected'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Selective Reapply Button */}
+            <button
+              type="button"
+              onClick={handleReapplySelected}
+              disabled={!!reapplyAllProgress && !reapplyAllDone}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
+            >
+              <RotateCw size={15} />
+              <span>{t.tunnels.reapplySelected || 'Reapply Selected'}</span>
+            </button>
+
+            {/* Assign Category Button */}
+            <button
+              type="button"
+              onClick={() => setShowAssignCategoryModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-white/20 hover:bg-white/30 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all border border-white/30 active:scale-95 cursor-pointer"
+            >
+              <Folder size={15} />
+              <span>{t.tunnels.moveToCategory || 'Move to Category'}</span>
+            </button>
+
+            {/* Clear Selection */}
+            <button
+              type="button"
+              onClick={() => setSelectedTunnelIds(new Set())}
+              className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-xs font-semibold transition-all active:scale-95 cursor-pointer"
+              title={t.tunnels.deselectAll || 'Clear selection'}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Tunnel Cards ────────────────────────────────────── */}
       <div className="space-y-3.5 sm:space-y-4">
-        {tunnels.length === 0 && (
+        {filteredTunnels.length === 0 && (
           <EmptyState
             icon={<Network size={32} />}
-            title="No tunnels yet"
-            description="Create your first tunnel to get started forwarding traffic between your Iran and foreign nodes."
-            action={{ label: 'Create Tunnel', onClick: () => setShowAddModal(true) }}
+            title="No tunnels in this category"
+            description="No tunnels match the selected category filter."
+            action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
           />
         )}
-        {tunnels.map((tunnel) => {
+        {filteredTunnels.map((tunnel) => {
           const isReapplying = reapplyingTunnelId === tunnel.id
 
           // Extract ports from spec
@@ -528,6 +845,22 @@ const Tunnels = () => {
               <div className="p-4 sm:p-5">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
                   <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+                    {/* Multi-Selection Checkbox */}
+                    <button
+                      type="button"
+                      onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
+                      className={`mt-1 shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-all cursor-pointer ${
+                        selectedTunnelIds.has(tunnel.id)
+                          ? 'bg-blue-600 border-blue-600 text-white shadow-xs scale-105'
+                          : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 bg-white dark:bg-gray-700/50'
+                      }`}
+                      title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
+                    >
+                      {selectedTunnelIds.has(tunnel.id) && (
+                        <CheckCircle2 size={15} className="fill-current text-white" />
+                      )}
+                    </button>
+
                     {/* Status Badge */}
                     <div className="flex flex-col gap-1 shrink-0 pt-0.5">
                       <span
@@ -552,7 +885,7 @@ const Tunnels = () => {
                     </div>
 
                     <div className="flex-1 min-w-0 space-y-2">
-                      {/* Name, Core Badge, Transmission Badge, Ports, Latency */}
+                      {/* Name, Core Badge, Category Badge, Transmission Badge, Ports, Latency */}
                       <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
                         <h3 className="text-sm sm:text-base font-bold text-gray-900 dark:text-white truncate">{tunnel.name}</h3>
                         <span
@@ -560,6 +893,27 @@ const Tunnels = () => {
                         >
                           {tunnel.core}
                         </span>
+                        {tunnel.category && (
+                          <span
+                            className={`px-2 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 ${
+                              getCategoryColorClasses(
+                                categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                              ).bg
+                            } ${
+                              getCategoryColorClasses(
+                                categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                              ).text
+                            } ${
+                              getCategoryColorClasses(
+                                categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                              ).border
+                            }`}
+                            title={`Category: ${tunnel.category}`}
+                          >
+                            <Tag size={11} />
+                            <span>{tunnel.category}</span>
+                          </span>
+                        )}
                         {(() => {
                           let transmissionType = null
                           if (tunnel.core === 'chisel') {
@@ -927,10 +1281,208 @@ const Tunnels = () => {
         </div>
       )}
 
+      {/* ── Reapply Selected — Confirm Dialog ─────────────────────── */}
+      {showConfirmReapplySelected && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-sm">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
+              {t.tunnels.reapplySelected || 'Reapply Selected Tunnels'}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              {t.tunnels.confirmReapplySelected || `Are you sure you want to reapply ${selectedTunnelIds.size} selected tunnels?`}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowConfirmReapplySelected(false)}
+                className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
+              >
+                {t.tunnels.cancel || 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={startReapplySelected}
+                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs active:scale-95 cursor-pointer"
+              >
+                <RotateCw size={14} />
+                <span>{t.tunnels.reapplySelected || 'Yes, Reapply'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Category Modal ─────────────────────────────────── */}
+      {showCreateCategoryModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <FolderPlus size={20} className="text-blue-600" />
+                <span>{t.tunnels.newCategory || 'New Category'}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => { setShowCreateCategoryModal(false); setNewCategoryName(''); }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
+                  {t.tunnels.categoryName || 'Category Name'}
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Gaming, V2Ray TR, Office"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Color Tag
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  {['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan', 'indigo'].map((c) => {
+                    const style = getCategoryColorClasses(c)
+                    const isSelected = newCategoryColor === c
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setNewCategoryColor(c)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                          isSelected ? `${style.activeBg} ring-2 ring-offset-2 ring-blue-500` : `${style.bg} ${style.border} ${style.text}`
+                        }`}
+                      >
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-700">
+                <button
+                  type="button"
+                  onClick={() => { setShowCreateCategoryModal(false); setNewCategoryName(''); }}
+                  className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
+                >
+                  {t.tunnels.cancel || 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!newCategoryName.trim()) return
+                    const res = await createCategory(newCategoryName.trim(), newCategoryColor)
+                    if (res) {
+                      setNewCategoryName('')
+                      setShowCreateCategoryModal(false)
+                    }
+                  }}
+                  disabled={!newCategoryName.trim()}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl disabled:opacity-50 cursor-pointer"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assign Category Modal ─────────────────────────────────── */}
+      {showAssignCategoryModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <Folder size={20} className="text-blue-600" />
+                <span>{t.tunnels.assignCategory || 'Assign Category'}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAssignCategoryModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Select a category for {selectedTunnelIds.size} selected tunnel(s):
+            </p>
+
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {/* Option to clear category (Uncategorized) */}
+              <button
+                type="button"
+                onClick={() => bulkAssignCategory(null)}
+                className="w-full text-left p-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-300 cursor-pointer"
+              >
+                <span>{t.tunnels.uncategorized || 'None (Uncategorized)'}</span>
+                <span className="text-[10px] text-gray-400">Clear category</span>
+              </button>
+
+              {/* List of existing categories */}
+              {categories.map((cat) => {
+                const colorStyle = getCategoryColorClasses(cat.color)
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => bulkAssignCategory(cat.name)}
+                    className="w-full text-left p-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 flex items-center justify-between transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`w-3 h-3 rounded-full ${colorStyle.activeBg.split(' ')[0]}`}></span>
+                      <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">{cat.name}</span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${colorStyle.bg} ${colorStyle.text}`}>
+                      {tunnels.filter(t => t.category === cat.name).length} tunnels
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAssignCategoryModal(false)
+                  setShowCreateCategoryModal(true)
+                }}
+                className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <FolderPlus size={14} />
+                <span>+ Create new category</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAssignCategoryModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
+              >
+                {t.tunnels.cancel || 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAddModal && (
         <AddTunnelModal
           nodes={nodes}
           servers={servers}
+          categories={categories}
+          onCategoryCreated={createCategory}
           onClose={() => setShowAddModal(false)}
           onSuccess={() => {
             setShowAddModal(false)
@@ -943,6 +1495,8 @@ const Tunnels = () => {
         <EditTunnelModal
           tunnel={editingTunnel}
           nodes={nodes}
+          categories={categories}
+          onCategoryCreated={createCategory}
           onClose={() => setEditingTunnel(null)}
           onSuccess={() => {
             setEditingTunnel(null)
@@ -957,11 +1511,13 @@ const Tunnels = () => {
 interface EditTunnelModalProps {
   tunnel: Tunnel
   nodes: any[]
+  categories?: TunnelCategory[]
+  onCategoryCreated?: (name: string, color?: string) => Promise<any>
   onClose: () => void
   onSuccess: () => void
 }
 
-const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) => {
+const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, onClose, onSuccess }: EditTunnelModalProps) => {
   const { t } = useLanguage()
   const { showToast } = useToast()
   const forwardToParsed = tunnel.spec?.forward_to ? parseAddressPort(tunnel.spec.forward_to) : null
@@ -1033,7 +1589,10 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
     allowed_ips: tunnel.allowed_ips && Array.isArray(tunnel.allowed_ips) ? tunnel.allowed_ips.join('\n') : '',
     rate_limit_enabled: !!tunnel.rate_limit_mbps,
     allowed_ips_enabled: !!(tunnel.allowed_ips && tunnel.allowed_ips.length > 0),
+    category: tunnel.category || '',
   })
+  const [showInlineNewCategory, setShowInlineNewCategory] = useState(false)
+  const [inlineCategoryName, setInlineCategoryName] = useState('')
   const parsedBackhaul = parseBackhaulSpec(tunnel.spec, tunnel.type)
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(parsedBackhaul.state)
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(parsedBackhaul.advanced)
@@ -1206,6 +1765,7 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
 
       await api.put(`/tunnels/${tunnel.id}`, {
         name: formData.name,
+        category: formData.category ? formData.category.trim() : null,
         spec: updatedSpec,
         transport_type: tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : formData.transport_type),
         ...(tunnel.core === 'gost' && {
@@ -1239,24 +1799,87 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[100] p-3.5 sm:p-4">
       <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-md max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
-        <div className="mb-4">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">Edit Tunnel</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+            Edit Tunnel: {tunnel.name}
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center -mr-2 cursor-pointer"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="mb-4 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl">
           <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
             <span>🛡️</span> Zero-Downtime: Saving changes will not drop live connections until you click Reapply.
           </p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t.tunnels.name}
-            </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-              required
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                {t.tunnels.name}
+              </label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                required
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                  <Tag size={13} className="text-blue-500" />
+                  <span>{t.tunnels.categories || 'Category'}</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowInlineNewCategory(prev => !prev)}
+                  className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  {showInlineNewCategory ? 'Cancel' : '+ New'}
+                </button>
+              </div>
+              <select
+                value={formData.category}
+                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              {showInlineNewCategory && (
+                <div className="mt-2 p-2 rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="New category..."
+                    value={inlineCategoryName}
+                    onChange={(e) => setInlineCategoryName(e.target.value)}
+                    className="flex-1 px-2.5 py-1 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!inlineCategoryName.trim()) return
+                      const created = await onCategoryCreated?.(inlineCategoryName.trim())
+                      if (created) {
+                        setFormData({ ...formData, category: created.name })
+                        setInlineCategoryName('')
+                        setShowInlineNewCategory(false)
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 cursor-pointer"
+                  >
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           {tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
@@ -1909,11 +2532,13 @@ const EditTunnelModal = ({ tunnel, onClose, onSuccess }: EditTunnelModalProps) =
 interface AddTunnelModalProps {
   nodes: any[]
   servers: any[]
+  categories?: TunnelCategory[]
+  onCategoryCreated?: (name: string, color?: string) => Promise<any>
   onClose: () => void
   onSuccess: () => void
 }
 
-const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalProps) => {
+const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, onClose, onSuccess }: AddTunnelModalProps) => {
   const { t } = useLanguage()
   const { showToast } = useToast()
   const [formData, setFormData] = useState({
@@ -1954,7 +2579,10 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
     allowed_ips: '',
     rate_limit_enabled: false,
     allowed_ips_enabled: false,
+    category: '',
   })
+  const [showInlineNewCategory, setShowInlineNewCategory] = useState(false)
+  const [inlineCategoryName, setInlineCategoryName] = useState('')
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(createDefaultBackhaulState())
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(createDefaultBackhaulAdvancedState())
   const [showBackhaulAdvanced, setShowBackhaulAdvanced] = useState(false)
@@ -2216,7 +2844,8 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
         }),
         node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
         foreign_node_id: formData.foreign_node_id || null,
-        iran_node_id: formData.iran_node_id || formData.node_id || null
+        iran_node_id: formData.iran_node_id || formData.node_id || null,
+        category: formData.category ? formData.category.trim() : null
       }
       await api.post('/tunnels', payload)
       showToast('success', 'Tunnel Created', `${formData.name} was created successfully`)
@@ -2272,17 +2901,70 @@ const AddTunnelModal = ({ nodes, servers, onClose, onSuccess }: AddTunnelModalPr
       <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.tunnels.createTunnel}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Name
-            </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
-              required
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Name
+              </label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                required
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1 h-5">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                  <Tag size={13} className="text-blue-500" />
+                  <span>{t.tunnels.categories || 'Category'}</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowInlineNewCategory(prev => !prev)}
+                  className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  {showInlineNewCategory ? 'Cancel' : '+ New'}
+                </button>
+              </div>
+              <select
+                value={formData.category}
+                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              {showInlineNewCategory && (
+                <div className="mt-2 p-2 rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="New category..."
+                    value={inlineCategoryName}
+                    onChange={(e) => setInlineCategoryName(e.target.value)}
+                    className="flex-1 px-2.5 py-1 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!inlineCategoryName.trim()) return
+                      const created = await onCategoryCreated?.(inlineCategoryName.trim())
+                      if (created) {
+                        setFormData({ ...formData, category: created.name })
+                        setInlineCategoryName('')
+                        setShowInlineNewCategory(false)
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 cursor-pointer"
+                  >
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>

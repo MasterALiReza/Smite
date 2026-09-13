@@ -76,6 +76,20 @@ interface Translations {
     reapplyAll: string
     confirmReapplyAll: string
     reapplyAllSuccess: string
+    reapplySelected: string
+    selectedCount: string
+    categories: string
+    allTunnels: string
+    uncategorized: string
+    newCategory: string
+    categoryName: string
+    assignCategory: string
+    moveToCategory: string
+    selectAll: string
+    deselectAll: string
+    confirmReapplySelected: string
+    deleteCategory: string
+    categoryCreated: string
   }
   coreHealth: {
     title: string
@@ -199,6 +213,20 @@ const translations: Record<Language, Translations> = {
       reapplyAll: 'Reapply All',
       confirmReapplyAll: 'Are you sure you want to reapply all tunnels?',
       reapplyAllSuccess: 'Success',
+      reapplySelected: 'Reapply Selected',
+      selectedCount: 'selected',
+      categories: 'Categories',
+      allTunnels: 'All Tunnels',
+      uncategorized: 'Uncategorized',
+      newCategory: 'New Category',
+      categoryName: 'Category Name',
+      assignCategory: 'Assign Category',
+      moveToCategory: 'Move to Category',
+      selectAll: 'Select All',
+      deselectAll: 'Deselect',
+      confirmReapplySelected: 'Are you sure you want to reapply the selected tunnels?',
+      deleteCategory: 'Delete Category',
+      categoryCreated: 'Category created successfully',
     },
     coreHealth: {
       title: 'Core Health',
@@ -324,6 +352,20 @@ const translations: Record<Language, Translations> = {
       reapplyAll: 'اعمال مجدد همه',
       confirmReapplyAll: 'آیا از اعمال مجدد همه تونل‌ها مطمئن هستید؟',
       reapplyAllSuccess: 'موفقیت',
+      reapplySelected: 'اعمال مجدد انتخاب‌شده‌ها',
+      selectedCount: 'مورد انتخاب شد',
+      categories: 'دسته‌بندی‌ها',
+      allTunnels: 'همه تانل‌ها',
+      uncategorized: 'بدون دسته‌بندی',
+      newCategory: 'دسته‌بندی جدید',
+      categoryName: 'نام دسته‌بندی',
+      assignCategory: 'تعیین دسته‌بندی',
+      moveToCategory: 'انتقال به دسته‌بندی',
+      selectAll: 'انتخاب همه',
+      deselectAll: 'لغو انتخاب',
+      confirmReapplySelected: 'آیا از اعمال مجدد تانل‌های انتخاب شده مطمئن هستید؟',
+      deleteCategory: 'حذف دسته‌بندی',
+      categoryCreated: 'دسته‌بندی با موفقیت ایجاد شد',
     },
     coreHealth: {
       title: 'سلامت هسته',
