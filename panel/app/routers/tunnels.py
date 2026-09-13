@@ -477,6 +477,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         flag_modified(db_tunnel, "spec")
                         server_priv, client_pub = s_priv, c_pub
 
+                    ports = parse_ports_from_spec(db_tunnel.spec)
                     await request.app.state.rathole_server_manager.start_server(
                         tunnel_id=db_tunnel.id,
                         remote_addr=remote_addr,
@@ -1205,7 +1206,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     await db.commit()
                     raise HTTPException(status_code=400, detail="Foreign node has no IP address")
 
+                from app.spec_builder import build_tunnel_node_specs, parse_ports_list
                 server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+                ports = parse_ports_list(tunnel.spec)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
                 await db.commit()
