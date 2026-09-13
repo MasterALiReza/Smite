@@ -89,6 +89,11 @@ async def lifespan(app: FastAPI):
     
     await _restore_forwards()
     
+    await _restore_rathole_servers()
+    await _restore_backhaul_servers()
+    await _restore_chisel_servers()
+    await _restore_frp_servers()
+    
     await _restore_node_tunnels()
     
     gost_forwarder.start_monitor()
@@ -353,153 +358,21 @@ async def _restore_node_tunnels():
                         skipped_count += 1
                         continue
                     
-                    server_spec = tunnel.spec.copy() if tunnel.spec else {}
-                    server_spec["mode"] = "server"
+                    iran_node_ip = iran_node.node_metadata.get("ip_address")
+                    if not iran_node_ip:
+                        logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping sync")
+                        skipped_count += 1
+                        continue
                     
-                    client_spec = tunnel.spec.copy() if tunnel.spec else {}
-                    client_spec["mode"] = "client"
+                    foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
                     
-                    if tunnel.core == "rathole":
-                        transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
-                        proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-                        token = server_spec.get("token")
-                        if not proxy_port or not token:
-                            logger.warning(f"Tunnel {tunnel.id}: Missing remote_port or token, skipping")
-                            continue
-                        
-                        remote_addr = server_spec.get("remote_addr", "0.0.0.0:23333")
-                        from app.utils import parse_address_port
-                        _, control_port, _ = parse_address_port(remote_addr)
-                        if not control_port:
-                            import hashlib
-                            port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                            control_port = 23333 + (port_hash % 1000)  # Ports 23333-24332
-                        server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                        server_spec["proxy_port"] = proxy_port
-                        server_spec["transport"] = transport
-                        server_spec["type"] = transport
-                        if "websocket_tls" in server_spec:
-                            server_spec["websocket_tls"] = server_spec["websocket_tls"]
-                        elif "tls" in server_spec:
-                            server_spec["websocket_tls"] = server_spec["tls"]
-                        
-                        iran_node_ip = iran_node.node_metadata.get("ip_address")
-                        if not iran_node_ip:
-                            logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
-                            continue
-                        transport_lower = transport.lower()
-                        if transport_lower in ("websocket", "ws"):
-                            use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls"))
-                            protocol = "wss://" if use_tls else "ws://"
-                            client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                        else:
-                            client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                        client_spec["transport"] = transport
-                        client_spec["type"] = transport
-                        client_spec["token"] = token
-                        if "websocket_tls" in server_spec:
-                            client_spec["websocket_tls"] = server_spec["websocket_tls"]
-                        elif "tls" in server_spec:
-                            client_spec["websocket_tls"] = server_spec["tls"]
-                        local_addr = client_spec.get("local_addr")
-                        if not local_addr:
-                            local_addr = f"{iran_node_ip}:{proxy_port}"
-                        client_spec["local_addr"] = local_addr
-                    
-                    elif tunnel.core == "chisel":
-                        listen_port = server_spec.get("listen_port") or server_spec.get("remote_port")
-                        if not listen_port:
-                            logger.warning(f"Tunnel {tunnel.id}: Missing listen_port, skipping")
-                            continue
-                        
-                        iran_node_ip = iran_node.node_metadata.get("ip_address")
-                        if not iran_node_ip:
-                            logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
-                            continue
-                        import hashlib
-                        port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                        server_control_port = server_spec.get("control_port") or (int(listen_port) + 10000 + (port_hash % 1000))
-                        server_spec["server_port"] = server_control_port
-                        server_spec["reverse_port"] = listen_port
-                        auth = server_spec.get("auth")
-                        if auth:
-                            server_spec["auth"] = auth
-                        fingerprint = server_spec.get("fingerprint")
-                        if fingerprint:
-                            server_spec["fingerprint"] = fingerprint
-                        
-                        client_spec["server_url"] = f"http://{iran_node_ip}:{server_control_port}"
-                        client_spec["reverse_port"] = listen_port
-                        if auth:
-                            client_spec["auth"] = auth
-                        if fingerprint:
-                            client_spec["fingerprint"] = fingerprint
-                        local_addr = client_spec.get("local_addr")
-                        if not local_addr:
-                            local_addr = f"{iran_node_ip}:{listen_port}"
-                        client_spec["local_addr"] = local_addr
-                    
-                    elif tunnel.core == "frp":
-                        bind_port = server_spec.get("bind_port", 7000)
-                        token = server_spec.get("token")
-                        server_spec["bind_port"] = bind_port
-                        if token:
-                            server_spec["token"] = token
-                        
-                        iran_node_ip = iran_node.node_metadata.get("ip_address")
-                        if not iran_node_ip:
-                            logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
-                            continue
-                        client_spec["server_addr"] = iran_node_ip
-                        client_spec["server_port"] = bind_port
-                        if token:
-                            client_spec["token"] = token
-                        tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
-                        if tunnel_type not in ["tcp", "udp"]:
-                            tunnel_type = "tcp"
-                        client_spec["type"] = tunnel_type
-                    
-                    elif tunnel.core == "backhaul":
-                        transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
-                        import hashlib
-                        port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                        control_port = server_spec.get("control_port") or server_spec.get("listen_port") or (3080 + (port_hash % 1000))
-                        public_port = server_spec.get("public_port") or server_spec.get("remote_port") or server_spec.get("listen_port")
-                        target_host = server_spec.get("target_host", "127.0.0.1")
-                        target_port = server_spec.get("target_port") or public_port
-                        token = server_spec.get("token")
-                        
-                        if not public_port:
-                            logger.warning(f"Tunnel {tunnel.id}: Missing public_port, skipping")
-                            continue
-                        
-                        bind_ip = server_spec.get("bind_ip") or server_spec.get("listen_ip") or "0.0.0.0"
-                        server_spec["bind_addr"] = f"{bind_ip}:{control_port}"
-                        server_spec["transport"] = transport
-                        server_spec["type"] = transport
-                        if target_port:
-                            target_addr = f"{target_host}:{target_port}"
-                            server_spec["ports"] = [f"{public_port}={target_addr}"]
-                        else:
-                            server_spec["ports"] = [str(public_port)]
-                        if token:
-                            server_spec["token"] = token
-                        
-                        iran_node_ip = iran_node.node_metadata.get("ip_address")
-                        if not iran_node_ip:
-                            logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
-                            continue
-                        transport_lower = transport.lower()
-                        if transport_lower in ("ws", "wsmux"):
-                            use_tls = bool(server_spec.get("tls_cert") or server_spec.get("server_options", {}).get("tls_cert"))
-                            protocol = "wss://" if use_tls else "ws://"
-                            client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                        else:
-                            client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                        client_spec["transport"] = transport
-                        client_spec["type"] = transport
-                        if token:
-                            client_spec["token"] = token
+                    from app.spec_builder import build_tunnel_node_specs
+                    try:
+                        server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
+                    except Exception as e:
+                        logger.error(f"Spec builder failed for tunnel {tunnel.id} during sync: {e}")
+                        skipped_count += 1
+                        continue
                     
                     if not iran_node.node_metadata.get("api_address"):
                         iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
@@ -772,8 +645,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()] or ["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -797,13 +670,19 @@ if static_path.exists() and (static_path / "index.html").exists():
     
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        """Serve frontend for all non-API routes"""
+        """Serve frontend for all non-API routes with strict path traversal protection"""
         if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json"):
             raise HTTPException(status_code=404)
         
-        file_path = static_path / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        try:
+            resolved_base = static_path.resolve()
+            candidate_path = (static_path / full_path).resolve()
+            # Verify candidate_path is strictly within static_path directory
+            if os.path.commonpath([str(resolved_base), str(candidate_path)]) == str(resolved_base):
+                if candidate_path.is_file():
+                    return FileResponse(candidate_path)
+        except Exception:
+            pass
         
         index_path = static_path / "index.html"
         if index_path.exists():

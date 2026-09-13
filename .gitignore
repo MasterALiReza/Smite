@@ -8,6 +8,9 @@ venv/
 env/
 ENV/
 .venv
+.pytest_cache/
+.pytest_tmp/
+.kilo/
 
 # Database
 *.db
@@ -39,6 +42,50 @@ build/
 # Logs
 *.log
 logs/
+gost_err*.txt
+gost_out*.txt
+gost_version.txt
+gostv2.txt
+
+# Binaries / vendored cores (not part of the repo)
+*.exe
+*.zip
+gost/
+gost-x/
+gost3/
+gost_bin/
+temp_gost/
+temp_gost_src/
+temp_gost_v2/
+gost-src/
+
+# Scratch / dev experiments
+scratch/
+old_core.py
+old_core_utf8.py
+very_old_core.py
+very_old_core_utf8.py
+core_history.txt
+commit_msg.txt
+dummy.json
+empty.json
+invalid.json
+test.json
+test1.json
+test2.json
+test_gen_output.txt
+remote_tunnels.json
+test-tunnel.json
+test-*.json
+tunnel-*.json
+tunnel-*.log
+/test_*.py
+!tests/**
+tests/**/__pycache__/
+test_iran_client*.py
+check_db.py
+check_schema.py
+fix_async.py
 
 # Docker
 docker-compose.override.yml
@@ -46,4 +93,3 @@ docker-compose.override.yml
 # OS
 .DS_Store
 Thumbs.db
-

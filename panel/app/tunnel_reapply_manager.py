@@ -236,345 +236,56 @@ class TunnelReapplyManager:
             if not foreign_node:
                 foreign_node = foreign_nodes[0]
             
-            spec = tunnel.spec.copy() if tunnel.spec else {}
+            iran_node_ip = iran_node.node_metadata.get("ip_address")
+            if not iran_node_ip:
+                logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
+                return False
             
-            if tunnel.core == "frp":
-                bind_port = spec.get("bind_port", 7000)
-                token = spec.get("token")
-                
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping")
-                    return False
-                
-                transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
-                security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "tls"
-                custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or spec.get("custom_sni") or spec.get("stealth_domain")
-                use_encryption = spec.get("use_encryption", True)
-                use_compression = spec.get("use_compression", True)
-                
-                spec_for_iran = spec.copy()
-                spec_for_iran["mode"] = "server"
-                spec_for_iran["bind_port"] = bind_port
-                spec_for_iran["transport_type"] = transport_type
-                spec_for_iran["security_type"] = security_type
-                if token:
-                    spec_for_iran["token"] = token
-                
-                spec_for_foreign = spec.copy()
-                spec_for_foreign["mode"] = "client"
-                spec_for_foreign["server_addr"] = iran_node_ip
-                spec_for_foreign["server_port"] = bind_port
-                spec_for_foreign["transport_type"] = transport_type
-                spec_for_foreign["security_type"] = security_type
-                spec_for_foreign["custom_sni"] = custom_sni
-                spec_for_foreign["use_encryption"] = use_encryption
-                spec_for_foreign["use_compression"] = use_compression
-                if token:
-                    spec_for_foreign["token"] = token
-                tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
-                if tunnel_type not in ["tcp", "udp"]:
-                    tunnel_type = "tcp"
-                spec_for_foreign["type"] = tunnel_type
-                local_ip = spec.get("local_ip") or "127.0.0.1"
-                spec_for_foreign["local_ip"] = local_ip
-                
-                ports = spec.get("ports", [])
-                if not ports:
-                    local_port = spec.get("local_port")
-                    remote_port = spec.get("remote_port") or spec.get("listen_port")
-                    if remote_port and local_port:
-                        spec_for_foreign["ports"] = [{"local": int(local_port), "remote": int(remote_port)}]
-                    elif remote_port:
-                        spec_for_foreign["ports"] = [{"local": int(remote_port), "remote": int(remote_port)}]
-                    elif local_port:
-                        spec_for_foreign["ports"] = [{"local": int(local_port), "remote": int(local_port)}]
-                else:
-                    spec_for_foreign["ports"] = ports
-                
-                server_response = await client.send_to_node(
-                    node_id=iran_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": spec_for_iran
-                    }
-                )
-                
-                if server_response.get("status") == "error":
-                    logger.error(f"Failed to reapply tunnel {tunnel.id} to iran node: {server_response.get('message')}")
-                    return False
-                
-                client_response = await client.send_to_node(
-                    node_id=foreign_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": spec_for_foreign
-                    }
-                )
-                
-                if client_response.get("status") == "error":
-                    logger.error(f"Failed to reapply tunnel {tunnel.id} to foreign node: {client_response.get('message')}")
-                    return False
-                
-                return server_response.get("status") == "success" and client_response.get("status") == "success"
-            else:
-                server_spec = spec.copy()
-                server_spec["mode"] = "server"
-                client_spec = spec.copy()
-                client_spec["mode"] = "client"
-                
-                if tunnel.core == "rathole":
-                    transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
-                    token = server_spec.get("token")
-                    
-                    ports = server_spec.get("ports") or []
-                    if not ports:
-                        proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-                        if proxy_port:
-                            ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
-                    
-                    if not ports or not token:
-                        return False
-                    
-                    control_port = server_spec.get("control_port")
-                    if not control_port:
-                        remote_addr = server_spec.get("remote_addr", "")
-                        _, control_port, _ = parse_address_port(remote_addr) if remote_addr else (None, None, None)
-                    port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                    assigned_control_port = 25000 + (port_hash % 25000)
-
-                    if not control_port or int(control_port) < 24000:
-                        control_port = assigned_control_port
-                        tunnel.spec["control_port"] = control_port
-
-                    use_noise = server_spec.get("noise") or server_spec.get("use_noise", False) or transport.lower() == "noise"
-                    if use_noise:
-                        server_priv = tunnel.spec.get("server_private_key") or tunnel.spec.get("local_private_key")
-                        client_pub = tunnel.spec.get("client_public_key") or tunnel.spec.get("remote_public_key")
-                        client_priv = tunnel.spec.get("client_private_key") or tunnel.spec.get("local_private_key")
-                        server_pub = tunnel.spec.get("server_public_key") or tunnel.spec.get("remote_public_key")
-                        
-                        if not (server_priv and client_pub and client_priv and server_pub):
-                            from app.utils import generate_noise_keypair
-                            s_priv, s_pub = generate_noise_keypair()
-                            c_priv, c_pub = generate_noise_keypair()
-                            server_priv, server_pub = s_priv, s_pub
-                            client_priv, client_pub = c_priv, c_pub
-                            tunnel.spec["server_private_key"] = server_priv
-                            tunnel.spec["server_public_key"] = server_pub
-                            tunnel.spec["client_private_key"] = client_priv
-                            tunnel.spec["client_public_key"] = client_pub
-
-                        server_spec["server_private_key"] = server_priv
-                        server_spec["server_public_key"] = server_pub
-                        server_spec["client_public_key"] = client_pub
-                        server_spec["local_private_key"] = server_priv
-                        server_spec["remote_public_key"] = client_pub
-
-                        client_spec["client_private_key"] = client_priv
-                        client_spec["client_public_key"] = client_pub
-                        client_spec["server_public_key"] = server_pub
-                        client_spec["local_private_key"] = client_priv
-                        client_spec["remote_public_key"] = server_pub
-                    
-                    server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                    server_spec["control_port"] = control_port
-                    server_spec["token"] = token
-                    server_spec["transport"] = transport
-                    server_spec["ports"] = ports
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        return False
-                    
-                    transport_lower = transport.lower()
-                    if transport_lower in ("websocket", "ws", "wss"):
-                        use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls") or transport_lower == "wss")
-                        protocol = "wss://" if use_tls else "ws://"
-                        if is_valid_ipv6_address(iran_node_ip):
-                            client_spec["remote_addr"] = f"{protocol}[{iran_node_ip}]:{control_port}"
-                        else:
-                            client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                        client_spec["websocket_tls"] = use_tls
-                        custom_sni = server_spec.get("custom_sni") or server_spec.get("stealth_domain") or getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None)
-                        if custom_sni:
-                            client_spec["custom_sni"] = custom_sni
-                            server_spec["custom_sni"] = custom_sni
-                    else:
-                        if is_valid_ipv6_address(iran_node_ip):
-                            client_spec["remote_addr"] = f"[{iran_node_ip}]:{control_port}"
-                        else:
-                            client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                    
-                    tunnel_type = tunnel.type.lower() if tunnel.type else (server_spec.get("tunnel_type") or "tcp")
-                    server_spec["tunnel_type"] = tunnel_type
-                    server_spec["type"] = tunnel_type
-                    client_spec["token"] = token
-                    client_spec["transport"] = transport
-                    client_spec["tunnel_type"] = tunnel_type
-                    client_spec["type"] = tunnel_type
-                    client_spec["ports"] = ports
-                
-                elif tunnel.core == "gost":
-                    from app.routers.tunnels import build_gost_node_specs
-                    control_port = server_spec.get("control_port")
-                    auth_token = server_spec.get("auth_token") or server_spec.get("token")
-                    ports = server_spec.get("ports", [])
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    foreign_node_ip = foreign_node.node_metadata.get("ip_address")
-                    if not iran_node_ip or not foreign_node_ip:
-                        return False
-                    server_spec, client_spec = build_gost_node_specs(
-                        tunnel, iran_node_ip, foreign_node_ip, control_port, auth_token, ports
-                    )
-
-                elif tunnel.core == "backhaul":
-                    transport = server_spec.get("transport") or server_spec.get("transport_type") or "tcp"
-                    token = server_spec.get("token")
-                    control_port = server_spec.get("control_port") or server_spec.get("public_port")
-                    if not control_port:
-                        return False
-                    
-                    ports = server_spec.get("ports") or []
-                    if not ports:
-                        return False
-                    
-                    server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                    server_spec["control_port"] = control_port
-                    server_spec["transport"] = transport
-                    server_spec["ports"] = ports
-                    if token:
-                        server_spec["token"] = token
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        return False
-                    if is_valid_ipv6_address(iran_node_ip):
-                        client_spec["remote_addr"] = f"[{iran_node_ip}]:{control_port}"
-                    else:
-                        client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                    client_spec["control_port"] = control_port
-                    client_spec["transport"] = transport
-                    client_spec["ports"] = ports
-                    if token:
-                        client_spec["token"] = token
-                
-                elif tunnel.core == "chisel":
-                    listen_port = server_spec.get("reverse_port") or server_spec.get("listen_port")
-                    if not listen_port:
-                        return False
-                    
-                    port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                    server_control_port = server_spec.get("control_port") or (int(listen_port) + 10000 + (port_hash % 1000))
-                    server_spec["mode"] = "server"
-                    server_spec["server_port"] = server_control_port
-                    server_spec["reverse_port"] = listen_port
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        return False
-                    if is_valid_ipv6_address(iran_node_ip):
-                        client_spec["server_url"] = f"http://[{iran_node_ip}]:{server_control_port}"
-                    else:
-                        client_spec["server_url"] = f"http://{iran_node_ip}:{server_control_port}"
-                    client_spec["mode"] = "client"
-                    client_spec["reverse_port"] = listen_port
-                
-                elif tunnel.core == "frp":
-                    bind_port = server_spec.get("bind_port")
-                    if not bind_port:
-                        port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                        bind_port = 7000 + (port_hash % 1000)
-                    
-                    token = server_spec.get("token")
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        return False
-                    
-                    transport_type = getattr(tunnel, "transport_type", None) or server_spec.get("transport_type") or server_spec.get("transport") or "tcp"
-                    security_type = getattr(tunnel, "security_type", None) or server_spec.get("security_type") or "tls"
-                    custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or server_spec.get("custom_sni") or server_spec.get("stealth_domain")
-                    use_encryption = server_spec.get("use_encryption", True)
-                    use_compression = server_spec.get("use_compression", True)
-                    
-                    server_spec["mode"] = "server"
-                    server_spec["bind_port"] = bind_port
-                    server_spec["token"] = token
-                    server_spec["transport_type"] = transport_type
-                    server_spec["security_type"] = security_type
-                    
-                    client_spec["mode"] = "client"
-                    client_spec["server_addr"] = iran_node_ip
-                    client_spec["server_port"] = bind_port
-                    client_spec["token"] = token
-                    client_spec["transport_type"] = transport_type
-                    client_spec["security_type"] = security_type
-                    client_spec["custom_sni"] = custom_sni
-                    client_spec["use_encryption"] = use_encryption
-                    client_spec["use_compression"] = use_compression
-                    
-                    tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
-                    if tunnel_type not in ["tcp", "udp"]:
-                        tunnel_type = "tcp"
-                    client_spec["type"] = tunnel_type
-                    client_spec["local_ip"] = server_spec.get("local_ip") or "127.0.0.1"
-                    
-                    ports = server_spec.get("ports", [])
-                    if not ports:
-                        local_port = server_spec.get("local_port")
-                        remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-                        if remote_port and local_port:
-                            client_spec["ports"] = [{"local": int(local_port), "remote": int(remote_port)}]
-                        elif remote_port:
-                            client_spec["ports"] = [{"local": int(remote_port), "remote": int(remote_port)}]
-                        elif local_port:
-                            client_spec["ports"] = [{"local": int(local_port), "remote": int(local_port)}]
-                    else:
-                        client_spec["ports"] = ports
-                
-                server_response = await client.send_to_node(
-                    node_id=iran_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": server_spec
-                    }
-                )
-                
-                if server_response.get("status") == "error":
-                    logger.error(f"Failed to reapply tunnel {tunnel.id} to iran node: {server_response.get('message')}")
-                    return False
-                
-                client_response = await client.send_to_node(
-                    node_id=foreign_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": client_spec
-                    }
-                )
-                
-                if client_response.get("status") == "error":
-                    logger.error(f"Failed to reapply tunnel {tunnel.id} to foreign node: {client_response.get('message')}")
-                    return False
-                
-                ok = server_response.get("status") == "success" and client_response.get("status") == "success"
-                if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
-                    tunnel.spec.pop("_pending_reapply", None)
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(tunnel, "spec")
-                    await session.commit()
-                return ok
+            foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
+            
+            from app.spec_builder import build_tunnel_node_specs
+            try:
+                server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
+            except Exception as e:
+                logger.error(f"Spec builder failed for tunnel {tunnel.id}: {e}")
+                return False
+            
+            server_response = await client.send_to_node(
+                node_id=iran_node.id,
+                endpoint="/api/agent/tunnels/apply",
+                data={
+                    "tunnel_id": tunnel.id,
+                    "core": tunnel.core,
+                    "type": tunnel.type,
+                    "spec": server_spec
+                }
+            )
+            
+            if server_response.get("status") == "error":
+                logger.error(f"Failed to reapply tunnel {tunnel.id} to iran node: {server_response.get('message')}")
+                return False
+            
+            client_response = await client.send_to_node(
+                node_id=foreign_node.id,
+                endpoint="/api/agent/tunnels/apply",
+                data={
+                    "tunnel_id": tunnel.id,
+                    "core": tunnel.core,
+                    "type": tunnel.type,
+                    "spec": client_spec
+                }
+            )
+            
+            if client_response.get("status") == "error":
+                logger.error(f"Failed to reapply tunnel {tunnel.id} to foreign node: {client_response.get('message')}")
+                return False
+            
+            ok = server_response.get("status") == "success" and client_response.get("status") == "success"
+            if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(tunnel, "spec")
+                await session.commit()
+            return ok
         else:
             result = await session.execute(select(Node).where(Node.id == tunnel.node_id))
             node = result.scalar_one_or_none()

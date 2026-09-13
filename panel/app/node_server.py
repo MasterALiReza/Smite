@@ -41,7 +41,7 @@ class NodeServer:
         from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         import os
         
         cert_path = Path(self.cert_path)
@@ -74,6 +74,7 @@ class NodeServer:
             x509.NameAttribute(NameOID.COMMON_NAME, common_name),
         ])
         
+        now_time = datetime.now(timezone.utc)
         cert = x509.CertificateBuilder().subject_name(
             subject
         ).issuer_name(
@@ -83,9 +84,9 @@ class NodeServer:
         ).serial_number(
             x509.random_serial_number()
         ).not_valid_before(
-            datetime.utcnow()
+            now_time
         ).not_valid_after(
-            datetime.utcnow() + timedelta(days=365)
+            now_time + timedelta(days=3650)
         ).add_extension(
             x509.BasicConstraints(ca=True, path_length=None),
             critical=True,

@@ -1,11 +1,29 @@
 """Agent API endpoints"""
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
+import hmac
 import logging
 
-router = APIRouter()
+from app.config import settings
+
 logger = logging.getLogger(__name__)
+
+
+def verify_node_token(request: Request):
+    """Optional shared-secret gate for the agent API.
+
+    Enforced only when NODE_API_TOKEN is configured on the node. Older panels
+    that do not send X-Node-Token keep working when the token is not set.
+    """
+    if not settings.node_api_token:
+        return
+    provided = request.headers.get("X-Node-Token", "")
+    if not provided or not hmac.compare_digest(provided, settings.node_api_token):
+        raise HTTPException(status_code=401, detail="Invalid node token")
+
+
+router = APIRouter(dependencies=[Depends(verify_node_token)])
 
 
 
@@ -168,27 +186,5 @@ async def ping_target(target: str, port: int = None):
     fallback_ports.extend([8888, 8889, 22, 443, 80, 8080, 7000])
     res = await _measure_precise_ping(target, fallback_ports)
     return {"status": "ok", "target": target, "latency_ms": res}
-
-
-class AdapterSync(BaseModel):
-    code: str
-
-
-@router.post("/system/sync_adapters")
-async def sync_adapters(data: AdapterSync):
-    """Sync and hot-update core adapters from panel"""
-    try:
-        from pathlib import Path
-        for target in ["/app/app/core_adapters.py", "/opt/smite-node/app/core_adapters.py", "app/core_adapters.py"]:
-            p = Path(target)
-            if p.parent.exists():
-                p.write_text(data.code, encoding="utf-8")
-                logger.info(f"Successfully updated adapters at {target}")
-                return {"status": "success", "message": f"Adapters updated at {target}"}
-        return {"status": "error", "message": "Target path not found"}
-    except Exception as e:
-        logger.error(f"Failed to sync adapters: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 

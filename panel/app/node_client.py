@@ -14,11 +14,36 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _local_addresses() -> list:
+    """Addresses the panel treats as local/collocated (from PANEL_LOCAL_IPS env)."""
+    return [a.strip() for a in settings.panel_local_ips.split(",") if a.strip()]
+
+
 class NodeClient:
     """Client to send requests to nodes via HTTP/HTTPS or FRP"""
     
     def __init__(self):
         self.timeout = httpx.Timeout(30.0)
+    
+    @staticmethod
+    def _node_token_headers() -> Dict[str, str]:
+        """Optional shared-secret header for node agent API authentication."""
+        if settings.node_api_token:
+            return {"X-Node-Token": settings.node_api_token}
+        return {}
+
+    @staticmethod
+    def _get_verify() -> Any:
+        """Get CA certificate path for HTTPS verification if available, else False."""
+        try:
+            cert_file = Path(settings.node_cert_path)
+            if not cert_file.is_absolute():
+                cert_file = Path.cwd() / cert_file
+            if cert_file.exists() and cert_file.stat().st_size > 0:
+                return str(cert_file)
+        except Exception:
+            pass
+        return False
     
     async def _get_frp_settings(self) -> Optional[Dict[str, Any]]:
         """Get FRP communication settings"""
@@ -41,8 +66,8 @@ class NodeClient:
             node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
             
             # Local or collocated Iran nodes should always use direct local connection
-            if node_role == "iran" or node_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
-                if node_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
+            if node_role == "iran" or node_ip in _local_addresses():
+                if node_ip in _local_addresses():
                     return ("http://127.0.0.1:8888", False)
                 node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
                 if not node_address.startswith("http"):
@@ -61,7 +86,7 @@ class NodeClient:
                 logger.warning(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
         
         # Direct HTTP
-        if node.node_metadata and node.node_metadata.get("ip_address") in ["127.0.0.1", "localhost", "178.239.146.188"]:
+        if node.node_metadata and node.node_metadata.get("ip_address") in _local_addresses():
             return ("http://127.0.0.1:8888", False)
         node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
         if not node_address.startswith("http"):
@@ -103,22 +128,12 @@ class NodeClient:
                             await asyncio.sleep(2.0)  # Longer delay for FRP retries
                             logger.info(f"[FRP] Retry {attempt + 1}/{max_retries} for node {node_id} via FRP tunnel")
                         
-                        verify_val = False
-                        try:
-                            cert_file = Path(settings.node_cert_path)
-                            if not cert_file.is_absolute():
-                                cert_file = Path.cwd() / cert_file
-                            if cert_file.exists() and cert_file.stat().st_size > 0:
-                                verify_val = str(cert_file)
-                        except Exception:
-                            verify_val = False
-
                         async with httpx.AsyncClient(
                             timeout=self.timeout, 
-                            verify=verify_val,
+                            verify=self._get_verify(),
                             limits=httpx.Limits(max_keepalive_connections=0 if using_frp else 5)  # Disable keep-alive for FRP
                         ) as client:
-                            response = await client.post(url, json=data)
+                            response = await client.post(url, json=data, headers=self._node_token_headers())
                             response.raise_for_status()
                             return response.json()
                     except httpx.RequestError as e:
@@ -130,8 +145,8 @@ class NodeClient:
                                 logger.warning(f"[FRP->HTTP Fallback] FRP attempt {attempt + 1} failed for node {node_id}, attempting direct {direct_addr}")
                                 try:
                                     direct_url = f"{direct_addr.rstrip('/')}{endpoint}"
-                                    async with httpx.AsyncClient(timeout=self.timeout, verify=False) as direct_client:
-                                        direct_resp = await direct_client.post(direct_url, json=data)
+                                    async with httpx.AsyncClient(timeout=self.timeout, verify=self._get_verify()) as direct_client:
+                                        direct_resp = await direct_client.post(direct_url, json=data, headers=self._node_token_headers())
                                         direct_resp.raise_for_status()
                                         return direct_resp.json()
                                 except Exception as fallback_err:
@@ -175,8 +190,8 @@ class NodeClient:
             
             try:
                 timeout = httpx.Timeout(3.0, connect=2.0)
-                async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                    response = await client.get(url)
+                async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
+                    response = await client.get(url, headers=self._node_token_headers())
                     response.raise_for_status()
                     return response.json()
             except httpx.RequestError as e:
@@ -185,8 +200,8 @@ class NodeClient:
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
                         try:
                             direct_url = f"{direct_addr.rstrip('/')}/api/agent/status"
-                            async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
-                                direct_resp = await direct_client.get(direct_url)
+                            async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
+                                direct_resp = await direct_client.get(direct_url, headers=self._node_token_headers())
                                 direct_resp.raise_for_status()
                                 return direct_resp.json()
                         except Exception:
@@ -240,8 +255,8 @@ class NodeClient:
             
             try:
                 timeout = httpx.Timeout(2.5, connect=1.5)
-                async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                    resp = await client.get(url)
+                async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
+                    resp = await client.get(url, headers=self._node_token_headers())
                     if resp.status_code == 200:
                         data = resp.json()
                         return data.get("latency_ms")
@@ -251,8 +266,8 @@ class NodeClient:
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
                         try:
                             direct_url = f"{direct_addr.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
-                            async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
-                                resp = await direct_client.get(direct_url)
+                            async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
+                                resp = await direct_client.get(direct_url, headers=self._node_token_headers())
                                 if resp.status_code == 200:
                                     return resp.json().get("latency_ms")
                         except Exception:

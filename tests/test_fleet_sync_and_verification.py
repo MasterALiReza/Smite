@@ -1,10 +1,14 @@
 import sys
 from unittest.mock import MagicMock
 
-# Mock sqlalchemy and app dependencies if not installed locally
-for mod in ["sqlalchemy", "sqlalchemy.ext.asyncio", "sqlalchemy.future", "sqlalchemy.orm", "app", "app.database", "app.config", "app.models"]:
-    if mod not in sys.modules:
-        sys.modules[mod] = MagicMock()
+# Ensure repository root and panel are in sys.path
+from pathlib import Path
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+panel_dir = repo_root / "panel"
+if str(panel_dir) not in sys.path:
+    sys.path.insert(0, str(panel_dir))
 
 import pytest
 import socket

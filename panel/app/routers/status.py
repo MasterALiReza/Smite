@@ -5,7 +5,8 @@ from sqlalchemy import select, func
 import psutil
 
 from app.database import get_db
-from app.models import Tunnel, Node
+from app.models import Tunnel, Node, Admin
+from app.routers.auth import get_current_user
 
 
 router = APIRouter()
@@ -47,46 +48,16 @@ async def get_version():
             pass
     
     smite_version = os.getenv("SMITE_VERSION", "")
-    if smite_version in ["next", "latest"]:
-        try:
-            import json
-            cgroup_path = Path("/proc/self/cgroup")
-            if cgroup_path.exists():
-                with open(cgroup_path) as f:
-                    for line in f:
-                        if "docker" in line or "containerd" in line:
-                            container_id = line.split("/")[-1].strip()
-                            proc = await asyncio.create_subprocess_exec(
-                                "docker", "inspect", container_id,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE
-                            )
-                            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-                            if proc.returncode == 0:
-                                data = json.loads(stdout.decode())
-                                if data and len(data) > 0:
-                                    labels = data[0].get("Config", {}).get("Labels", {})
-                                    version = labels.get("smite.version") or labels.get("org.opencontainers.image.version", "")
-                                    if version and version not in ["next", "latest"]:
-                                        return {"version": version.lstrip("v")}
-                            break
-        except:
-            pass
-        
-        return {"version": smite_version}
+    if smite_version and smite_version not in ["next", "latest"]:
+        return {"version": smite_version.lstrip("v")}
     
-    if smite_version:
-        version = smite_version.lstrip("v")
-    else:
-        version = VERSION
-    
-    return {"version": version}
+    return {"version": VERSION}
 
 
 @router.get("")
-async def get_status(db: AsyncSession = Depends(get_db)):
+async def get_status(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Get system status"""
-    cpu_percent = psutil.cpu_percent(interval=1)
+    cpu_percent = psutil.cpu_percent(interval=None)
     memory = psutil.virtual_memory()
     
     tunnel_result = await db.execute(select(func.count(Tunnel.id)))

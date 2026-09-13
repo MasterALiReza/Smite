@@ -3,7 +3,7 @@ import ipaddress
 import re
 import secrets
 import string
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 
 def parse_address_port(address_str: str) -> Tuple[str, Optional[int], bool]:
@@ -160,14 +160,30 @@ def generate_noise_keypair() -> tuple[str, str]:
             base64.b64encode(priv_bytes).decode("utf-8"),
             base64.b64encode(pub_bytes).decode("utf-8")
         )
-    except Exception:
-        import secrets
-        rnd_priv = secrets.token_bytes(32)
-        rnd_pub = secrets.token_bytes(32)
-        return (
-            base64.b64encode(rnd_priv).decode("utf-8"),
-            base64.b64encode(rnd_pub).decode("utf-8")
-        )
+    except ImportError as e:
+        raise RuntimeError("cryptography package is required for X25519 noise key generation") from e
+
+
+def sanitize_spec_for_log(spec: Any) -> Any:
+    """Sanitize sensitive fields (tokens, keys, passwords) before logging."""
+    if not isinstance(spec, dict):
+        return spec
+    sensitive_keys = {
+        "token", "auth_token", "password", "key", "auth",
+        "server_private_key", "client_private_key", "noise_key",
+        "server_key", "client_key"
+    }
+    sanitized = {}
+    for k, v in spec.items():
+        if isinstance(k, str) and k.lower() in sensitive_keys and v:
+            sanitized[k] = "***REDACTED***"
+        elif isinstance(v, dict):
+            sanitized[k] = sanitize_spec_for_log(v)
+        elif isinstance(v, list):
+            sanitized[k] = [sanitize_spec_for_log(item) if isinstance(item, dict) else item for item in v]
+        else:
+            sanitized[k] = v
+    return sanitized
 
 
 async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Optional[list] = None) -> Optional[int]:

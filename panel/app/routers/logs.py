@@ -1,26 +1,27 @@
 """Logs API endpoints"""
-from fastapi import APIRouter
-from typing import List
+from collections import deque
+from fastapi import APIRouter, Depends
 from datetime import datetime
+from typing import List, Dict
 import logging
-import io
+
+from app.models import Admin
+from app.routers.auth import get_current_user
 
 
 router = APIRouter()
 
-log_buffer = []
+log_buffer = deque(maxlen=1000)
 
 
 class MemoryHandler(logging.Handler):
-    """Custom handler that stores logs in memory"""
+    """Custom handler that stores logs in memory (bounded ring buffer)"""
     def emit(self, record):
         log_buffer.append({
             "timestamp": datetime.utcnow().isoformat(),
             "level": record.levelname,
             "message": self.format(record)
         })
-        if len(log_buffer) > 1000:
-            log_buffer.pop(0)
 
 
 handler = MemoryHandler()
@@ -29,8 +30,13 @@ logging.getLogger().addHandler(handler)
 logging.getLogger().setLevel(logging.INFO)
 
 
-@router.get("")
-async def get_logs(limit: int = 100):
-    """Get logs"""
-    return {"logs": log_buffer[-limit:]}
+def get_recent_logs(limit: int = 100) -> List[Dict]:
+    """In-process helper for reading recent logs (used by the Telegram bot)"""
+    logs = list(log_buffer)
+    return logs[-limit:]
 
+
+@router.get("")
+async def get_logs(limit: int = 100, current_user: Admin = Depends(get_current_user)):
+    """Get logs"""
+    return {"logs": get_recent_logs(limit)}

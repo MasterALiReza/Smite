@@ -223,10 +223,7 @@ def cmd_admin_create(args):
         if container_name:
             print(f"Creating admin via Docker container ({container_name})...")
             
-            username_repr = repr(username)
-            password_repr = repr(password)
-            
-            script_content = f"""import asyncio
+            script_content = """import asyncio
 import sys
 import os
 os.chdir('/app')
@@ -236,8 +233,12 @@ from app.models import Admin
 from sqlalchemy import select
 from passlib.context import CryptContext
 
-username = {username_repr}
-password = {password_repr}
+username = os.environ.get("ADMIN_USER", "")
+password = os.environ.get("ADMIN_PASS", "")
+
+if not username or not password:
+    print("Error: Username and password must be provided via environment", file=sys.stderr)
+    sys.exit(1)
 
 if isinstance(password, str):
     password_bytes = password.encode('utf-8')
@@ -252,18 +253,18 @@ async def create():
         result = await session.execute(select(Admin).where(Admin.username == username))
         existing = result.scalar_one_or_none()
         if existing:
-            print(f"Error: Admin user '{{username}}' already exists", file=sys.stderr)
+            print(f"Error: Admin user '{username}' already exists", file=sys.stderr)
             sys.exit(1)
         
         try:
             password_hash = pwd_context.hash(password)
         except Exception as e:
-            print(f"Error hashing password: {{e}}", file=sys.stderr)
+            print(f"Error hashing password: {e}", file=sys.stderr)
             sys.exit(1)
         admin = Admin(username=username, password_hash=password_hash)
         session.add(admin)
         await session.commit()
-        print(f"Admin user '{{username}}' created successfully!")
+        print(f"Admin user '{username}' created successfully!")
 
 asyncio.run(create())
 """
@@ -280,19 +281,20 @@ asyncio.run(create())
                     timeout=10
                 )
                 
+                env_args = ["-e", "PYTHONPATH=/app", "-e", f"ADMIN_USER={username}", "-e", f"ADMIN_PASS={password}"]
                 if copy_proc.returncode != 0:
                     import base64
                     script_b64 = base64.b64encode(script_content.encode()).decode()
-                    script_one_liner = f"PYTHONPATH=/app echo {script_b64} | base64 -d | python3"
+                    script_one_liner = f"echo {script_b64} | base64 -d | python3"
                     proc = subprocess.run(
-                        ["docker", "exec", "-e", "PYTHONPATH=/app", container_name, "sh", "-c", script_one_liner],
+                        ["docker", "exec"] + env_args + [container_name, "sh", "-c", script_one_liner],
                         capture_output=True,
                         text=True,
                         timeout=30
                     )
                 else:
                     proc = subprocess.run(
-                        ["docker", "exec", "-e", "PYTHONPATH=/app", container_name, "python", "/tmp/create_admin.py"],
+                        ["docker", "exec"] + env_args + [container_name, "python", "/tmp/create_admin.py"],
                         capture_output=True,
                         text=True,
                         timeout=30
@@ -300,6 +302,10 @@ asyncio.run(create())
             finally:
                 try:
                     os.unlink(tmp_file_path)
+                except:
+                    pass
+                try:
+                    subprocess.run(["docker", "exec", container_name, "rm", "-f", "/tmp/create_admin.py"], capture_output=True, timeout=5)
                 except:
                     pass
             
@@ -498,9 +504,7 @@ def cmd_admin_update(args):
         if container_name:
             print(f"Updating admin password via Docker container ({container_name})...")
             
-            password_repr = repr(password)
-            
-            script_content = f"""import asyncio
+            script_content = """import asyncio
 import sys
 import os
 os.chdir('/app')
@@ -510,7 +514,11 @@ from app.models import Admin
 from sqlalchemy import select
 from passlib.context import CryptContext
 
-password = {password_repr}
+password = os.environ.get("ADMIN_PASS", "")
+
+if not password:
+    print("Error: Password must be provided via environment", file=sys.stderr)
+    sys.exit(1)
 
 if isinstance(password, str):
     password_bytes = password.encode('utf-8')
@@ -531,7 +539,7 @@ async def update():
         try:
             password_hash = pwd_context.hash(password)
         except Exception as e:
-            print(f"Error hashing password: {{e}}", file=sys.stderr)
+            print(f"Error hashing password: {e}", file=sys.stderr)
             sys.exit(1)
         
         admin.password_hash = password_hash
@@ -553,19 +561,20 @@ asyncio.run(update())
                     timeout=10
                 )
                 
+                env_args = ["-e", "PYTHONPATH=/app", "-e", f"ADMIN_PASS={password}"]
                 if copy_proc.returncode != 0:
                     import base64
                     script_b64 = base64.b64encode(script_content.encode()).decode()
-                    script_one_liner = f"PYTHONPATH=/app echo {script_b64} | base64 -d | python3"
+                    script_one_liner = f"echo {script_b64} | base64 -d | python3"
                     proc = subprocess.run(
-                        ["docker", "exec", "-e", "PYTHONPATH=/app", container_name, "sh", "-c", script_one_liner],
+                        ["docker", "exec"] + env_args + [container_name, "sh", "-c", script_one_liner],
                         capture_output=True,
                         text=True,
                         timeout=30
                     )
                 else:
                     proc = subprocess.run(
-                        ["docker", "exec", "-e", "PYTHONPATH=/app", container_name, "python", "/tmp/update_admin.py"],
+                        ["docker", "exec"] + env_args + [container_name, "python", "/tmp/update_admin.py"],
                         capture_output=True,
                         text=True,
                         timeout=30
@@ -573,6 +582,10 @@ asyncio.run(update())
             finally:
                 try:
                     os.unlink(tmp_file_path)
+                except:
+                    pass
+                try:
+                    subprocess.run(["docker", "exec", container_name, "rm", "-f", "/tmp/update_admin.py"], capture_output=True, timeout=5)
                 except:
                     pass
             
@@ -678,22 +691,29 @@ def cmd_status(args):
     try:
         panel_url = get_panel_url()
         
+        # /api/panel/health is public — used for the liveness check.
+        # /api/status requires admin auth since the security hardening.
         if HAS_REQUESTS:
-            response = requests.get(f"{panel_url}/api/status", timeout=2)
-            if response.status_code == 200:
-                data = response.json()
-                print(f"API: Running")
-                print(f"Nodes: {data['nodes']['active']}/{data['nodes']['total']} active")
-                print(f"Tunnels: {data['tunnels']['active']}/{data['tunnels']['total']} active")
+            health = requests.get(f"{panel_url}/api/panel/health", timeout=2)
+            if health.status_code == 200:
+                print("API: Running")
             else:
                 print("API: Not responding")
+                return
+            try:
+                response = requests.get(f"{panel_url}/api/status", timeout=2)
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"Nodes: {data['nodes']['active']}/{data['nodes']['total']} active")
+                    print(f"Tunnels: {data['tunnels']['active']}/{data['tunnels']['total']} active")
+                else:
+                    print("Stats: admin login required (use the WebUI)")
+            except Exception:
+                pass
         else:
-            req = urllib.request.Request(f"{panel_url}/api/status")
+            req = urllib.request.Request(f"{panel_url}/api/panel/health")
             with urllib.request.urlopen(req, timeout=2) as response:
-                data = json_lib.loads(response.read().decode())
-                print(f"API: Running")
-                print(f"Nodes: {data['nodes']['active']}/{data['nodes']['total']} active")
-                print(f"Tunnels: {data['tunnels']['active']}/{data['tunnels']['total']} active")
+                print("API: Running")
     except Exception as e:
         print(f"API: Not accessible ({e})")
 

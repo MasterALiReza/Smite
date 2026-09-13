@@ -1,4 +1,7 @@
 # Generated nginx configuration template for Smite Panel
+# conf.d files are included within the http context, so limit_req_zone is valid here
+limit_req_zone $binary_remote_addr zone=smite_api:10m rate=30r/s;
+
 server {
     listen ${SMITE_HTTP_PORT} default_server;
     listen [::]:${SMITE_HTTP_PORT} default_server;
@@ -32,10 +35,14 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss:;" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 
     client_max_body_size 100M;
 
     location / {
+        limit_req zone=smite_api burst=60 nodelay;
         proxy_pass ${SMITE_PANEL_UPSTREAM};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

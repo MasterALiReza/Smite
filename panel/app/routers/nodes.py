@@ -1,5 +1,5 @@
 """Nodes API endpoints"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional, Tuple, Dict, Any
@@ -9,8 +9,9 @@ import httpx
 import logging
 
 from app.database import get_db
-from app.models import Node, Settings
+from app.models import Node, Settings, Admin
 from app.node_client import NodeClient
+from app.routers.auth import get_current_user, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +88,13 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     from app.config import settings
     
     expected_token = hashlib.sha256(f"smite_node_reg:{settings.secret_key}".encode()).hexdigest()[:32]
-    if payload.registration_token != expected_token and payload.registration_token != settings.secret_key:
+    if payload.registration_token != expected_token:
         raise HTTPException(status_code=401, detail="Invalid registration token")
         
     incoming_role = payload.role if payload.role in ["iran", "foreign"] else "foreign"
     
-    # Reverse probe verification
-    client_conn_status = "connected"
+    # Reverse probe verification (honest status reporting)
+    client_conn_status = "disconnected"
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
@@ -101,7 +102,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
                 client_conn_status = "connected"
     except Exception as e:
         logger.warning(f"Probe to http://{payload.ip_address}:{payload.api_port} failed: {e}")
-        client_conn_status = "connected"
+        client_conn_status = "disconnected"
 
     fingerprint_data = f"{payload.ip_address}:{payload.api_port}".encode()
     fingerprint = hashlib.sha256(fingerprint_data).hexdigest()[:16]
@@ -196,8 +197,14 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
 
 
 @router.post("", response_model=NodeResponse)
-async def create_node(node: NodeCreate, db: AsyncSession = Depends(get_db)):
-    """Register a new node"""
+async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Depends(get_db), current_user: Optional[Admin] = Depends(get_current_user_optional)):
+    """Register a new node
+
+    Frontend/admin requests (Bearer token) get full behavior. Unauthenticated
+    node registrations are accepted for backward compatibility with older
+    deployed nodes, but they cannot overwrite metadata of an existing node
+    fingerprint (node-hijack protection).
+    """
     import hashlib
     
     fingerprint_data = f"{node.ip_address}:{node.api_port}".encode()
@@ -231,8 +238,13 @@ async def create_node(node: NodeCreate, db: AsyncSession = Depends(get_db)):
         
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
-        existing.node_metadata.update(metadata)
-        existing.node_metadata["role"] = existing_role
+        if current_user is not None:
+            existing.node_metadata.update(metadata)
+            existing.node_metadata["role"] = existing_role
+        else:
+            # Unauthenticated re-registration (legacy node): keep existing
+            # metadata to prevent node-hijack via fingerprint overwrite.
+            logger.info(f"Unauthenticated re-registration for node {existing.id}, metadata update skipped (hijack protection)")
         await db.commit()
         await db.refresh(existing)
         
@@ -332,7 +344,7 @@ async def create_node(node: NodeCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("", response_model=List[NodeResponse])
-async def list_nodes(db: AsyncSession = Depends(get_db)):
+async def list_nodes(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """List all nodes with connection state and real-time latency"""
     import asyncio
     import time
@@ -430,10 +442,6 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
                 else:
                     metadata["country_code"] = "US"
         
-        node.node_metadata = metadata
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(node, "node_metadata")
-        
         return NodeResponse(
             id=node.id,
             name=node.name,
@@ -488,7 +496,7 @@ async def list_nodes(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{node_id}", response_model=NodeResponse)
-async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
+async def get_node(node_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Get node by ID"""
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
@@ -506,7 +514,7 @@ async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{node_id}", response_model=NodeResponse)
-async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depends(get_db)):
+async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Update node name and metadata"""
     from sqlalchemy.orm.attributes import flag_modified
     
@@ -539,22 +547,47 @@ async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depe
 
 
 @router.put("/{node_id}/frp-status")
-async def update_frp_status(node_id: str, frp_status: dict, db: AsyncSession = Depends(get_db)):
-    """Update node FRP connection status"""
+async def update_frp_status(node_id: str, frp_status: dict, request: Request, db: AsyncSession = Depends(get_db)):
+    """Update node FRP connection status with authentication & input validation"""
+    import hmac
+    from app.config import settings
     from sqlalchemy.orm.attributes import flag_modified
     
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+
+    # Security check: Validate caller if NODE_API_TOKEN is configured
+    if settings.node_api_token:
+        provided_token = request.headers.get("X-Node-Token")
+        if provided_token:
+            if not hmac.compare_digest(provided_token, settings.node_api_token):
+                raise HTTPException(status_code=403, detail="Invalid node token")
+        else:
+            # Fallback for collocated or registered IP
+            client_ip = request.client.host if request.client else ""
+            allowed_ips = {"127.0.0.1", "::1", "localhost"}
+            if node.ip_address:
+                allowed_ips.add(node.ip_address)
+            if client_ip not in allowed_ips:
+                logger.warning(f"[FRP] Unauthenticated FRP status update rejected for node {node_id} from {client_ip}")
+                raise HTTPException(status_code=401, detail="X-Node-Token header required")
     
     if not node.node_metadata:
         node.node_metadata = {}
     
     if frp_status.get("connected") and frp_status.get("remote_port"):
-        node.node_metadata["frp_remote_port"] = frp_status.get("remote_port")
+        try:
+            remote_port = int(frp_status.get("remote_port"))
+            if not (1 <= remote_port <= 65535):
+                raise HTTPException(status_code=400, detail="remote_port must be between 1 and 65535")
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="remote_port must be a valid integer")
+        
+        node.node_metadata["frp_remote_port"] = remote_port
         node.node_metadata["frp_connected"] = True
-        logger.info(f"[FRP] Node {node_id} FRP status updated: remote_port={frp_status.get('remote_port')}")
+        logger.info(f"[FRP] Node {node_id} FRP status updated: remote_port={remote_port}")
     else:
         node.node_metadata["frp_connected"] = False
         node.node_metadata.pop("frp_remote_port", None)
@@ -569,7 +602,7 @@ async def update_frp_status(node_id: str, frp_status: dict, db: AsyncSession = D
 
 
 @router.delete("/{node_id}")
-async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Delete a node"""
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()

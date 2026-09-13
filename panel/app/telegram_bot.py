@@ -410,19 +410,15 @@ Use buttons in messages to interact with nodes and tunnels."""
             return
         
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.api_base_url}/api/logs?limit=20")
-                if response.status_code == 200:
-                    logs = response.json().get("logs", [])
-                    if logs:
-                        text = "📋 Recent Logs:\n\n"
-                        for log in logs[-10:]:
-                            text += f"`{log.get('level', 'INFO')}` {log.get('message', '')[:100]}\n\n"
-                        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
-                    else:
-                        await update.message.reply_text("No logs available.", reply_markup=reply_markup)
-                else:
-                    await update.message.reply_text("Failed to fetch logs.", reply_markup=reply_markup)
+            from app.routers.logs import get_recent_logs
+            logs = get_recent_logs(20)
+            if logs:
+                text = "📋 Recent Logs:\n\n"
+                for log in logs[-10:]:
+                    text += f"`{log.get('level', 'INFO')}` {log.get('message', '')[:100]}\n\n"
+                await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+            else:
+                await update.message.reply_text("No logs available.", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error fetching logs: {e}", exc_info=True)
             await update.message.reply_text(f"Error: {str(e)}", reply_markup=reply_markup)
@@ -464,19 +460,13 @@ Use buttons in messages to interact with nodes and tunnels."""
             if certs_dir.exists():
                 shutil.copytree(certs_dir, backup_dir / "certs", dirs_exist_ok=True)
             
+            # Only backup PUBLIC certificates, never export private keys (.key) over Telegram
             node_cert_path = Path(settings.node_cert_path)
             if not node_cert_path.is_absolute():
                 node_cert_path = panel_root / node_cert_path
             if node_cert_path.exists():
                 (backup_dir / "node_certs").mkdir(exist_ok=True)
                 shutil.copy2(node_cert_path, backup_dir / "node_certs" / "ca.crt")
-            
-            node_key_path = Path(settings.node_key_path)
-            if not node_key_path.is_absolute():
-                node_key_path = panel_root / node_key_path
-            if node_key_path.exists():
-                (backup_dir / "node_certs").mkdir(exist_ok=True)
-                shutil.copy2(node_key_path, backup_dir / "node_certs" / "ca.key")
             
             server_cert_path = Path(settings.node_server_cert_path)
             if not server_cert_path.is_absolute():
@@ -485,18 +475,16 @@ Use buttons in messages to interact with nodes and tunnels."""
                 (backup_dir / "server_certs").mkdir(exist_ok=True)
                 shutil.copy2(server_cert_path, backup_dir / "server_certs" / "ca-server.crt")
             
-            server_key_path = Path(settings.node_server_key_path)
-            if not server_key_path.is_absolute():
-                server_key_path = panel_root / server_key_path
-            if server_key_path.exists():
-                (backup_dir / "server_certs").mkdir(exist_ok=True)
-                shutil.copy2(server_key_path, backup_dir / "server_certs" / "ca-server.key")
+            # Ensure no private keys leaked from certs copy
+            for key_file in backup_dir.rglob("*.key"):
+                try:
+                    key_file.unlink()
+                except Exception:
+                    pass
             
             # Backup .env and docker-compose.yml from mounted config directory
-            # These files are mounted into the container at /app/config/
             config_dir = Path("/app/config")
             
-            # Also try common locations as fallback
             env_locations = [
                 config_dir / ".env",
                 Path("/opt/smite/.env"),
@@ -509,7 +497,7 @@ Use buttons in messages to interact with nodes and tunnels."""
                 Path(os.getcwd()) / "docker-compose.yml"
             ]
             
-            # Find and backup .env
+            # Find and backup sanitized .env
             env_file = None
             for env_path in env_locations:
                 if env_path.exists():
@@ -517,9 +505,20 @@ Use buttons in messages to interact with nodes and tunnels."""
                     break
             
             if env_file:
-                # Use 'env' instead of '.env' to make it visible (not hidden)
-                shutil.copy2(env_file, backup_dir / "env")
-                logger.info(f"Backed up .env from: {env_file}")
+                try:
+                    env_lines = env_file.read_text(encoding="utf-8").splitlines()
+                    sanitized_lines = []
+                    for line in env_lines:
+                        stripped = line.strip()
+                        if any(stripped.startswith(k) for k in ["SECRET_KEY=", "TELEGRAM_BOT_TOKEN=", "DB_PASSWORD=", "NODE_API_TOKEN="]):
+                            prefix = stripped.split("=")[0]
+                            sanitized_lines.append(f"{prefix}=REDACTED_IN_TELEGRAM_BACKUP")
+                        else:
+                            sanitized_lines.append(line)
+                    (backup_dir / "env").write_text("\n".join(sanitized_lines) + "\n", encoding="utf-8")
+                    logger.info(f"Backed up sanitized .env from: {env_file}")
+                except Exception as env_err:
+                    logger.warning(f"Could not sanitize .env for backup: {env_err}")
             
             # Find and backup docker-compose.yml
             compose_file = None
@@ -543,7 +542,8 @@ Use buttons in messages to interact with nodes and tunnels."""
                     domain_dir = letsencrypt_dir / "live" / settings.panel_domain
                     if domain_dir.exists():
                         (backup_dir / "letsencrypt" / "live" / settings.panel_domain).mkdir(parents=True, exist_ok=True)
-                        for cert_file in ["fullchain.pem", "privkey.pem", "chain.pem", "cert.pem"]:
+                        # Only public cert material is exported; private keys never leave the server
+                        for cert_file in ["fullchain.pem", "chain.pem", "cert.pem"]:
                             cert_path = domain_dir / cert_file
                             if cert_path.exists():
                                 shutil.copy2(cert_path, backup_dir / "letsencrypt" / "live" / settings.panel_domain / cert_file)
@@ -831,19 +831,15 @@ Use buttons in messages to interact with nodes and tunnels."""
     async def cmd_logs_callback(self, query):
         """Handle logs command from callback"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.api_base_url}/api/logs?limit=20")
-                if response.status_code == 200:
-                    logs = response.json().get("logs", [])
-                    if logs:
-                        text = "📋 Recent Logs:\n\n"
-                        for log in logs[-10:]:
-                            text += f"`{log.get('level', 'INFO')}` {log.get('message', '')[:100]}\n\n"
-                        await query.edit_message_text(text, parse_mode="Markdown")
-                    else:
-                        await query.edit_message_text("No logs available.")
-                else:
-                    await query.edit_message_text("Failed to fetch logs.")
+            from app.routers.logs import get_recent_logs
+            logs = get_recent_logs(20)
+            if logs:
+                text = "📋 Recent Logs:\n\n"
+                for log in logs[-10:]:
+                    text += f"`{log.get('level', 'INFO')}` {log.get('message', '')[:100]}\n\n"
+                await query.edit_message_text(text, parse_mode="Markdown")
+            else:
+                await query.edit_message_text("No logs available.")
         except Exception as e:
             logger.error(f"Error fetching logs: {e}", exc_info=True)
             await query.edit_message_text(f"Error: {str(e)}")

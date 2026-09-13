@@ -332,7 +332,7 @@ services:
       - PANEL_API_PORT=${pport_var}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${port_var}/api/agent/status')"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; tok=os.environ.get('NODE_API_TOKEN',''); hdr={'X-Node-Token':tok} if tok else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:${port_var}/api/agent/status',headers=hdr))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -370,7 +370,16 @@ install_cli_tool() {
             CLI_BRANCH="next"
         fi
         curl -fsSL "https://raw.githubusercontent.com/MasterALiReza/Smite/${CLI_BRANCH}/cli/smite-node.py" -o /usr/local/bin/smite-node || true
-        chmod +x /usr/local/bin/smite-node || true
+        if command -v python3 &> /dev/null && [ -s /usr/local/bin/smite-node ]; then
+            if python3 -c "import ast; ast.parse(open('/usr/local/bin/smite-node').read())" &> /dev/null; then
+                chmod +x /usr/local/bin/smite-node || true
+            else
+                rm -f /usr/local/bin/smite-node
+                warn "Downloaded CLI failed syntax validation; not installed"
+            fi
+        else
+            chmod +x /usr/local/bin/smite-node || true
+        fi
     fi
     progress "CLI tool installed to /usr/local/bin/smite-node"
 }

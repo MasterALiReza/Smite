@@ -248,8 +248,11 @@ def cmd_update(args):
                 req = urllib.request.Request(url, headers={"User-Agent": "smite-node-cli"})
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     if resp.status == 200:
-                        (app_dir / "core_adapters.py").write_bytes(resp.read())
-                        print("  ✓ Latest core adapters synced")
+                        content = resp.read()
+                        import ast
+                        ast.parse(content)  # Validate AST syntax before writing
+                        (app_dir / "core_adapters.py").write_bytes(content)
+                        print("  ✓ Latest verified core adapters synced")
             except Exception as e:
                 print(f"  ⚠️ Could not sync core_adapters directly: {e}")
         

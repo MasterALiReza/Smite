@@ -195,7 +195,7 @@ const Settings = () => {
                   <input
                     type="text"
                     value={settings.frp.token || ''}
-                    onChange={(e) => updateFrp({ token: e.target.value || undefined })}
+                    onChange={(e) => updateFrp({ token: e.target.value })}
                     className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-750 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500"
                     placeholder="Leave empty for no authentication"
                   />
@@ -251,7 +251,7 @@ const Settings = () => {
                   <input
                     type="password"
                     value={settings.telegram.bot_token || ''}
-                    onChange={(e) => updateTelegram({ bot_token: e.target.value || undefined })}
+                    onChange={(e) => updateTelegram({ bot_token: e.target.value })}
                     className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-750 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500"
                     placeholder="Enter bot token from @BotFather"
                   />

@@ -10,8 +10,9 @@ import time
 import asyncio
 
 from app.database import get_db
-from app.models import Tunnel, Node
+from app.models import Tunnel, Node, Admin
 from app.node_client import NodeClient
+from app.routers.auth import get_current_user
 
 
 router = APIRouter()
@@ -200,97 +201,11 @@ def parse_ports_from_spec(spec: dict) -> list:
     return ports if ports else []
 
 
-def build_gost_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str, control_port: int, auth_token: str, ports: list) -> tuple:
-    """
-    Build server_spec (for iran node) and client_spec (for foreign node) for a GOST tunnel.
-    Propagates all spec fields symmetrically and assigns admission control (allowed_ips) to the server node.
-    """
-    is_reverse = getattr(tunnel, "is_reverse", False) or False
-    cdn_mode = getattr(tunnel, "cdn_mode", False) or False
-    gaming_mode = getattr(tunnel, "gaming_mode", False) or False
-    custom_host = getattr(tunnel, "custom_host", None)
-    custom_sni = getattr(tunnel, "custom_sni", None)
-    ws_path = getattr(tunnel, "ws_path", None)
-    stealth_domain = getattr(tunnel, "stealth_domain", None)
-    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None)
-    transport_type = getattr(tunnel, "transport_type", "tcp") or "tcp"
-    security_type = getattr(tunnel, "security_type", "none") or "none"
-    failover_ips = getattr(tunnel, "failover_ips", None)
-    port_ranges = getattr(tunnel, "port_ranges", None)
-    allowed_ips = getattr(tunnel, "allowed_ips", None)
-
-    base_spec = {
-        "control_port": control_port,
-        "auth_token": auth_token,
-        "type": getattr(tunnel, "type", "tcp") or "tcp",
-        "transport": transport_type,
-        "transport_type": transport_type,
-        "security_type": security_type,
-        "ports": ports,
-        "cdn_mode": cdn_mode,
-        "gaming_mode": gaming_mode,
-        "custom_host": custom_host,
-        "custom_sni": custom_sni,
-        "ws_path": ws_path,
-        "stealth_domain": stealth_domain,
-        "rate_limit_mbps": rate_limit_mbps,
-        "failover_ips": failover_ips,
-        "port_ranges": port_ranges,
-        "is_reverse": is_reverse,
-        "utls_fingerprint": getattr(tunnel, "utls_fingerprint", None),
-        "custom_headers": getattr(tunnel, "custom_headers", None),
-        "obfuscation_type": getattr(tunnel, "obfuscation_type", None),
-        "mux_type": getattr(tunnel, "mux_type", None),
-        "relay_hops": getattr(tunnel, "relay_hops", None),
-        "bypass_ips": getattr(tunnel, "bypass_ips", None),
-        "dns_resolvers": getattr(tunnel, "dns_resolvers", None),
-    }
-
-    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex"]:
-            if k in tunnel.spec:
-                base_spec[k] = tunnel.spec[k]
-
-    if is_reverse:
-        # Reverse Tunnel: Iran Node is GOST Server, Foreign Node is GOST Client
-        server_spec = base_spec.copy()
-        server_spec["mode"] = "server"
-
-        client_spec = base_spec.copy()
-        client_spec["mode"] = "client"
-        client_spec["server_ip"] = iran_node_ip
-
-        if allowed_ips:
-            allowed_ips_server = allowed_ips.copy()
-            if foreign_node_ip and foreign_node_ip not in allowed_ips_server:
-                allowed_ips_server.append(foreign_node_ip)
-            server_spec["allowed_ips"] = allowed_ips_server
-        else:
-            server_spec["allowed_ips"] = None
-        client_spec["allowed_ips"] = None
-    else:
-        # Direct Tunnel: Iran Node is GOST Client, Foreign Node is GOST Server
-        server_spec = base_spec.copy()
-        server_spec["mode"] = "client"
-        server_spec["server_ip"] = foreign_node_ip
-
-        client_spec = base_spec.copy()
-        client_spec["mode"] = "server"
-
-        if allowed_ips:
-            allowed_ips_foreign = allowed_ips.copy()
-            if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
-                allowed_ips_foreign.append(iran_node_ip)
-            client_spec["allowed_ips"] = allowed_ips_foreign
-        else:
-            client_spec["allowed_ips"] = None
-        server_spec["allowed_ips"] = None
-
-    return server_spec, client_spec
+from app.spec_builder import build_gost_node_specs, build_tunnel_node_specs
 
 
 @router.post("", response_model=TunnelResponse)
-async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession = Depends(get_db)):
+async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Create a new tunnel and auto-apply it"""
     from app.node_client import NodeClient
     
@@ -431,389 +346,26 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         if is_reverse_tunnel and foreign_node and iran_node:
             client = NodeClient()
             
-            server_spec = db_tunnel.spec.copy() if db_tunnel.spec else {}
-            server_spec["mode"] = "server"
-            
-            if "ports" in db_tunnel.spec and "ports" not in server_spec:
-                server_spec["ports"] = db_tunnel.spec.get("ports", [])
-            
-            client_spec = db_tunnel.spec.copy() if db_tunnel.spec else {}
-            client_spec["mode"] = "client"
-            
-            if db_tunnel.core == "rathole":
-                transport = server_spec.get("transport_type") or server_spec.get("transport") or getattr(db_tunnel, "transport_type", None) or "tcp"
-                tunnel_type = getattr(db_tunnel, "type", None) or server_spec.get("tunnel_type") or "tcp"
-                token = server_spec.get("token")
-                if not token:
-                    from app.utils import generate_token
-                    token = generate_token()
-                    server_spec["token"] = token
-                    db_tunnel.spec["token"] = token
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                
-                # Handle Noise Protocol Keypairs
-                if transport.lower() == "noise":
-                    server_priv = db_tunnel.spec.get("server_private_key")
-                    server_pub = db_tunnel.spec.get("server_public_key")
-                    client_priv = db_tunnel.spec.get("client_private_key")
-                    client_pub = db_tunnel.spec.get("client_public_key")
-                    if not (server_priv and server_pub and client_priv and client_pub):
-                        from app.utils import generate_noise_keypair
-                        s_priv, s_pub = generate_noise_keypair()
-                        c_priv, c_pub = generate_noise_keypair()
-                        db_tunnel.spec["server_private_key"] = s_priv
-                        db_tunnel.spec["server_public_key"] = s_pub
-                        db_tunnel.spec["client_private_key"] = c_priv
-                        db_tunnel.spec["client_public_key"] = c_pub
-                        from sqlalchemy.orm.attributes import flag_modified
-                        flag_modified(db_tunnel, "spec")
-                        server_priv, server_pub, client_priv, client_pub = s_priv, s_pub, c_priv, c_pub
-                    
-                    server_spec["local_private_key"] = server_priv
-                    server_spec["remote_public_key"] = client_pub
-                    client_spec["local_private_key"] = client_priv
-                    client_spec["remote_public_key"] = server_pub
-                
-                ports = parse_ports_from_spec(db_tunnel.spec)
-                if not ports:
-                    proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-                    if proxy_port:
-                        ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
-                
-                if not ports:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Rathole requires ports"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                
-                control_port = server_spec.get("control_port")
-                if not control_port:
-                    remote_addr = server_spec.get("remote_addr", "")
-                    from app.utils import parse_address_port
-                import hashlib
-                port_hash = int(hashlib.md5(db_tunnel.id.encode()).hexdigest()[:8], 16)
-                assigned_control_port = 25000 + (port_hash % 25000)
-
-                if not control_port or int(control_port) < 24000:
-                    control_port = assigned_control_port
-                    db_tunnel.spec["control_port"] = control_port
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                
-                server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                server_spec["ports"] = ports
-                server_spec["transport_type"] = transport
-                server_spec["transport"] = transport
-                server_spec["tunnel_type"] = tunnel_type
-                server_spec["type"] = tunnel_type
-                server_spec["token"] = token
-                if "websocket_tls" in server_spec:
-                    server_spec["websocket_tls"] = server_spec["websocket_tls"]
-                elif "tls" in server_spec:
-                    server_spec["websocket_tls"] = server_spec["tls"]
-                
-                if transport.lower() == "noise":
-                    server_priv = db_tunnel.spec.get("server_private_key") or db_tunnel.spec.get("local_private_key")
-                    client_pub = db_tunnel.spec.get("client_public_key") or db_tunnel.spec.get("remote_public_key")
-                    client_priv = db_tunnel.spec.get("client_private_key") or db_tunnel.spec.get("local_private_key")
-                    server_pub = db_tunnel.spec.get("server_public_key") or db_tunnel.spec.get("remote_public_key")
-                    if server_priv and client_pub:
-                        server_spec["local_private_key"] = server_priv
-                        server_spec["remote_public_key"] = client_pub
-                    if client_priv and server_pub:
-                        client_spec["local_private_key"] = client_priv
-                        client_spec["remote_public_key"] = server_pub
-                
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Iran node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                transport_lower = transport.lower()
-                if transport_lower in ("websocket", "ws", "wss"):
-                    use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls") or transport_lower == "wss")
-                    protocol = "wss://" if use_tls else "ws://"
-                    client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                    client_spec["websocket_tls"] = use_tls
-                    custom_sni = server_spec.get("custom_sni") or server_spec.get("stealth_domain") or getattr(db_tunnel, "custom_sni", None) or getattr(db_tunnel, "stealth_domain", None)
-                    if custom_sni:
-                        client_spec["custom_sni"] = custom_sni
-                        server_spec["custom_sni"] = custom_sni
-                else:
-                    client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                client_spec["transport_type"] = transport
-                client_spec["transport"] = transport
-                client_spec["tunnel_type"] = tunnel_type
-                client_spec["type"] = tunnel_type
-                client_spec["token"] = token
-                client_spec["ports"] = ports
-                
-            elif db_tunnel.core == "chisel":
-                ports = parse_ports_from_spec(db_tunnel.spec)
-                if not ports:
-                    listen_port = server_spec.get("listen_port") or server_spec.get("remote_port")
-                    if listen_port:
-                        ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
-                
-                if not ports:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Chisel requires ports"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Iran node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                import hashlib
-                port_hash = int(hashlib.md5(db_tunnel.id.encode()).hexdigest()[:8], 16)
-                first_port = int(ports[0]) if isinstance(ports[0], (int, str)) and str(ports[0]).isdigit() else ports[0]
-                server_control_port = server_spec.get("control_port") or (int(first_port) + 10000 + (port_hash % 1000))
-                server_spec["server_port"] = server_control_port
-                server_spec["reverse_port"] = first_port
-                auth = server_spec.get("auth")
-                if not auth:
-                    from app.utils import generate_token
-                    auth = generate_token()
-                    server_spec["auth"] = auth
-                    db_tunnel.spec["auth"] = auth
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                server_spec["auth"] = auth
-                fingerprint = server_spec.get("fingerprint")
-                if fingerprint:
-                    server_spec["fingerprint"] = fingerprint
-                
-                client_spec["server_url"] = f"http://{iran_node_ip}:{server_control_port}"
-                client_spec["ports"] = ports
-                client_spec["auth"] = auth
-                if fingerprint:
-                    client_spec["fingerprint"] = fingerprint
-                
-            elif db_tunnel.core == "frp":
-                import hashlib
-                port_hash = int(hashlib.md5(db_tunnel.id.encode()).hexdigest()[:8], 16)
-                bind_port = server_spec.get("bind_port") or (7000 + (port_hash % 1000))
-                token = server_spec.get("token")
-                if not token:
-                    from app.utils import generate_token
-                    token = generate_token()
-                    server_spec["token"] = token
-                    db_tunnel.spec["token"] = token
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                server_spec["bind_port"] = bind_port
-                server_spec["token"] = token
-                
-                # Propagate advanced transport & stealth fields
-                transport_type = getattr(db_tunnel, "transport_type", None) or db_tunnel.spec.get("transport_type") or db_tunnel.spec.get("transport") or "tcp"
-                security_type = getattr(db_tunnel, "security_type", None) or db_tunnel.spec.get("security_type") or "tls"
-                custom_sni = getattr(db_tunnel, "custom_sni", None) or getattr(db_tunnel, "stealth_domain", None) or db_tunnel.spec.get("custom_sni") or db_tunnel.spec.get("stealth_domain")
-                use_encryption = db_tunnel.spec.get("use_encryption", True)
-                use_compression = db_tunnel.spec.get("use_compression", True)
-                
-                server_spec["transport_type"] = transport_type
-                server_spec["security_type"] = security_type
-                
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Iran node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                client_spec["server_addr"] = iran_node_ip
-                client_spec["server_port"] = bind_port
-                client_spec["token"] = token
-                client_spec["transport_type"] = transport_type
-                client_spec["security_type"] = security_type
-                client_spec["custom_sni"] = custom_sni
-                client_spec["use_encryption"] = use_encryption
-                client_spec["use_compression"] = use_compression
-                
-                tunnel_type = db_tunnel.type.lower() if db_tunnel.type else "tcp"
-                if tunnel_type not in ["tcp", "udp"]:
-                    tunnel_type = "tcp"  # Default to tcp if invalid
-                client_spec["type"] = tunnel_type
-                local_ip = client_spec.get("local_ip") or "127.0.0.1"
-                
-                ports = parse_ports_from_spec(db_tunnel.spec)
-                if ports:
-                    client_spec["ports"] = [{"local": int(p), "remote": int(p)} for p in ports]
-                else:
-                    local_port = client_spec.get("local_port")
-                    if not local_port:
-                        local_port = db_tunnel.spec.get("listen_port") or db_tunnel.spec.get("remote_port") or bind_port
-                    client_spec["local_ip"] = local_ip
-                    client_spec["local_port"] = local_port
-                    if "remote_port" not in client_spec:
-                        client_spec["remote_port"] = db_tunnel.spec.get("remote_port") or db_tunnel.spec.get("listen_port") or bind_port
-                
-            elif db_tunnel.core == "backhaul":
-                transport = server_spec.get("transport") or server_spec.get("type") or "tcp"
-                import hashlib
-                port_hash = int(hashlib.md5(db_tunnel.id.encode()).hexdigest()[:8], 16)
-                control_port = server_spec.get("control_port") or server_spec.get("listen_port") or (3080 + (port_hash % 1000))
-                target_host = server_spec.get("target_host", "127.0.0.1")
-                token = server_spec.get("token")
-                if not token:
-                    from app.utils import generate_token
-                    token = generate_token()
-                    server_spec["token"] = token
-                    db_tunnel.spec["token"] = token
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                
-                ports = server_spec.get("ports", [])
-                if not ports:
-                    ports = db_tunnel.spec.get("ports", [])
-                logger.info(f"Backhaul tunnel {db_tunnel.id}: received ports from server_spec: {server_spec.get('ports')}, from db_tunnel.spec: {db_tunnel.spec.get('ports')}, final: {ports} (type: {type(ports)}, length: {len(ports) if isinstance(ports, list) else 'N/A'})")
-                
-                if not ports or (isinstance(ports, list) and len(ports) == 0):
-                    public_port = server_spec.get("public_port") or server_spec.get("remote_port") or server_spec.get("listen_port")
-                    target_port = server_spec.get("target_port") or public_port
-                    if not public_port:
-                        db_tunnel.status = "error"
-                        db_tunnel.error_message = "Backhaul requires ports array or public_port/remote_port"
-                        await db.commit()
-                        await db.refresh(db_tunnel)
-                        return db_tunnel
-                    if target_port:
-                        target_addr = f"{target_host}:{target_port}"
-                        ports = [f"{public_port}={target_addr}"]
-                    else:
-                        ports = [str(public_port)]
-                else:
-                    if isinstance(ports, list) and ports:
-                        processed_ports = []
-                        for p in ports:
-                            if not p:
-                                continue
-                            if isinstance(p, str):
-                                if '=' in p:
-                                    processed_ports.append(p)
-                                elif p.isdigit():
-                                    processed_ports.append(f"{p}={target_host}:{p}")
-                                else:
-                                    processed_ports.append(p)
-                            elif isinstance(p, int):
-                                processed_ports.append(f"{p}={target_host}:{p}")
-                            elif isinstance(p, dict):
-                                local = p.get("local") or p.get("listen_port") or p.get("public_port")
-                                tgt_host = p.get("target_host") or target_host
-                                tgt_port = p.get("target_port") or p.get("remote_port") or local
-                                if local:
-                                    processed_ports.append(f"{local}={tgt_host}:{tgt_port}")
-                            else:
-                                processed_ports.append(str(p))
-                        ports = processed_ports
-                
-                logger.info(f"Backhaul tunnel {db_tunnel.id}: processed ports: {ports} (count: {len(ports)})")
-                
-                bind_ip = server_spec.get("bind_ip") or server_spec.get("listen_ip") or "0.0.0.0"
-                server_spec["bind_addr"] = f"{bind_ip}:{control_port}"
-                server_spec["transport"] = transport
-                server_spec["type"] = transport
-                server_spec["ports"] = ports
-                server_spec["mode"] = "server"
-                server_spec["token"] = token
-                
-                # CRITICAL: Update the database spec with processed ports so they're preserved
-                if "ports" not in db_tunnel.spec:
-                    db_tunnel.spec["ports"] = []
-                db_tunnel.spec["ports"] = ports.copy() if isinstance(ports, list) else ports
-                from sqlalchemy.orm.attributes import flag_modified
-                flag_modified(db_tunnel, "spec")
+            iran_node_ip = iran_node.node_metadata.get("ip_address")
+            if not iran_node_ip:
+                db_tunnel.status = "error"
+                db_tunnel.error_message = "Iran node has no IP address"
                 await db.commit()
                 await db.refresh(db_tunnel)
-                logger.info(f"Backhaul tunnel {db_tunnel.id}: saved ports to database: {db_tunnel.spec.get('ports')} (count: {len(db_tunnel.spec.get('ports', []))})")
-                
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Iran node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                transport_lower = transport.lower()
-                if transport_lower in ("ws", "wsmux"):
-                    use_tls = bool(server_spec.get("tls_cert") or server_spec.get("server_options", {}).get("tls_cert"))
-                    protocol = "wss://" if use_tls else "ws://"
-                    client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                else:
-                    client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                client_spec["transport"] = transport
-                client_spec["type"] = transport
-                client_spec["mode"] = "client"  # Ensure mode is set
-                if token:
-                    client_spec["token"] = token
-            
-            elif db_tunnel.core == "gost":
-                transport = server_spec.get("transport") or db_tunnel.spec.get("transport") or "ws"
-                ports = parse_ports_from_spec(db_tunnel.spec)
-                if not ports:
-                    listen_port = server_spec.get("listen_port") or server_spec.get("remote_port")
-                    if listen_port:
-                        ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
-                
-                if not ports:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "GOST requires ports"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                iran_node_ip = iran_node.node_metadata.get("ip_address")
-                if not iran_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Iran node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                
-                foreign_node_ip = foreign_node.node_metadata.get("ip_address")
-                if not foreign_node_ip:
-                    db_tunnel.status = "error"
-                    db_tunnel.error_message = "Foreign node has no IP address"
-                    await db.commit()
-                    await db.refresh(db_tunnel)
-                    return db_tunnel
-                
-                control_port = server_spec.get("control_port")
-                if not control_port:
-                    import random
-                    control_port = random.randint(30000, 50000)
-                    db_tunnel.spec["control_port"] = control_port
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                
-                auth_token = server_spec.get("auth_token") or server_spec.get("token")
-                if not auth_token:
-                    from app.utils import generate_token
-                    auth_token = generate_token(32)
-                    db_tunnel.spec["auth_token"] = auth_token
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(db_tunnel, "spec")
-                
-                # In a true Reverse Tunnel, Iran Node cannot reach Foreign Node.
-                # Therefore, Foreign Node is the Client (initiates connection) and Iran Node is the Server.
-                # User traffic flows: User -> Iran Node -> (Reverse Port Forwarding) -> Foreign Node -> Internet.
-                
-                server_spec, client_spec = build_gost_node_specs(
-                    db_tunnel,
-                    iran_node_ip,
-                    foreign_node_ip,
-                    control_port,
-                    auth_token,
-                    ports
-                )
+                return db_tunnel
+
+            foreign_node_ip = foreign_node.node_metadata.get("ip_address")
+            if not foreign_node_ip:
+                db_tunnel.status = "error"
+                db_tunnel.error_message = "Foreign node has no IP address"
+                await db.commit()
+                await db.refresh(db_tunnel)
+                return db_tunnel
+
+            server_spec, client_spec = build_tunnel_node_specs(db_tunnel, iran_node_ip, foreign_node_ip)
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(db_tunnel, "spec")
+            await db.commit()
             
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
@@ -907,7 +459,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             
             if remote_addr and token and proxy_port and hasattr(request.app.state, 'rathole_server_manager'):
                 try:
-                    logger.info(f"Starting Rathole server for tunnel {db_tunnel.id}: remote_addr={remote_addr}, token={token}, proxy_port={proxy_port}, use_ipv6={use_ipv6}")
+                    logger.info(f"Starting Rathole server for tunnel {db_tunnel.id}: remote_addr={remote_addr}, token={'set' if token else 'none'}, proxy_port={proxy_port}, use_ipv6={use_ipv6}")
                     transport_type = getattr(db_tunnel, "transport_type", None) or db_tunnel.spec.get("transport_type") or db_tunnel.spec.get("transport") or "tcp"
                     tunnel_type = getattr(db_tunnel, "type", None) or db_tunnel.spec.get("tunnel_type") or "tcp"
                     
@@ -1153,7 +705,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     await db.refresh(db_tunnel)
                     return db_tunnel
             
-            logger.info(f"Applying tunnel {db_tunnel.id} to node {node.id}, spec keys: {list(spec_for_node.keys())}, server_addr: {spec_for_node.get('server_addr', 'NOT SET')}, full spec: {spec_for_node}")
+            from app.utils import sanitize_spec_for_log
+            logger.info(f"Applying tunnel {db_tunnel.id} to node {node.id}, spec keys: {list(spec_for_node.keys())}, server_addr: {spec_for_node.get('server_addr', 'NOT SET')}, spec: {sanitize_spec_for_log(spec_for_node)}")
             response = await client.send_to_node(
                 node_id=node.id,
                 endpoint="/api/agent/tunnels/apply",
@@ -1320,7 +873,7 @@ _ping_cache: Dict[str, Tuple[float, Optional[int]]] = {}
 
 
 @router.get("", response_model=List[TunnelResponse])
-async def list_tunnels(db: AsyncSession = Depends(get_db)):
+async def list_tunnels(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """List all tunnels with accurate live latency metadata"""
     result = await db.execute(select(Tunnel))
     tunnels = result.scalars().all()
@@ -1360,7 +913,9 @@ async def _probe_tunnel_latency(client, iran_id: str, iran_ip: Optional[str], fo
             candidate_ports.append(port)
         candidate_ports.extend([8888, 8889, 22, 443, 80, 8080, 7000])
         
-        if not iran_ip or iran_ip in ["127.0.0.1", "localhost", "178.239.146.188"]:
+        from app.config import settings
+        local_ips = {ip.strip() for ip in settings.panel_local_ips.split(",") if ip.strip()}
+        if not iran_ip or iran_ip in local_ips:
             res = await measure_precise_ping(foreign_ip, fallback_ports=candidate_ports)
         else:
             res = await client.probe_ping(iran_id, foreign_ip, port)
@@ -1372,7 +927,7 @@ async def _probe_tunnel_latency(client, iran_id: str, iran_ip: Optional[str], fo
 
 
 @router.get("/latencies")
-async def get_tunnels_latencies(db: AsyncSession = Depends(get_db)):
+async def get_tunnels_latencies(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """
     Ultra-lightweight endpoint for real-time 2-second live ping polling.
     Measures the exact, true network latency between the specific Iran Node and Foreign Node for each tunnel.
@@ -1436,7 +991,7 @@ async def get_tunnels_latencies(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{tunnel_id}", response_model=TunnelResponse)
-async def get_tunnel(tunnel_id: str, db: AsyncSession = Depends(get_db)):
+async def get_tunnel(tunnel_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Get tunnel by ID"""
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
     tunnel = result.scalar_one_or_none()
@@ -1450,7 +1005,8 @@ async def update_tunnel(
     tunnel_id: str,
     tunnel_update: TunnelUpdate,
     request: Request,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
 ):
     """Update a tunnel and re-apply if spec changed"""
     from app.node_client import NodeClient
@@ -1574,7 +1130,7 @@ async def update_tunnel(
 
 
 @router.post("/{tunnel_id}/apply")
-async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Apply tunnel configuration to node(s) - handles both single-node and reverse tunnels"""
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
     tunnel = result.scalar_one_or_none()
@@ -1588,6 +1144,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     )
     foreign_node = None
     iran_node = None
+    assigned_control_port: Optional[int] = None
+    control_port: Optional[int] = None
     
     if is_reverse_tunnel:
         iran_node_id = tunnel.node_id
@@ -1633,354 +1191,24 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     
                     asyncio.create_task(_purge_all_ghosts())
                 
-                spec = tunnel.spec.copy() if tunnel.spec else {}
-                
-                if tunnel.core == "backhaul":
-                    transport = spec.get("transport", "tcp")
-                    control_port = spec.get("control_port") or spec.get("public_port") or spec.get("listen_port") or 3080
-                    public_port = spec.get("public_port") or spec.get("listen_port") or control_port
-                    target_host = spec.get("target_host", "127.0.0.1")
-                    token = spec.get("token")
-                    
-                    server_spec = spec.copy()
-                    server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                    server_spec["control_port"] = control_port
-                    server_spec["public_port"] = public_port
-                    server_spec["listen_port"] = public_port
-                    
-                    # IMPORTANT: Read ports from spec (which is tunnel.spec.copy()) first
-                    ports = spec.get("ports", [])
-                    if not ports:
-                        ports = tunnel.spec.get("ports", [])
-                    if ports:
-                        server_spec["ports"] = ports
-                    logger.info(f"Backhaul tunnel update {tunnel.id}: received ports from spec: {spec.get('ports')}, from tunnel.spec: {tunnel.spec.get('ports')}, final: {ports} (type: {type(ports)}, length: {len(ports) if isinstance(ports, list) else 'N/A'})")
-                    
-                    if not ports or (isinstance(ports, list) and len(ports) == 0):
-                        target_port = spec.get("target_port") or public_port
-                        if target_port:
-                            target_addr = f"{target_host}:{target_port}"
-                            ports = [f"{public_port}={target_addr}"]
-                        else:
-                            ports = [str(public_port)]
-                    else:
-                        if isinstance(ports, list) and ports:
-                            processed_ports = []
-                            for p in ports:
-                                if not p:
-                                    continue
-                                if isinstance(p, str):
-                                    if '=' in p:
-                                        processed_ports.append(p)
-                                    elif p.isdigit():
-                                        processed_ports.append(f"{p}={target_host}:{p}")
-                                    else:
-                                        processed_ports.append(p)
-                                elif isinstance(p, int):
-                                    processed_ports.append(f"{p}={target_host}:{p}")
-                                elif isinstance(p, dict):
-                                    local = p.get("local") or p.get("listen_port") or p.get("public_port")
-                                    tgt_host = p.get("target_host") or target_host
-                                    tgt_port = p.get("target_port") or p.get("remote_port") or local
-                                    if local:
-                                        processed_ports.append(f"{local}={tgt_host}:{tgt_port}")
-                                else:
-                                    processed_ports.append(str(p))
-                            ports = processed_ports
-                    
-                    logger.info(f"Backhaul tunnel update {tunnel.id}: processed ports: {ports} (count: {len(ports)})")
-                    server_spec["ports"] = ports
-                    server_spec["mode"] = "server"  # Ensure mode is set
-                    if token:
-                        server_spec["token"] = token
-                    
-                    # CRITICAL: Update the database spec with processed ports so they're preserved
-                    if "ports" not in tunnel.spec:
-                        tunnel.spec["ports"] = []
-                    tunnel.spec["ports"] = ports.copy() if isinstance(ports, list) else ports
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(tunnel, "spec")
+                iran_node_ip = iran_node.node_metadata.get("ip_address")
+                if not iran_node_ip:
+                    tunnel.status = "error"
+                    tunnel.error_message = "Iran node has no IP address"
                     await db.commit()
-                    await db.refresh(tunnel)
-                    logger.info(f"Backhaul tunnel update {tunnel.id}: saved ports to database: {tunnel.spec.get('ports')} (count: {len(tunnel.spec.get('ports', []))})")
-                    
-                    client_spec = spec.copy()
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Iran node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Iran node has no IP address")
-                    
-                    transport_lower = transport.lower()
-                    if transport_lower in ("ws", "wsmux"):
-                        use_tls = bool(server_spec.get("tls_cert") or server_spec.get("server_options", {}).get("tls_cert"))
-                        protocol = "wss://" if use_tls else "ws://"
-                        client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                    else:
-                        client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                    client_spec["transport"] = transport
-                    client_spec["type"] = transport
-                    client_spec["mode"] = "client"  # Ensure mode is set
-                    if token:
-                        client_spec["token"] = token
-                
-                elif tunnel.core == "gost":
-                    transport = spec.get("transport") or tunnel.spec.get("transport") or "ws"
-                    ports = parse_ports_from_spec(tunnel.spec)
-                    if not ports:
-                        listen_port = spec.get("listen_port") or spec.get("remote_port")
-                        if listen_port:
-                            ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
-                    
-                    if not ports:
-                        tunnel.status = "error"
-                        tunnel.error_message = "GOST requires ports"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="GOST requires ports")
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Iran node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Iran node has no IP address")
+                    raise HTTPException(status_code=400, detail="Iran node has no IP address")
 
-                    foreign_node_ip = foreign_node.node_metadata.get("ip_address")
-                    if not foreign_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Foreign node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Foreign node has no IP address")
-                    
-                    control_port = spec.get("control_port")
-                    if not control_port:
-                        import random
-                        control_port = random.randint(30000, 50000)
-                        tunnel.spec["control_port"] = control_port
-                        from sqlalchemy.orm.attributes import flag_modified
-                        flag_modified(tunnel, "spec")
-                    
-                    auth_token = spec.get("auth_token") or spec.get("token")
-                    if not auth_token:
-                        from app.utils import generate_token
-                        auth_token = generate_token(32)
-                        tunnel.spec["auth_token"] = auth_token
-                        from sqlalchemy.orm.attributes import flag_modified
-                        flag_modified(tunnel, "spec")
-                    
-                    server_spec, client_spec = build_gost_node_specs(
-                        tunnel,
-                        iran_node_ip,
-                        foreign_node_ip,
-                        control_port,
-                        auth_token,
-                        ports
-                    )
-                
-                elif tunnel.core == "frp":
-                    bind_port = spec.get("bind_port")
-                    if not bind_port:
-                        import hashlib
-                        port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                        bind_port = 7000 + (port_hash % 1000)
-                    
-                    token = spec.get("token")
-                    if not token:
-                        from app.utils import generate_token
-                        token = generate_token()
-                        spec["token"] = token
-                        tunnel.spec["token"] = token
-                        from sqlalchemy.orm.attributes import flag_modified
-                        flag_modified(tunnel, "spec")
-                        await db.commit()
-                        await db.refresh(tunnel)
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Iran node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Iran node has no IP address")
-                    
-                    transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
-                    security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "tls"
-                    custom_sni = getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None) or spec.get("custom_sni") or spec.get("stealth_domain")
-                    use_encryption = spec.get("use_encryption", True)
-                    use_compression = spec.get("use_compression", True)
-                    
-                    server_spec = spec.copy()
-                    server_spec["mode"] = "server"
-                    server_spec["bind_port"] = bind_port
-                    server_spec["token"] = token
-                    server_spec["transport_type"] = transport_type
-                    server_spec["security_type"] = security_type
-                    
-                    client_spec = spec.copy()
-                    client_spec["mode"] = "client"
-                    client_spec["server_addr"] = iran_node_ip
-                    client_spec["server_port"] = bind_port
-                    client_spec["token"] = token
-                    client_spec["transport_type"] = transport_type
-                    client_spec["security_type"] = security_type
-                    client_spec["custom_sni"] = custom_sni
-                    client_spec["use_encryption"] = use_encryption
-                    client_spec["use_compression"] = use_compression
-                    
-                    tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
-                    if tunnel_type not in ["tcp", "udp"]:
-                        tunnel_type = "tcp"
-                    client_spec["type"] = tunnel_type
-                    local_ip = spec.get("local_ip") or "127.0.0.1"
-                    client_spec["local_ip"] = local_ip
-                    
-                    ports = spec.get("ports", [])
-                    if not ports:
-                        local_port = spec.get("local_port")
-                        remote_port = spec.get("remote_port") or spec.get("listen_port")
-                        if remote_port and local_port:
-                            client_spec["ports"] = [{"local": int(local_port), "remote": int(remote_port)}]
-                        elif remote_port:
-                            client_spec["ports"] = [{"local": int(remote_port), "remote": int(remote_port)}]
-                        elif local_port:
-                            client_spec["ports"] = [{"local": int(local_port), "remote": int(local_port)}]
-                    else:
-                        client_spec["ports"] = ports
-                
-                elif tunnel.core == "rathole":
-                    transport = spec.get("transport_type") or spec.get("transport") or getattr(tunnel, "transport_type", None) or "tcp"
-                    tunnel_type = getattr(tunnel, "type", None) or spec.get("tunnel_type") or "tcp"
-                    token = spec.get("token")
-                    if not token:
-                        from app.utils import generate_token
-                        token = generate_token()
-                        spec["token"] = token
-                        tunnel.spec["token"] = token
-                        from sqlalchemy.orm.attributes import flag_modified
-                        flag_modified(tunnel, "spec")
-                    
-                    # Handle Noise Protocol Keypairs
-                    if transport.lower() == "noise":
-                        server_priv = tunnel.spec.get("server_private_key")
-                        server_pub = tunnel.spec.get("server_public_key")
-                        client_priv = tunnel.spec.get("client_private_key")
-                        client_pub = tunnel.spec.get("client_public_key")
-                        if not (server_priv and server_pub and client_priv and client_pub):
-                            from app.utils import generate_noise_keypair
-                            s_priv, s_pub = generate_noise_keypair()
-                            c_priv, c_pub = generate_noise_keypair()
-                            tunnel.spec["server_private_key"] = s_priv
-                            tunnel.spec["server_public_key"] = s_pub
-                            tunnel.spec["client_private_key"] = c_priv
-                            tunnel.spec["client_public_key"] = c_pub
-                            from sqlalchemy.orm.attributes import flag_modified
-                            flag_modified(tunnel, "spec")
-                            server_priv, server_pub, client_priv, client_pub = s_priv, s_pub, c_priv, c_pub
-                    
-                    ports = parse_ports_from_spec(tunnel.spec)
-                    if not ports:
-                        proxy_port = spec.get("remote_port") or spec.get("listen_port")
-                        if proxy_port:
-                            ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
-                    
-                    if not ports:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Missing required fields: ports/remote_port or token"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Missing required fields: ports/remote_port or token")
-                    
-                    control_port = spec.get("control_port")
-                    if not control_port:
-                        remote_addr = spec.get("remote_addr", "")
-                        from app.utils import parse_address_port
-                    import hashlib
-                    port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                    assigned_control_port = 25000 + (port_hash % 25000)
+                foreign_node_ip = foreign_node.node_metadata.get("ip_address")
+                if not foreign_node_ip:
+                    tunnel.status = "error"
+                    tunnel.error_message = "Foreign node has no IP address"
+                    await db.commit()
+                    raise HTTPException(status_code=400, detail="Foreign node has no IP address")
 
-                    if not control_port or int(control_port) < 24000:
-                        control_port = assigned_control_port
-                    
-                    tunnel.spec["control_port"] = control_port
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(tunnel, "spec")
-                    
-                    server_spec = spec.copy()
-                    server_spec["mode"] = "server"
-                    server_spec["bind_addr"] = f"0.0.0.0:{control_port}"
-                    server_spec["ports"] = ports
-                    server_spec["transport_type"] = transport
-                    server_spec["transport"] = transport
-                    server_spec["tunnel_type"] = tunnel_type
-                    server_spec["type"] = tunnel_type
-                    server_spec["token"] = token
-                    if transport.lower() == "noise":
-                        server_spec["local_private_key"] = server_priv
-                        server_spec["remote_public_key"] = client_pub
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Iran node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Iran node has no IP address")
-                    
-                    client_spec = spec.copy()
-                    client_spec["mode"] = "client"
-                    client_spec["ports"] = ports
-                    client_spec["transport_type"] = transport
-                    client_spec["transport"] = transport
-                    client_spec["tunnel_type"] = tunnel_type
-                    client_spec["type"] = tunnel_type
-                    client_spec["token"] = token
-                    if transport.lower() == "noise":
-                        client_spec["local_private_key"] = client_priv
-                        client_spec["remote_public_key"] = server_pub
-
-                    transport_lower = transport.lower()
-                    if transport_lower in ("websocket", "ws", "wss"):
-                        use_tls = bool(spec.get("websocket_tls") or spec.get("tls") or transport_lower == "wss")
-                        protocol = "wss://" if use_tls else "ws://"
-                        client_spec["remote_addr"] = f"{protocol}{iran_node_ip}:{control_port}"
-                        client_spec["websocket_tls"] = use_tls
-                        custom_sni = spec.get("custom_sni") or spec.get("stealth_domain") or getattr(tunnel, "custom_sni", None) or getattr(tunnel, "stealth_domain", None)
-                        if custom_sni:
-                            client_spec["custom_sni"] = custom_sni
-                            server_spec["custom_sni"] = custom_sni
-                    else:
-                        client_spec["remote_addr"] = f"{iran_node_ip}:{control_port}"
-                
-                elif tunnel.core == "chisel":
-                    listen_port = spec.get("listen_port") or spec.get("remote_port")
-                    if not listen_port:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Missing required field: listen_port or remote_port"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Missing required field: listen_port or remote_port")
-                    
-                    import hashlib
-                    port_hash = int(hashlib.md5(tunnel.id.encode()).hexdigest()[:8], 16)
-                    server_control_port = spec.get("control_port") or (int(listen_port) + 10000 + (port_hash % 1000))
-                    
-                    server_spec = spec.copy()
-                    server_spec["mode"] = "server"
-                    server_spec["server_port"] = server_control_port
-                    server_spec["reverse_port"] = listen_port
-                    
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
-                    if not iran_node_ip:
-                        tunnel.status = "error"
-                        tunnel.error_message = "Iran node has no IP address"
-                        await db.commit()
-                        raise HTTPException(status_code=400, detail="Iran node has no IP address")
-                    
-                    client_spec = spec.copy()
-                    client_spec["mode"] = "client"
-                    from app.utils import is_valid_ipv6_address
-                    if is_valid_ipv6_address(iran_node_ip):
-                        client_spec["server_url"] = f"http://[{iran_node_ip}]:{server_control_port}"
-                    else:
-                        client_spec["server_url"] = f"http://{iran_node_ip}:{server_control_port}"
-                    client_spec["reverse_port"] = listen_port
+                server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(tunnel, "spec")
+                await db.commit()
                 
                 if not iran_node.node_metadata.get("api_address"):
                     iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
@@ -2037,9 +1265,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     
                     verify_ports = ports if isinstance(ports, list) else ([ports] if ports else [])
                     verify_ctrl_port = None
-                    if 'assigned_control_port' in locals():
+                    if assigned_control_port is not None:
                         verify_ctrl_port = assigned_control_port
-                    elif 'control_port' in locals():
+                    elif control_port is not None:
                         verify_ctrl_port = control_port
                     elif spec and spec.get("control_port"):
                         verify_ctrl_port = spec.get("control_port")
@@ -2120,8 +1348,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             node.node_metadata["api_address"] = f"http://{node.fingerprint}:8888"
             await db.commit()
         
+        from app.utils import sanitize_spec_for_log
         spec_for_node = tunnel.spec.copy() if tunnel.spec else {}
-        logger.info(f"Reapplying tunnel {tunnel.id} (core={tunnel.core}, type={tunnel.type}): original spec={spec_for_node}")
+        logger.info(f"Reapplying tunnel {tunnel.id} (core={tunnel.core}, type={tunnel.type}): original spec={sanitize_spec_for_log(spec_for_node)}")
         
         if tunnel.core == "gost":
             spec_for_node["type"] = tunnel.type
@@ -2141,7 +1370,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         if tunnel.core == "frp":
             try:
                 spec_for_node = prepare_frp_spec_for_node(spec_for_node, node, request)
-                logger.info(f"FRP spec prepared for tunnel {tunnel.id}: server_addr={spec_for_node.get('server_addr')}, server_port={spec_for_node.get('server_port')}, full spec={spec_for_node}")
+                logger.info(f"FRP spec prepared for tunnel {tunnel.id}: server_addr={spec_for_node.get('server_addr')}, server_port={spec_for_node.get('server_port')}, spec={sanitize_spec_for_log(spec_for_node)}")
             except Exception as e:
                 error_msg = f"Failed to prepare FRP spec: {str(e)}"
                 logger.error(f"Tunnel {tunnel.id}: {error_msg}", exc_info=True)
@@ -2184,7 +1413,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
 
 
 @router.post("/reapply-all")
-async def reapply_all_tunnels(request: Request, db: AsyncSession = Depends(get_db)):
+async def reapply_all_tunnels(request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Reapply all tunnels with concurrency control and staggering for high-scale environments"""
     result = await db.execute(select(Tunnel))
     tunnels = result.scalars().all()
@@ -2224,7 +1453,7 @@ async def reapply_all_tunnels(request: Request, db: AsyncSession = Depends(get_d
 
 
 @router.delete("/{tunnel_id}")
-async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Delete a tunnel"""
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
     tunnel = result.scalar_one_or_none()
@@ -2323,7 +1552,8 @@ async def measure_node_latency(node_id: str, client: NodeClient, node_ip: Option
 @router.post("/test-config")
 async def test_tunnel_config(
     payload: dict,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
 ):
     """
     Pre-flight diagnostic check for a proposed tunnel configuration before creation.
@@ -2543,7 +1773,8 @@ async def test_tunnel_config(
 @router.post("/{tunnel_id}/test")
 async def test_active_tunnel(
     tunnel_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
 ):
     """
     On-demand live connectivity & ping probe for an active tunnel.

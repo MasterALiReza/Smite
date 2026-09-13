@@ -3,7 +3,7 @@ import os
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import text
+from sqlalchemy import event, text
 from app.config import settings
 
 Base = declarative_base()
@@ -13,7 +13,28 @@ if settings.db_type == "sqlite":
 else:
     raise ValueError(f"Unsupported DB type: {settings.db_type}")
 
-engine = create_async_engine(db_url, echo=False)
+engine = create_async_engine(
+    db_url,
+    echo=False,
+    connect_args={"timeout": 30},  # sqlite busy timeout (seconds)
+)
+
+# Enable WAL journaling and high-performance pragmas for robust concurrent read/write behavior
+@event.listens_for(engine.sync_engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA mmap_size=268435456")
+        cursor.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Could not apply SQLite pragmas: {e}")
+
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 logger = logging.getLogger(__name__)

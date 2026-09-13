@@ -32,9 +32,22 @@ class PanelClient:
         
         await self._generate_fingerprint()
         
+        default_headers = {}
+        if getattr(settings, "node_api_token", ""):
+            default_headers["X-Node-Token"] = settings.node_api_token
+        
+        # Verify TLS against panel CA certificate if available
+        verify_opt = False
+        if self.ca_path.exists() and self.ca_path.stat().st_size > 0:
+            verify_opt = str(self.ca_path)
+            logger.info(f"Node client verifying panel TLS with CA: {self.ca_path}")
+        else:
+            logger.warning("Panel CA cert empty or missing; TLS verification disabled as fallback")
+
         self.client = httpx.AsyncClient(
+            headers=default_headers,
             timeout=httpx.Timeout(30.0),
-            verify=False
+            verify=verify_opt
         )
         
         logger.info(f"Node client ready, panel address: {self.panel_address}")

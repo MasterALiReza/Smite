@@ -20,6 +20,45 @@ def sanitize_config_str(val: Any) -> str:
         return ""
     return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
 
+def sanitize_spec_for_log(spec: Any) -> Any:
+    """Sanitize sensitive fields (tokens, keys, passwords) before logging."""
+    if not isinstance(spec, dict):
+        return spec
+    sensitive_keys = {
+        "token", "auth_token", "password", "key", "auth",
+        "server_private_key", "client_private_key", "noise_key",
+        "server_key", "client_key"
+    }
+    sanitized = {}
+    for k, v in spec.items():
+        if isinstance(k, str) and k.lower() in sensitive_keys and v:
+            sanitized[k] = "***REDACTED***"
+        elif isinstance(v, dict):
+            sanitized[k] = sanitize_spec_for_log(v)
+        elif isinstance(v, list):
+            sanitized[k] = [sanitize_spec_for_log(item) if isinstance(item, dict) else item for item in v]
+        else:
+            sanitized[k] = v
+    return sanitized
+
+def sanitize_cmd_for_log(cmd: List[str]) -> str:
+    """Mask credential flags in command argument lists before logging."""
+    sanitized = []
+    skip_next = False
+    for i, arg in enumerate(cmd):
+        if skip_next:
+            sanitized.append("***REDACTED***")
+            skip_next = False
+            continue
+        if arg in ("--auth", "--key", "-token", "--token", "-k", "-secret"):
+            sanitized.append(arg)
+            skip_next = True
+        elif ":" in arg and (i > 0 and cmd[i - 1] in ("--auth", "-u")):
+            sanitized.append("***REDACTED***")
+        else:
+            sanitized.append(arg)
+    return " ".join(sanitized)
+
 def _find_pids_by_port_procfs(port: int) -> Set[int]:
     """Find process IDs holding a port by scanning Linux /proc net entries and fds directly."""
     hex_p = f"{port:04X}"
@@ -292,6 +331,7 @@ async def _spawn_core_subprocess(cmd: List[str]) -> asyncio.subprocess.Process:
     kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
     if os.name == 'posix':
         kwargs["start_new_session"] = True
+        kwargs["close_fds"] = True
     return await asyncio.create_subprocess_exec(*cmd, **kwargs)
 
 
@@ -845,7 +885,7 @@ class BackhaulAdapter:
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
             log_fh = log_path.open("w", buffering=1)
             log_fh.write(f"Starting Backhaul server for tunnel {tunnel_id}\n")
-            log_fh.write(self._render_toml({"server": server_config}))
+            log_fh.write(self._render_toml(sanitize_spec_for_log({"server": server_config})))
             log_fh.flush()
             
             try:
@@ -914,7 +954,7 @@ class BackhaulAdapter:
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
             log_fh = log_path.open("w", buffering=1)
             log_fh.write(f"Starting Backhaul client for tunnel {tunnel_id}\n")
-            log_fh.write(self._render_toml({"client": config_dict}))
+            log_fh.write(self._render_toml({"client": sanitize_spec_for_log(config_dict)}))
             log_fh.flush()
 
             try:
@@ -1074,7 +1114,7 @@ class ChiselAdapter:
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
-                log_f.write(f"Command: {' '.join(cmd)}\n")
+                log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
                 proc = await asyncio.create_subprocess_exec(*cmd,
                     stdout=log_f,
@@ -1146,7 +1186,7 @@ class ChiselAdapter:
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
-                log_f.write(f"Command: {' '.join(cmd)}\n")
+                log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
                 proc = await asyncio.create_subprocess_exec(*cmd,
                     stdout=log_f,
@@ -1332,7 +1372,7 @@ class FrpAdapter:
                 log_f.close()
                 raise RuntimeError("FRP server binary (frps) not found. Please install FRP.")
         else:
-            logger.info(f"FRP tunnel {tunnel_id} received spec: {spec}")
+            logger.info(f"FRP tunnel {tunnel_id} received spec: {sanitize_spec_for_log(spec)}")
             
             server_addr = spec.get('server_addr', '').strip()
             server_port = spec.get('server_port', 7000)
@@ -1359,7 +1399,7 @@ class FrpAdapter:
             if transport_proto in ['wss', 'quic']:
                 tls_enable = True
             
-            custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('server_name') or 'speedtest.net'
+            custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('server_name') or os.getenv('FRP_DEFAULT_SNI')
             
             # Layer-2 proxy payload encryption & compression
             use_encryption = spec.get('use_encryption', True)
@@ -1382,7 +1422,7 @@ class FrpAdapter:
                     if isinstance(port_range, str) and '-' in port_range:
                         try:
                             start, end = port_range.split('-')
-                            if int(end) - int(start) <= 200:
+                            if 1 <= int(start) <= 65535 and 1 <= int(end) <= 65535 and int(end) - int(start) <= 200:
                                 for p in range(int(start), int(end) + 1):
                                     ports.append({'local': p, 'remote': p})
                         except Exception:
@@ -1416,11 +1456,12 @@ transport:
   dialServerTimeout: 15
 """
             if tls_enable:
-                config_content += f"""  tls:
+                config_content += """  tls:
     enable: true
     disableCustomTLSFirstByte: true
-    serverName: "{custom_sni}"
 """
+                if custom_sni:
+                    config_content += f"""    serverName: "{custom_sni}"\n"""
 
             if token:
                 config_content += f"""auth:
@@ -1783,8 +1824,8 @@ class GostAdapter:
                 # Dynamic uTLS fingerprint support
                 utls_client = spec.get("utls_client") or spec.get("utls_fingerprint") or "chrome"
                 if utls_client in ["random", "randomized"]:
-                    import random
-                    utls_client = random.choice(["chrome", "firefox", "ios", "android", "edge", "safari"])
+                    import secrets
+                    utls_client = secrets.choice(["chrome", "firefox", "ios", "android", "edge", "safari"])
                 dialer_tls["utls"] = {"client": utls_client}
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
@@ -2060,7 +2101,7 @@ class GostAdapter:
                 stderr=subprocess.STDOUT,
                 cwd=str(self.config_dir),
                 start_new_session=True,
-                close_fds=False
+                close_fds=(os.name == 'posix')
             )
         except Exception as e:
             log_f.close()

@@ -6,12 +6,16 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from app.database import get_db, AsyncSessionLocal
-from app.models import Settings
+from app.models import Settings, Admin
+from app.routers.auth import get_current_user
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+# Placeholder returned instead of real secrets. A real token can never equal this.
+MASKED_SECRET = "••••••••"
 
 
 class FrpSettings(BaseModel):
@@ -41,27 +45,43 @@ class SettingsUpdate(BaseModel):
     tunnel: Optional[TunnelSettings] = None
 
 
+def _resolve_secret(incoming: Optional[str], existing: Optional[str]) -> Optional[str]:
+    """Resolve a secret field from an update payload.
+
+    - Masked placeholder or absent (None) -> preserve existing value
+    - Empty string -> explicit clear
+    - Anything else -> new value
+    """
+    if incoming is None or incoming == MASKED_SECRET:
+        return existing
+    if incoming == "":
+        return None
+    return incoming
+
+
 @router.get("")
-async def get_settings(db: AsyncSession = Depends(get_db)):
-    """Get all settings"""
+async def get_settings(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Get all settings (secrets are masked)"""
     result = await db.execute(select(Settings))
     settings_list = result.scalars().all()
     
     settings_dict = {s.key: s.value for s in settings_list}
     
-    frp_settings = settings_dict.get("frp", {})
-    telegram_settings = settings_dict.get("telegram", {})
+    frp_settings = settings_dict.get("frp", {}) or {}
+    telegram_settings = settings_dict.get("telegram", {}) or {}
     tunnel_settings = settings_dict.get("tunnel", {})  # Backward compatible: defaults to {} if not exists
     
     return {
         "frp": {
             "enabled": frp_settings.get("enabled", False),
             "port": frp_settings.get("port", 7000),
-            "token": frp_settings.get("token")
+            "token": MASKED_SECRET if frp_settings.get("token") else None,
+            "token_set": bool(frp_settings.get("token")),
         },
         "telegram": {
             "enabled": telegram_settings.get("enabled", False),
-            "bot_token": telegram_settings.get("bot_token"),
+            "bot_token": MASKED_SECRET if telegram_settings.get("bot_token") else None,
+            "bot_token_set": bool(telegram_settings.get("bot_token")),
             "admin_ids": telegram_settings.get("admin_ids", []),
             "backup_enabled": telegram_settings.get("backup_enabled", False),
             "backup_interval": telegram_settings.get("backup_interval", 60),
@@ -76,8 +96,8 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("")
-async def update_settings(settings_update: SettingsUpdate, request: Request, db: AsyncSession = Depends(get_db)):
-    """Update settings"""
+async def update_settings(settings_update: SettingsUpdate, request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Update settings (masked/absent secrets are preserved, empty string clears)"""
     from app.frp_comm_manager import frp_comm_manager
     
     if settings_update.frp:
@@ -85,18 +105,27 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
         setting = result.scalar_one_or_none()
         
         old_enabled = False
+        existing_token = None
         if setting and setting.value:
             old_enabled = setting.value.get("enabled", False)
+            existing_token = setting.value.get("token")
         
         new_enabled = settings_update.frp.enabled
+        new_value = settings_update.frp.dict(exclude_none=True)
+        
+        resolved_token = _resolve_secret(new_value.get("token"), existing_token)
+        if resolved_token is None:
+            new_value.pop("token", None)
+        else:
+            new_value["token"] = resolved_token
         
         if setting:
-            setting.value = settings_update.frp.dict(exclude_none=True)
+            setting.value = new_value
             setting.updated_at = datetime.utcnow()
         else:
             setting = Settings(
                 key="frp",
-                value=settings_update.frp.dict(exclude_none=True)
+                value=new_value
             )
             db.add(setting)
         
@@ -105,9 +134,9 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
         
         if new_enabled and not old_enabled:
             try:
-                success = await frp_comm_manager.start(settings_update.frp.port, settings_update.frp.token)
+                success = await frp_comm_manager.start(new_value.get("port", 7000), new_value.get("token"))
                 if success:
-                    logger.info(f"FRP communication server started on port {settings_update.frp.port}")
+                    logger.info(f"FRP communication server started on port {new_value.get('port', 7000)}")
                 else:
                     logger.warning(f"FRP communication server failed to start (binary may not be available)")
             except Exception as e:
@@ -123,18 +152,27 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
         setting = result.scalar_one_or_none()
         
         old_enabled = False
+        existing_bot_token = None
         if setting and setting.value:
             old_enabled = setting.value.get("enabled", False)
+            existing_bot_token = setting.value.get("bot_token")
         
         new_enabled = settings_update.telegram.enabled
+        new_value = settings_update.telegram.dict(exclude_none=True)
+        
+        resolved_bot_token = _resolve_secret(new_value.get("bot_token"), existing_bot_token)
+        if resolved_bot_token is None:
+            new_value.pop("bot_token", None)
+        else:
+            new_value["bot_token"] = resolved_bot_token
         
         if setting:
-            setting.value = settings_update.telegram.dict(exclude_none=True)
+            setting.value = new_value
             setting.updated_at = datetime.utcnow()
         else:
             setting = Settings(
                 key="telegram",
-                value=settings_update.telegram.dict(exclude_none=True)
+                value=new_value
             )
             db.add(setting)
         
@@ -181,4 +219,3 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
             logger.info("Tunnel auto reapply task stopped")
     
     return {"status": "success"}
-

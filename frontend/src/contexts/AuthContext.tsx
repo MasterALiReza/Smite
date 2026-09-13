@@ -75,6 +75,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   }
 
   const logout = () => {
+    // Revoke token on server side (best effort)
+    api.post('/auth/logout').catch(() => {})
     localStorage.removeItem('token')
     localStorage.removeItem('username')
     delete api.defaults.headers.common['Authorization']

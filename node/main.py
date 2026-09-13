@@ -3,6 +3,7 @@ Smite Node - Lightweight Agent
 """
 import asyncio
 import logging
+import random
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,7 +25,7 @@ async def registration_loop(panel_client: PanelClient):
     """Periodic registration loop to pick up FRP config changes"""
     while True:
         try:
-            await asyncio.sleep(60)  # Re-register every 60 seconds
+            await asyncio.sleep(60 + random.uniform(0, 15))  # Re-register every ~60s with jitter
             if panel_client and panel_client.client:
                 await panel_client.register_with_panel()
         except asyncio.CancelledError:
@@ -59,6 +60,9 @@ async def lifespan(app: FastAPI):
     adapter_manager = AdapterManager()
     app.state.adapter_manager = adapter_manager
     
+    if not settings.node_api_token:
+        logger.warning("SECURITY WARNING: NODE_API_TOKEN is empty. Node agent API (/api/agent/*) is accepting unauthenticated requests. Set NODE_API_TOKEN in .env for production.")
+    
     try:
         await adapter_manager.restore_tunnels()
     except Exception as e:
@@ -87,10 +91,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Restrict CORS to panel and localhost; avoid allow_credentials=True with wildcards
+allowed_origins = ["*"]
+if getattr(settings, "panel_address", ""):
+    clean_addr = settings.panel_address.replace("https://", "").replace("http://", "").strip()
+    if clean_addr:
+        allowed_origins = [
+            f"http://{clean_addr}",
+            f"https://{clean_addr}",
+            "http://localhost",
+            "http://127.0.0.1",
+        ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
