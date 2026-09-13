@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, CheckSquare, Tag, Layers } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -619,79 +619,85 @@ const Tunnels = () => {
         </div>
       </div>
 
-      {/* ── Category Filter Bar ──────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 overflow-x-auto pb-1 scrollbar-none">
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          {/* All Tunnels Chip */}
+      {/* ── Category Filter & Action Bar ───────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-1.5 bg-gray-100/70 dark:bg-gray-800/50 rounded-2xl border border-gray-200/80 dark:border-gray-700/60">
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
+          {/* All Tunnels Tab */}
           <button
             type="button"
             onClick={() => setActiveCategoryTab('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border ${
+            className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
               activeCategoryTab === 'all'
-                ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
-                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-750'
+                ? 'bg-blue-600 border-blue-600 text-white shadow-xs ring-2 ring-blue-500/25'
+                : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750'
             }`}
           >
-            <Layers size={13} />
+            <Layers size={14} className="shrink-0 opacity-80" />
             <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
-            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-              activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
+              activeCategoryTab === 'all' ? 'bg-white/25 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
             }`}>
               {tunnels.length}
             </span>
           </button>
 
-          {/* Category Chips */}
+          {/* Category Tabs */}
           {categories.map((cat) => {
             const count = tunnels.filter(t => t.category === cat.name).length
             const colorStyle = getCategoryColorClasses(cat.color)
             const isActive = activeCategoryTab === cat.name
             return (
-              <div key={cat.id} className="relative group/cat shrink-0">
+              <div
+                key={cat.id}
+                onClick={() => setActiveCategoryTab(cat.name)}
+                className={`group/cat h-9 pl-3 pr-2 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+                  isActive
+                    ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-blue-500/25`
+                    : `bg-white dark:bg-gray-800 ${colorStyle.border} ${colorStyle.text} hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50/80 dark:hover:bg-gray-750`
+                }`}
+              >
+                <Tag size={13} className="shrink-0 opacity-80" />
+                <span className="truncate max-w-[130px]">{cat.name}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
+                  isActive ? 'bg-white/25 text-white' : `${colorStyle.bg} ${colorStyle.text}`
+                }`}>
+                  {count}
+                </span>
+                {/* Clean inline delete icon with safe confirmation */}
                 <button
                   type="button"
-                  onClick={() => setActiveCategoryTab(cat.name)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 border ${
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    deleteCategory(cat.name)
+                  }}
+                  className={`p-1 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
                     isActive
-                      ? colorStyle.activeBg
-                      : `${colorStyle.bg} ${colorStyle.border} ${colorStyle.text} hover:opacity-90`
+                      ? 'text-white/70 hover:text-white hover:bg-white/20'
+                      : 'text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
                   }`}
+                  title={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
                 >
-                  <Tag size={12} />
-                  <span>{cat.name}</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                    isActive ? 'bg-white/20 text-white' : 'bg-black/5 dark:bg-white/10'
-                  }`}>
-                    {count}
-                  </span>
-                </button>
-                {/* Quick delete button on hover */}
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); deleteCategory(cat.name); }}
-                  className="absolute -top-1.5 -right-1.5 hidden group-hover/cat:flex w-4 h-4 rounded-full bg-rose-500 text-white items-center justify-center text-[10px] shadow-xs"
-                  title={t.tunnels.deleteCategory || 'Delete category'}
-                >
-                  ×
+                  <X size={13} strokeWidth={2.5} />
                 </button>
               </div>
             )
           })}
 
-          {/* Uncategorized Chip if any exist */}
+          {/* Uncategorized Tab */}
           {tunnels.some(t => !t.category) && (
             <button
               type="button"
               onClick={() => setActiveCategoryTab('uncategorized')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border ${
+              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
                 activeCategoryTab === 'uncategorized'
-                  ? 'bg-gray-700 border-gray-700 text-white shadow-xs'
-                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-750'
+                  ? 'bg-slate-700 border-slate-700 text-white shadow-xs ring-2 ring-slate-500/25'
+                  : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750'
               }`}
             >
+              <FolderMinus size={14} className="shrink-0 opacity-70" />
               <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                activeCategoryTab === 'uncategorized' ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
+                activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
               }`}>
                 {tunnels.filter(t => !t.category).length}
               </span>
@@ -702,28 +708,37 @@ const Tunnels = () => {
           <button
             type="button"
             onClick={() => setShowCreateCategoryModal(true)}
-            className="px-2.5 py-1.5 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-500 text-gray-500 dark:text-gray-400 hover:text-blue-600 text-xs font-medium flex items-center gap-1 transition-all shrink-0"
+            className="h-9 px-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-500 dark:hover:border-blue-400 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-white/40 dark:bg-gray-800/40 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer shadow-2xs"
             title={t.tunnels.newCategory || 'New Category'}
           >
-            <FolderPlus size={13} />
+            <FolderPlus size={14} />
             <span>{t.tunnels.newCategory || 'New Category'}</span>
           </button>
         </div>
 
-        {/* Select All Toggle */}
+        {/* Select All Action */}
         {filteredTunnels.length > 0 && (
-          <button
-            type="button"
-            onClick={toggleSelectAllFiltered}
-            className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white bg-gray-100 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700"
-          >
-            <CheckSquare size={14} className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-blue-600' : ''} />
-            <span>
-              {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
-                ? (t.tunnels.deselectAll || 'Deselect')
-                : (t.tunnels.selectAll || 'Select All')}
-            </span>
-          </button>
+          <div className="flex items-center shrink-0 px-1">
+            <button
+              type="button"
+              onClick={toggleSelectAllFiltered}
+              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+                filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                  ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
+                  : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <CheckSquare
+                size={15}
+                className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'}
+              />
+              <span>
+                {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                  ? (t.tunnels.deselectAll || 'Deselect All')
+                  : `${t.tunnels.selectAll || 'Select All'} (${filteredTunnels.length})`}
+              </span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -823,11 +838,15 @@ const Tunnels = () => {
           const iranNode = nodes.find(n => n.id === tunnel.iran_node_id || n.id === tunnel.node_id)
           const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
 
+          const isSelected = selectedTunnelIds.has(tunnel.id)
+
           return (
             <div
               key={tunnel.id}
               className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-xs border transition-all ${
-                isReapplying
+                isSelected
+                  ? 'border-blue-500 dark:border-blue-500 ring-2 ring-blue-500/25 bg-blue-50/15 dark:bg-blue-950/20 shadow-md'
+                  : isReapplying
                   ? 'border-emerald-400 dark:border-emerald-600 shadow-emerald-100 dark:shadow-none'
                   : 'border-gray-200/80 dark:border-gray-700/80 hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600'
               }`}
@@ -894,8 +913,13 @@ const Tunnels = () => {
                           {tunnel.core}
                         </span>
                         {tunnel.category && (
-                          <span
-                            className={`px-2 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 ${
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setActiveCategoryTab(tunnel.category || 'all')
+                            }}
+                            className={`px-2.5 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
                               getCategoryColorClasses(
                                 categories.find(c => c.name === tunnel.category)?.color || 'blue'
                               ).bg
@@ -908,11 +932,11 @@ const Tunnels = () => {
                                 categories.find(c => c.name === tunnel.category)?.color || 'blue'
                               ).border
                             }`}
-                            title={`Category: ${tunnel.category}`}
+                            title={`Filter tunnels by "${tunnel.category}"`}
                           >
                             <Tag size={11} />
                             <span>{tunnel.category}</span>
-                          </span>
+                          </button>
                         )}
                         {(() => {
                           let transmissionType = null
