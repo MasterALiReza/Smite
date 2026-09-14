@@ -326,9 +326,20 @@ async def safe_stop_subprocess(
             except Exception:
                 pass
 
-async def _spawn_core_subprocess(cmd: List[str]) -> asyncio.subprocess.Process:
+async def _spawn_core_subprocess(
+    cmd: List[str],
+    stdout: Any = None,
+    stderr: Any = None,
+    env: Optional[Dict[str, str]] = None,
+) -> asyncio.subprocess.Process:
     """Spawns a core process with a dedicated process group so signals never hit uvicorn"""
-    kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    if stdout is None:
+        stdout = subprocess.DEVNULL
+    if stderr is None:
+        stderr = subprocess.DEVNULL
+    kwargs = {"stdout": stdout, "stderr": stderr}
+    if env is not None:
+        kwargs["env"] = env
     if os.name == 'posix':
         kwargs["start_new_session"] = True
         kwargs["close_fds"] = True
@@ -478,6 +489,7 @@ class RatholeAdapter:
         self.config_dir = Path("/etc/smite-node/rathole")
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.processes = {}
+        self.log_handles = {}
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply Rathole tunnel - supports both server and client modes"""
@@ -587,11 +599,6 @@ nodelay = true
             config_path = self.config_dir / f"{tunnel_id}.toml"
             with open(config_path, "w") as f:
                 f.write(config)
-
-            try:
-                proc = await _spawn_core_subprocess(["/usr/local/bin/rathole", "-s", str(config_path)])
-            except FileNotFoundError:
-                proc = await _spawn_core_subprocess(["rathole", "-s", str(config_path)])
         else:
             remote_addr = spec.get('remote_addr', '').strip()
             token = spec.get('token', '').strip()
@@ -693,26 +700,67 @@ nodelay = true
             with open(config_path, "w") as f:
                 f.write(config)
             
-            try:
-                proc = await _spawn_core_subprocess(["/usr/local/bin/rathole", "-c", str(config_path)])
-            except FileNotFoundError:
-                proc = await _spawn_core_subprocess(["rathole", "-c", str(config_path)])
-        
+        mode_flag = "-s" if mode == 'server' else "-c"
+        log_path = self.config_dir / f"{tunnel_id}.log"
+        log_fh = log_path.open("w", buffering=1)
+        log_fh.write(f"Starting Rathole ({mode}) for tunnel {tunnel_id}\n")
+        log_fh.flush()
+
+        env = os.environ.copy()
+        if "RUST_LOG" not in env:
+            env["RUST_LOG"] = "warn"
+
+        bin_path = "/usr/local/bin/rathole"
+        if not os.path.exists(bin_path):
+            found_bin = shutil.which("rathole")
+            if found_bin:
+                bin_path = found_bin
+
+        cmd = [str(bin_path), mode_flag, str(config_path)]
+        try:
+            proc = await _spawn_core_subprocess(
+                cmd,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                env=env
+            )
+        except Exception:
+            log_fh.close()
+            raise
+
         self.processes[tunnel_id] = proc
+        self.log_handles[tunnel_id] = log_fh
         _save_tunnel_pid(tunnel_id, proc.pid)
+
         await asyncio.sleep(0.5)
         if proc.returncode is not None:
             _remove_tunnel_pid(tunnel_id)
-            stderr = (await proc.stderr.read()).decode() if proc.stderr else "Unknown error"
-            raise RuntimeError(f"rathole failed to start: {stderr}")
+            error_output = ""
+            try:
+                error_output = log_path.read_text(encoding="utf-8")[-1000:]
+            except Exception:
+                pass
+            if tunnel_id in self.log_handles:
+                try:
+                    self.log_handles[tunnel_id].close()
+                except Exception:
+                    pass
+                del self.log_handles[tunnel_id]
+            raise RuntimeError(f"rathole failed to start: {error_output}")
     
     async def remove(self, tunnel_id: str):
         """Remove Rathole tunnel"""
         _remove_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
-        
-        await safe_stop_subprocess(proc, patterns=[tunnel_id])
+        if tunnel_id in self.log_handles:
+            try:
+                self.log_handles[tunnel_id].close()
+            except Exception:
+                pass
+            del self.log_handles[tunnel_id]
+
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"])
             
         if config_path.exists():
             try:
@@ -2195,8 +2243,14 @@ class AdapterManager:
             raise
         self.tunnels_file = self.config_dir / "tunnels.json"
         self.tunnel_configs: Dict[str, Dict[str, Any]] = {}
+        self._tunnel_locks: Dict[str, asyncio.Lock] = {}
         logger.info(f"Tunnel persistence file: {self.tunnels_file}")
     
+    def _get_tunnel_lock(self, tunnel_id: str) -> asyncio.Lock:
+        if tunnel_id not in self._tunnel_locks:
+            self._tunnel_locks[tunnel_id] = asyncio.Lock()
+        return self._tunnel_locks[tunnel_id]
+
     def get_adapter(self, tunnel_core: str) -> Optional[CoreAdapter]:
         """Get adapter for tunnel core"""
         return self.adapters.get(tunnel_core)
@@ -2356,11 +2410,14 @@ class AdapterManager:
                         current_delay = backoff.get(tunnel_id, 3)
                         logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering immediately...")
                         try:
-                            # Cleanly remove old process/sockets and reapply
-                            await adapter.remove(tunnel_id)
-                            await asyncio.sleep(0.2)
-                            await adapter.apply(tunnel_id, spec)
-                            self.active_tunnels[tunnel_id] = adapter
+                            async with self._get_tunnel_lock(tunnel_id):
+                                status = adapter.status(tunnel_id)
+                                if not (status.get("process_running", False) or status.get("active", False)):
+                                    # Cleanly remove old process/sockets and reapply
+                                    await adapter.remove(tunnel_id)
+                                    await asyncio.sleep(0.2)
+                                    await adapter.apply(tunnel_id, spec)
+                                    self.active_tunnels[tunnel_id] = adapter
                             backoff.pop(tunnel_id, None)
                             logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
                         except Exception as e:
@@ -2385,46 +2442,8 @@ class AdapterManager:
         if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
     
-    async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
-        """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Applying tunnel {tunnel_id}: core={tunnel_core}")
-        
-        adapter = self.get_adapter(tunnel_core)
-        if not adapter:
-            error_msg = f"Unknown tunnel core: {tunnel_core}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Check if already running with exact same configuration (Idempotent Apply)
-        if tunnel_id in self.active_tunnels:
-            existing_config = self.tunnel_configs.get(tunnel_id, {})
-            if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
-                t_status = adapter.status(tunnel_id)
-                if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
-                    logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
-                    return
-            
-            logger.info(f"Tunnel {tunnel_id} configuration changed or process inactive, applying new configuration")
-            await self.remove_tunnel(tunnel_id)
-        
-        adapter_name = getattr(adapter, "name", tunnel_core)
-        logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
-        await adapter.apply(tunnel_id, spec)
-        self.active_tunnels[tunnel_id] = adapter
-        
-        self.tunnel_configs[tunnel_id] = {
-            "core": tunnel_core,
-            "spec": spec.copy()
-        }
-        logger.info(f"Saving tunnel {tunnel_id} to persistent storage (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
-        self._save_tunnels()
-        self.start_watchdog()
-        logger.info(f"Tunnel {tunnel_id} applied and saved successfully (core={tunnel_core}, mode={spec.get('mode', 'N/A')}, total_saved={len(self.tunnel_configs)})")
-    
-    async def remove_tunnel(self, tunnel_id: str):
-        """Remove tunnel"""
+    async def _remove_tunnel_unlocked(self, tunnel_id: str):
+        """Internal unlocked tunnel removal helper"""
         if tunnel_id in self.active_tunnels:
             adapter = self.active_tunnels[tunnel_id]
             await adapter.remove(tunnel_id)
@@ -2433,6 +2452,50 @@ class AdapterManager:
         if tunnel_id in self.tunnel_configs:
             del self.tunnel_configs[tunnel_id]
             self._save_tunnels()
+
+    async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
+        """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
+        async with self._get_tunnel_lock(tunnel_id):
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Applying tunnel {tunnel_id}: core={tunnel_core}")
+            
+            adapter = self.get_adapter(tunnel_core)
+            if not adapter:
+                error_msg = f"Unknown tunnel core: {tunnel_core}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Check if already running with exact same configuration (Idempotent Apply)
+            if tunnel_id in self.active_tunnels:
+                existing_config = self.tunnel_configs.get(tunnel_id, {})
+                if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
+                    t_status = adapter.status(tunnel_id)
+                    if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                        logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
+                        return
+                
+                logger.info(f"Tunnel {tunnel_id} configuration changed or process inactive, applying new configuration")
+                await self._remove_tunnel_unlocked(tunnel_id)
+            
+            adapter_name = getattr(adapter, "name", tunnel_core)
+            logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
+            await adapter.apply(tunnel_id, spec)
+            self.active_tunnels[tunnel_id] = adapter
+            
+            self.tunnel_configs[tunnel_id] = {
+                "core": tunnel_core,
+                "spec": spec.copy()
+            }
+            logger.info(f"Saving tunnel {tunnel_id} to persistent storage (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
+            self._save_tunnels()
+            self.start_watchdog()
+            logger.info(f"Tunnel {tunnel_id} applied and saved successfully (core={tunnel_core}, mode={spec.get('mode', 'N/A')}, total_saved={len(self.tunnel_configs)})")
+    
+    async def remove_tunnel(self, tunnel_id: str):
+        """Remove tunnel"""
+        async with self._get_tunnel_lock(tunnel_id):
+            await self._remove_tunnel_unlocked(tunnel_id)
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get tunnel status"""

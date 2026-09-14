@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import tempfile
 import asyncio
@@ -167,3 +167,59 @@ def test_staged_reapply_flag_logic():
     popped = spec.pop("_pending_reapply", None)
     assert popped is True
     assert "_pending_reapply" not in spec
+
+
+@pytest.mark.asyncio
+async def test_spawn_core_subprocess_no_pipe_deadlock(monkeypatch):
+    """Test that _spawn_core_subprocess defaults to DEVNULL instead of PIPE to avoid deadlock."""
+    from node.app.core_adapters import _spawn_core_subprocess
+    import subprocess
+    
+    captured_kwargs = {}
+    async def mock_exec(*cmd, **kwargs):
+        captured_kwargs.update(kwargs)
+        class MockProc:
+            pid = 9999
+            returncode = None
+        return MockProc()
+        
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", mock_exec)
+    
+    await _spawn_core_subprocess(["echo", "hello"])
+    assert captured_kwargs.get("stdout") == subprocess.DEVNULL
+    assert captured_kwargs.get("stderr") == subprocess.DEVNULL
+
+
+@pytest.mark.asyncio
+async def test_adapter_manager_tunnel_lock_serializes_concurrent_calls(monkeypatch, tmp_path):
+    """Test that concurrent apply_tunnel calls on the same tunnel_id are strictly serialized by _tunnel_locks."""
+    monkeypatch.setattr("node.app.core_adapters._get_pid_dir", lambda: tmp_path)
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+    
+    order = []
+    
+    class SlowAdapter:
+        name = "slow"
+        async def apply(self, tunnel_id, spec):
+            order.append(f"start-{spec['step']}")
+            await asyncio.sleep(0.05)
+            order.append(f"end-{spec['step']}")
+            
+        async def remove(self, tunnel_id):
+            pass
+            
+        def status(self, tunnel_id):
+            return {"active": False, "process_running": False}
+
+    monkeypatch.setattr(manager, "get_adapter", lambda core: SlowAdapter())
+    
+    # Run two concurrent applies for the same tunnel
+    t1 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "slow", {"step": 1}))
+    t2 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "slow", {"step": 2}))
+    await asyncio.gather(t1, t2)
+    
+    # The first must finish before the second starts
+    assert order == ["start-1", "end-1", "start-2", "end-2"]
+
