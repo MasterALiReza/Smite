@@ -384,7 +384,22 @@ def build_gost_node_specs(
     """
     spec = tunnel.spec.copy() if (hasattr(tunnel, "spec") and tunnel.spec) else {}
     if control_port is None:
-        control_port = spec.get("control_port") or 44300
+        raw_port = spec.get("control_port")
+        try:
+            parsed_port = int(raw_port) if raw_port is not None else None
+        except (ValueError, TypeError):
+            parsed_port = None
+        
+        # If no control_port or legacy 44300 default, allocate a unique deterministic port
+        if not parsed_port or parsed_port == 44300 or parsed_port < 1024:
+            tunnel_id_str = str(getattr(tunnel, "id", "") or "default-gost")
+            port_hash = int(hashlib.sha256(tunnel_id_str.encode()).hexdigest()[:8], 16)
+            control_port = 25000 + (port_hash % 25000)
+            spec["control_port"] = control_port
+            if hasattr(tunnel, "spec") and tunnel.spec is not None and isinstance(tunnel.spec, dict):
+                tunnel.spec["control_port"] = control_port
+        else:
+            control_port = parsed_port
     if auth_token is None:
         auth_token = spec.get("auth_token") or spec.get("token") or "gost-token"
     if ports is None:

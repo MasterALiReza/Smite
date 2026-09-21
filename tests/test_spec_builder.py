@@ -88,3 +88,68 @@ def test_spec_builder_frp():
     assert client_spec["server_addr"] == "1.1.1.1"
     assert client_spec["token"] == "frp-secret"
     assert client_spec["ports"] == [{"local": 443, "remote": 443}]
+
+
+def test_spec_builder_gost_deterministic_distinct_ports():
+    tunnel1 = DummyTunnel(
+        id="49c73f38-8132-4076-95bc-0c42a0525d31",  # V2 Groot- TR
+        core="gost",
+        type="tcp",
+        spec={"ports": [1035]}
+    )
+    tunnel1.is_reverse = False
+    
+    tunnel2 = DummyTunnel(
+        id="23e5b969-3e7a-43a0-95d0-1d212c6de1a7",  # V2 Wexort-TR
+        core="gost",
+        type="tcp",
+        spec={"ports": [8081, 8082]}
+    )
+    tunnel2.is_reverse = False
+
+    s1, c1 = build_tunnel_node_specs(tunnel1, "217.60.243.179", "213.142.148.254")
+    s2, c2 = build_tunnel_node_specs(tunnel2, "217.60.243.179", "213.142.148.254")
+
+    # Both must have distinct control ports
+    assert s1["control_port"] != s2["control_port"]
+    assert c1["control_port"] != c2["control_port"]
+    assert s1["control_port"] == c1["control_port"]
+    assert s2["control_port"] == c2["control_port"]
+
+    # Ports must be in high range (25000-50000) and NOT 44300
+    assert 25000 <= s1["control_port"] < 50000
+    assert 25000 <= s2["control_port"] < 50000
+    assert s1["control_port"] != 44300
+    assert s2["control_port"] != 44300
+
+    # Must be saved into tunnel.spec
+    assert tunnel1.spec["control_port"] == s1["control_port"]
+    assert tunnel2.spec["control_port"] == s2["control_port"]
+
+
+def test_spec_builder_gost_custom_port_preserved():
+    tunnel = DummyTunnel(
+        id="custom-gost",
+        core="gost",
+        type="tcp",
+        spec={"ports": [9990], "control_port": 30763}
+    )
+    tunnel.is_reverse = False
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["control_port"] == 30763
+    assert c["control_port"] == 30763
+
+
+def test_spec_builder_gost_legacy_44300_migrated():
+    tunnel = DummyTunnel(
+        id="legacy-gost-tunnel",
+        core="gost",
+        type="tcp",
+        spec={"ports": [8080], "control_port": 44300}
+    )
+    tunnel.is_reverse = False
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["control_port"] != 44300
+    assert 25000 <= s["control_port"] < 50000
+    assert tunnel.spec["control_port"] == s["control_port"]
+
