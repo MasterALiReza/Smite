@@ -119,27 +119,47 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
 
       {/* Confirm Modal */}
       {confirmConfig && (
-        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 pointer-events-auto">
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
-              {confirmConfig.options.title}
-            </h3>
-            <p className="text-slate-600 dark:text-slate-300 mb-6">
-              {confirmConfig.options.message}
-            </p>
-            <div className="flex justify-end gap-3">
+        <div 
+          className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 pointer-events-auto animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleConfirm(false);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5 mb-4">
+              {confirmConfig.options.variant === 'danger' ? (
+                <div className="p-2.5 rounded-xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 shrink-0 shadow-xs">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 shrink-0 shadow-xs">
+                  <Info className="w-5 h-5" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  {confirmConfig.options.title}
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
+                  {confirmConfig.options.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2.5 mt-6 pt-2 border-t border-gray-100 dark:border-gray-700/50">
               <button
+                type="button"
                 onClick={() => handleConfirm(false)}
-                className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium transition-colors"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm font-semibold transition-all active:scale-95 cursor-pointer"
               >
                 {confirmConfig.options.cancelText || 'Cancel'}
               </button>
               <button
+                type="button"
                 onClick={() => handleConfirm(true)}
-                className={`px-4 py-2 rounded-lg font-medium text-white transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all shadow-md active:scale-95 cursor-pointer ${
                   confirmConfig.options.variant === 'danger'
-                    ? 'bg-red-600 hover:bg-red-700'
-                    : 'bg-blue-600 hover:bg-blue-700'
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
+                    : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
                 }`}
               >
                 {confirmConfig.options.confirmText || 'Confirm'}

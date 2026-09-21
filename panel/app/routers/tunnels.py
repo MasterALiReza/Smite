@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Set
 from datetime import datetime
 from pydantic import BaseModel
 import logging
@@ -227,6 +227,126 @@ def parse_ports_from_spec(spec: dict) -> list:
     return ports if ports else []
 
 
+def extract_all_tunnel_ports(spec: dict) -> Dict[str, Set[int]]:
+    """
+    Extract both service ports and control/bind ports from a tunnel spec.
+    Returns a dict with 'service_ports', 'control_ports', and 'all_ports'.
+    """
+    service_ports: Set[int] = set()
+    control_ports: Set[int] = set()
+    
+    if not spec or not isinstance(spec, dict):
+        return {"service_ports": service_ports, "control_ports": control_ports, "all_ports": set()}
+    
+    # 1. Service ports
+    parsed = parse_ports_from_spec(spec)
+    for p in parsed:
+        if isinstance(p, int) and p > 0:
+            service_ports.add(p)
+            
+    for key in ["remote_port", "proxy_port", "listen_port"]:
+        val = spec.get(key)
+        if val and str(val).isdigit() and int(val) > 0:
+            service_ports.add(int(val))
+            
+    # 2. Control / bind ports
+    for key in ["control_port", "bind_port", "server_port"]:
+        val = spec.get(key)
+        if val and str(val).isdigit() and int(val) > 0:
+            control_ports.add(int(val))
+            
+    bind_addr = str(spec.get("bind_addr", ""))
+    if ":" in bind_addr:
+        p_str = bind_addr.split(":")[-1]
+        if p_str.isdigit() and int(p_str) > 0:
+            control_ports.add(int(p_str))
+            
+    return {
+        "service_ports": service_ports,
+        "control_ports": control_ports,
+        "all_ports": service_ports | control_ports
+    }
+
+
+async def check_port_conflicts(
+    db: AsyncSession,
+    spec: dict,
+    iran_node_id: Optional[str] = None,
+    foreign_node_id: Optional[str] = None,
+    node_id: Optional[str] = None,
+    exclude_tunnel_id: Optional[str] = None,
+    core: Optional[str] = None
+) -> None:
+    """
+    Check if any port in `spec` conflicts with an existing active/pending tunnel on the same node(s).
+    Raises HTTPException(status_code=400, detail=...) if a collision is found to protect node stability.
+    """
+    if not spec:
+        return
+        
+    extracted = extract_all_tunnel_ports(spec)
+    all_new_ports = extracted["all_ports"]
+    if not all_new_ports:
+        return
+        
+    nodes_to_check: List[Tuple[str, str]] = []
+    if foreign_node_id and str(foreign_node_id).strip():
+        nodes_to_check.append((str(foreign_node_id).strip(), "خارج (Foreign)"))
+    if iran_node_id and str(iran_node_id).strip():
+        nodes_to_check.append((str(iran_node_id).strip(), "ایران (Iran)"))
+    if node_id and str(node_id).strip():
+        clean_nid = str(node_id).strip()
+        already_added = any(nid == clean_nid for nid, _ in nodes_to_check)
+        if not already_added:
+            nodes_to_check.append((clean_nid, "سرور"))
+            
+    if not nodes_to_check:
+        return
+        
+    from sqlalchemy import or_
+    
+    for nid, node_type_label in nodes_to_check:
+        # Get node name for descriptive error message
+        n_res = await db.execute(select(Node).where(Node.id == nid))
+        node_obj = n_res.scalar_one_or_none()
+        node_name_str = f"'{node_obj.name}'" if node_obj else f"ID {nid[:8]}"
+        
+        # Query tunnels associated with this node
+        t_res = await db.execute(
+            select(Tunnel).where(
+                or_(
+                    Tunnel.node_id == nid,
+                    Tunnel.iran_node_id == nid,
+                    Tunnel.foreign_node_id == nid
+                ),
+                Tunnel.status.in_(["active", "pending", "stopped", "running"])
+            )
+        )
+        existing_tunnels = t_res.scalars().all()
+        
+        for ex in existing_tunnels:
+            if exclude_tunnel_id and ex.id == exclude_tunnel_id:
+                continue
+            
+            ex_spec = ex.spec or {}
+            ex_ports_info = extract_all_tunnel_ports(ex_spec)
+            ex_ports = ex_ports_info["all_ports"]
+            
+            common = all_new_ports.intersection(ex_ports)
+            if common:
+                collided_port = sorted(list(common))[0]
+                error_msg = (
+                    f"تداخل پورت: پورت {collided_port} در سرور {node_type_label} {node_name_str} "
+                    f"قبلاً توسط تانل '{ex.name}' رزرو شده است. "
+                    f"استفاده همزمان از یک پورت در دو تانل روی یک سرور باعث تداخل و کرش پروسه‌ها می‌شود."
+                )
+                logger.warning(
+                    f"Port collision prevented: port {collided_port} on node {nid} ({node_name_str}) "
+                    f"already used by tunnel '{ex.name}' (id={ex.id})"
+                )
+                raise HTTPException(status_code=400, detail=error_msg)
+
+
 from app.spec_builder import build_gost_node_specs, build_tunnel_node_specs
 
 
@@ -313,6 +433,16 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     
     foreign_node_id_to_store = foreign_node.id if foreign_node else None
     iran_node_id_to_store = iran_node.id if iran_node else None
+    
+    # Proactively check port collisions on involved nodes before creating tunnel
+    await check_port_conflicts(
+        db=db,
+        spec=tunnel.spec or {},
+        iran_node_id=iran_node_id_to_store,
+        foreign_node_id=foreign_node_id_to_store,
+        node_id=tunnel_node_id,
+        core=tunnel.core
+    )
     
     db_tunnel = Tunnel(
         name=tunnel.name,
@@ -1255,6 +1385,17 @@ async def update_tunnel(
     if tunnel_update.category is not None:
         tunnel.category = tunnel_update.category.strip() if tunnel_update.category.strip() else None
         
+    if spec_changed or tunnel_update.spec is not None:
+        await check_port_conflicts(
+            db=db,
+            spec=tunnel.spec or {},
+            iran_node_id=tunnel.iran_node_id,
+            foreign_node_id=tunnel.foreign_node_id,
+            node_id=tunnel.node_id,
+            exclude_tunnel_id=tunnel.id,
+            core=tunnel.core
+        )
+
     tunnel.revision += 1
     tunnel.updated_at = datetime.utcnow()
     
@@ -1302,6 +1443,17 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     iran_node = None
     assigned_control_port: Optional[int] = None
     control_port: Optional[int] = None
+    
+    # Guard against port collisions with other tunnels before pushing to nodes
+    await check_port_conflicts(
+        db=db,
+        spec=tunnel.spec or {},
+        iran_node_id=tunnel.iran_node_id,
+        foreign_node_id=tunnel.foreign_node_id,
+        node_id=tunnel.node_id,
+        exclude_tunnel_id=tunnel.id,
+        core=tunnel.core
+    )
     
     if is_reverse_tunnel:
         iran_node_id = tunnel.node_id
@@ -1670,15 +1822,21 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     if getattr(tunnel, "iran_node_id", None):
         nodes_to_notify.add(tunnel.iran_node_id)
 
-    for n_id in nodes_to_notify:
+    async def _notify_node(n_id: str):
         try:
-            await client.send_to_node(
-                node_id=n_id,
-                endpoint="/api/agent/tunnels/remove",
-                data={"tunnel_id": tunnel.id}
+            await asyncio.wait_for(
+                client.send_to_node(
+                    node_id=n_id,
+                    endpoint="/api/agent/tunnels/remove",
+                    data={"tunnel_id": tunnel.id}
+                ),
+                timeout=4.0
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to notify node {n_id} during tunnel removal: {e}")
+
+    if nodes_to_notify:
+        await asyncio.gather(*[_notify_node(n_id) for n_id in nodes_to_notify], return_exceptions=True)
     
     await db.delete(tunnel)
     await db.commit()

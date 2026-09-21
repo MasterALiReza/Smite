@@ -219,6 +219,8 @@ const Tunnels = () => {
   const [editingTunnel, setEditingTunnel] = useState<Tunnel | null>(null)
   // Per-tunnel reapply loading (stores the tunnel id being reapplied)
   const [reapplyingTunnelId, setReapplyingTunnelId] = useState<string | null>(null)
+  // Per-tunnel delete loading (stores the tunnel id being deleted)
+  const [deletingTunnelId, setDeletingTunnelId] = useState<string | null>(null)
   // Reapply All progress modal
   const [reapplyAllProgress, setReapplyAllProgress] = useState<TunnelReapplyState[] | null>(null)
   const [reapplyAllDone, setReapplyAllDone] = useState(false)
@@ -446,21 +448,38 @@ const Tunnels = () => {
   }
 
   const deleteTunnel = async (id: string) => {
+    const target = tunnels.find(t => t.id === id)
+    const targetName = target?.name || 'this tunnel'
+
     const confirmed = await showConfirm({
       title: 'Delete Tunnel',
-      message: 'Are you sure you want to delete this tunnel? The connection will be permanently stopped.',
+      message: `Are you sure you want to delete "${targetName}"? The connection will be permanently stopped and removed.`,
       variant: 'danger',
-      confirmText: 'Delete'
+      confirmText: 'Delete Tunnel'
     })
     if (!confirmed) return
     
+    setDeletingTunnelId(id)
+    showToast('info', 'Deleting Tunnel', `Removing "${targetName}"...`, 2500)
+
     try {
       await api.delete(`/tunnels/${id}`)
-      showToast('success', 'Tunnel Deleted', 'Tunnel was deleted successfully')
+      // Optimistic removal: remove immediately from UI so feedback is instantaneous
+      setTunnels(prev => prev.filter(t => t.id !== id))
+      setSelectedTunnelIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      showToast('success', 'Tunnel Deleted', `"${targetName}" was deleted successfully`)
       fetchData()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete tunnel:', error)
-      showToast('error', 'Error', 'Failed to delete tunnel')
+      const errorMsg = error.response?.data?.detail || error.message || 'Failed to delete tunnel'
+      showToast('error', 'Delete Failed', errorMsg)
+      fetchData()
+    } finally {
+      setDeletingTunnelId(null)
     }
   }
 
@@ -839,6 +858,7 @@ const Tunnels = () => {
           const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
 
           const isSelected = selectedTunnelIds.has(tunnel.id)
+          const isDeleting = deletingTunnelId === tunnel.id
 
           return (
             <div
@@ -846,6 +866,8 @@ const Tunnels = () => {
               className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-xs border transition-all ${
                 isSelected
                   ? 'border-blue-500 dark:border-blue-500 ring-2 ring-blue-500/25 bg-blue-50/15 dark:bg-blue-950/20 shadow-md'
+                  : isDeleting
+                  ? 'border-rose-400 dark:border-rose-600 ring-2 ring-rose-500/30 bg-rose-50/15 dark:bg-rose-950/20 shadow-md opacity-90'
                   : isReapplying
                   ? 'border-emerald-400 dark:border-emerald-600 shadow-emerald-100 dark:shadow-none'
                   : 'border-gray-200/80 dark:border-gray-700/80 hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600'
@@ -861,6 +883,16 @@ const Tunnels = () => {
                 </div>
               )}
 
+              {/* ── Per-card deleting overlay ── */}
+              {isDeleting && (
+                <div className="absolute inset-0 bg-white/80 dark:bg-gray-800/80 rounded-2xl z-10 flex items-center justify-center backdrop-blur-[2px]">
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-rose-200 dark:border-rose-800">
+                    <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
+                    <span className="text-sm font-bold text-rose-700 dark:text-rose-300">Deleting tunnel...</span>
+                  </div>
+                </div>
+              )}
+
               <div className="p-4 sm:p-5">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
                   <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
@@ -868,7 +900,8 @@ const Tunnels = () => {
                     <button
                       type="button"
                       onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
-                      className={`mt-1 shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-all cursor-pointer ${
+                      disabled={isReapplying || isDeleting}
+                      className={`mt-1 shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
                         selectedTunnelIds.has(tunnel.id)
                           ? 'bg-blue-600 border-blue-600 text-white shadow-xs scale-105'
                           : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 bg-white dark:bg-gray-700/50'
@@ -1037,8 +1070,9 @@ const Tunnels = () => {
                   {/* Desktop Action Buttons */}
                   <div className="hidden sm:flex items-center gap-1.5 shrink-0">
                     <button
+                      type="button"
                       onClick={() => handleTestActiveTunnel(tunnel)}
-                      disabled={isReapplying || testingTunnelId === tunnel.id}
+                      disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
                       className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
                       title="Test Live Connection & Ping"
                       aria-label="Test Live Connection & Ping"
@@ -1050,8 +1084,9 @@ const Tunnels = () => {
                       )}
                     </button>
                     <button
+                      type="button"
                       onClick={() => reapplyTunnel(tunnel)}
-                      disabled={isReapplying || !!reapplyingTunnelId}
+                      disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                       className={`p-2 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 ${
                         Boolean(tunnel.spec?._pending_reapply)
                           ? 'text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 ring-2 ring-amber-400 dark:ring-amber-500 shadow-xs hover:bg-amber-200/80'
@@ -1067,8 +1102,9 @@ const Tunnels = () => {
                       )}
                     </button>
                     <button
+                      type="button"
                       onClick={() => setEditingTunnel(tunnel)}
-                      disabled={isReapplying}
+                      disabled={isReapplying || isDeleting}
                       className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
                       title="Edit tunnel"
                       aria-label="Edit tunnel"
@@ -1076,13 +1112,18 @@ const Tunnels = () => {
                       <Edit2 size={18} />
                     </button>
                     <button
+                      type="button"
                       onClick={() => deleteTunnel(tunnel.id)}
-                      disabled={isReapplying}
+                      disabled={isReapplying || isDeleting}
                       className="p-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
-                      title="Delete tunnel"
+                      title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
                       aria-label="Delete tunnel"
                     >
-                      <Trash2 size={18} />
+                      {isDeleting ? (
+                        <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
+                      ) : (
+                        <Trash2 size={18} />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1090,8 +1131,9 @@ const Tunnels = () => {
                 {/* Mobile Action Buttons Bar */}
                 <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-gray-100 dark:border-gray-700/60">
                   <button
+                    type="button"
                     onClick={() => handleTestActiveTunnel(tunnel)}
-                    disabled={isReapplying || testingTunnelId === tunnel.id}
+                    disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
                     className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
                     title="Test Live Connection & Ping"
                     aria-label="Test Live Connection & Ping"
@@ -1103,8 +1145,9 @@ const Tunnels = () => {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={() => reapplyTunnel(tunnel)}
-                    disabled={isReapplying || !!reapplyingTunnelId}
+                    disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                     className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 ${
                       Boolean(tunnel.spec?._pending_reapply)
                         ? 'text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 ring-2 ring-amber-400 dark:ring-amber-500 shadow-xs'
@@ -1120,8 +1163,9 @@ const Tunnels = () => {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={() => setEditingTunnel(tunnel)}
-                    disabled={isReapplying}
+                    disabled={isReapplying || isDeleting}
                     className="p-2.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
                     title="Edit tunnel"
                     aria-label="Edit tunnel"
@@ -1129,13 +1173,18 @@ const Tunnels = () => {
                     <Edit2 size={18} />
                   </button>
                   <button
+                    type="button"
                     onClick={() => deleteTunnel(tunnel.id)}
-                    disabled={isReapplying}
+                    disabled={isReapplying || isDeleting}
                     className="p-2.5 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
-                    title="Delete tunnel"
+                    title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
                     aria-label="Delete tunnel"
                   >
-                    <Trash2 size={18} />
+                    {isDeleting ? (
+                      <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
+                    ) : (
+                      <Trash2 size={18} />
+                    )}
                   </button>
                 </div>
               </div>

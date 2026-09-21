@@ -2385,14 +2385,47 @@ class AdapterManager:
         logger.info(f"Tunnel restoration completed: {restored} restored, {failed} failed")
         self.start_watchdog()
 
+    @staticmethod
+    def _extract_spec_ports(spec: Dict[str, Any]) -> Set[int]:
+        """Extract all service and control ports defined in a tunnel spec"""
+        ports: Set[int] = set()
+        if not spec or not isinstance(spec, dict):
+            return ports
+        raw_ports = spec.get("ports", [])
+        if isinstance(raw_ports, list):
+            for p in raw_ports:
+                if isinstance(p, (int, str)) and str(p).isdigit() and int(p) > 0:
+                    ports.add(int(p))
+        elif isinstance(raw_ports, str):
+            for p in raw_ports.split(","):
+                if p.strip().isdigit() and int(p.strip()) > 0:
+                    ports.add(int(p.strip()))
+        for k in ["proxy_port", "remote_port", "listen_port", "bind_port", "control_port", "server_port"]:
+            val = spec.get(k)
+            if val and str(val).isdigit() and int(val) > 0:
+                ports.add(int(val))
+        bind_addr = str(spec.get("bind_addr", ""))
+        if ":" in bind_addr:
+            port_str = bind_addr.split(":")[-1]
+            if port_str.isdigit() and int(port_str) > 0:
+                ports.add(int(port_str))
+        return ports
+
     async def _watchdog_loop(self):
-        """Continuous Self-Healing Watchdog: inspects tunnel processes every 15s and auto-recovers dead tunnels"""
+        """Continuous Self-Healing Watchdog: inspects tunnel processes every 15s and auto-recovers dead tunnels with exponential backoff and port conflict safety"""
         logger.info("AdapterManager self-healing watchdog loop started (interval: 15s)")
-        backoff: Dict[str, int] = {}
+        backoff_delay: Dict[str, int] = {}
+        next_retry_at: Dict[str, float] = {}
+        
         while True:
             try:
                 await asyncio.sleep(15)
+                now = time.time()
                 for tunnel_id in list(self.tunnel_configs.keys()):
+                    # Respect exponential backoff window
+                    if tunnel_id in next_retry_at and now < next_retry_at[tunnel_id]:
+                        continue
+
                     config = self.tunnel_configs.get(tunnel_id, {})
                     tunnel_core = config.get("core")
                     spec = config.get("spec", {})
@@ -2407,8 +2440,41 @@ class AdapterManager:
                     is_running = status.get("process_running", False) or status.get("active", False)
                     
                     if not is_running:
-                        current_delay = backoff.get(tunnel_id, 3)
-                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering immediately...")
+                        # 1. Port-conflict protection check before reviving dead tunnel
+                        dead_tunnel_ports = self._extract_spec_ports(spec)
+                        conflicting_active_tunnel = None
+                        
+                        if dead_tunnel_ports:
+                            for other_id, other_adapter in list(self.active_tunnels.items()):
+                                if other_id == tunnel_id:
+                                    continue
+                                try:
+                                    other_st = other_adapter.status(other_id)
+                                    if other_st.get("process_running", False) or other_st.get("active", False):
+                                        other_spec = self.tunnel_configs.get(other_id, {}).get("spec", {})
+                                        other_ports = self._extract_spec_ports(other_spec)
+                                        collision = dead_tunnel_ports.intersection(other_ports)
+                                        if collision:
+                                            conflicting_active_tunnel = (other_id, sorted(list(collision))[0])
+                                            break
+                                except Exception:
+                                    pass
+                        
+                        if conflicting_active_tunnel:
+                            logger.error(
+                                f"Watchdog: SAFETY ABORT - Cannot auto-recover tunnel {tunnel_id} ({tunnel_core}) "
+                                f"because port {conflicting_active_tunnel[1]} is currently in use by ACTIVE tunnel "
+                                f"{conflicting_active_tunnel[0]}! Skipping recovery to prevent process kill loop."
+                            )
+                            cur_delay = backoff_delay.get(tunnel_id, 30)
+                            next_delay = min(cur_delay * 2, 300)
+                            backoff_delay[tunnel_id] = next_delay
+                            next_retry_at[tunnel_id] = now + next_delay
+                            continue
+                        
+                        # 2. Proceed with safe recovery
+                        cur_delay = backoff_delay.get(tunnel_id, 15)
+                        logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering...")
                         try:
                             async with self._get_tunnel_lock(tunnel_id):
                                 status = adapter.status(tunnel_id)
@@ -2418,13 +2484,17 @@ class AdapterManager:
                                     await asyncio.sleep(0.2)
                                     await adapter.apply(tunnel_id, spec)
                                     self.active_tunnels[tunnel_id] = adapter
-                            backoff.pop(tunnel_id, None)
+                            backoff_delay.pop(tunnel_id, None)
+                            next_retry_at.pop(tunnel_id, None)
                             logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
                         except Exception as e:
                             logger.error(f"Watchdog: failed to auto-recover tunnel {tunnel_id}: {e}")
-                            backoff[tunnel_id] = min(current_delay * 2, 120)
+                            next_delay = min(cur_delay * 2, 120)
+                            backoff_delay[tunnel_id] = next_delay
+                            next_retry_at[tunnel_id] = now + next_delay
                     else:
-                        backoff.pop(tunnel_id, None)
+                        backoff_delay.pop(tunnel_id, None)
+                        next_retry_at.pop(tunnel_id, None)
             except asyncio.CancelledError:
                 logger.info("AdapterManager watchdog loop cancelled")
                 break

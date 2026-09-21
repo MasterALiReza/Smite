@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Trash2, CheckCircle, XCircle, AlertCircle, Server, Sparkles, Edit2 } from 'lucide-react'
+import { Plus, Copy, Trash2, CheckCircle, XCircle, AlertCircle, Server, Sparkles, Edit2, Loader2 } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
@@ -25,6 +25,7 @@ const Servers = () => {
   const { showToast, showConfirm } = useToast()
   const [servers, setServers] = useState<Server[]>([])
   const [loading, setLoading] = useState(true)
+  const [deletingServerId, setDeletingServerId] = useState<string | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
   const [showJoinModal, setShowJoinModal] = useState(false)
@@ -113,21 +114,32 @@ const Servers = () => {
   }
 
   const deleteServer = async (id: string) => {
+    const target = servers.find(s => s.id === id)
+    const targetName = target?.name || 'this foreign server'
+
     const confirmed = await showConfirm({
       title: 'Delete Foreign Server',
-      message: 'Are you sure you want to delete this foreign server? Any tunnels linked to it may stop working.',
+      message: `Are you sure you want to delete "${targetName}"? Any tunnels linked to it may stop working.`,
       variant: 'danger',
-      confirmText: 'Delete'
+      confirmText: 'Delete Server'
     })
     if (!confirmed) return
     
+    setDeletingServerId(id)
+    showToast('info', 'Deleting Server', `Removing "${targetName}"...`, 2500)
+
     try {
       await api.delete(`/nodes/${id}`)
-      showToast('success', 'Deleted', 'Server deleted successfully')
+      setServers(prev => prev.filter(s => s.id !== id))
+      showToast('success', 'Deleted', `Server "${targetName}" deleted successfully`)
       fetchServers()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete server:', error)
-      showToast('error', 'Error', 'Failed to delete server')
+      const errorMsg = error.response?.data?.detail || error.message || 'Failed to delete server'
+      showToast('error', 'Delete Failed', errorMsg)
+      fetchServers()
+    } finally {
+      setDeletingServerId(null)
     }
   }
 
@@ -283,20 +295,28 @@ const Servers = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         <div className="flex items-center gap-1.5">
                           <button
+                            type="button"
                             onClick={() => setEditingServer(server)}
-                            className="p-2 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors"
+                            disabled={deletingServerId === server.id}
+                            className="p-2 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors disabled:opacity-50"
                             title="Edit Server Name"
                             aria-label="Edit Server Name"
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
+                            type="button"
                             onClick={() => deleteServer(server.id)}
-                            className="p-2 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors"
-                            title="Delete server"
+                            disabled={deletingServerId === server.id}
+                            className="p-2 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center transition-colors disabled:opacity-50"
+                            title={deletingServerId === server.id ? "Deleting server..." : "Delete server"}
                             aria-label="Delete server"
                           >
-                            <Trash2 size={16} />
+                            {deletingServerId === server.id ? (
+                              <Loader2 size={16} className="animate-spin text-red-600 dark:text-red-400" />
+                            ) : (
+                              <Trash2 size={16} />
+                            )}
                           </button>
                         </div>
                       </td>
@@ -397,20 +417,28 @@ const Servers = () => {
                   <span className="truncate">{new Date(server.last_seen).toLocaleDateString()} {new Date(server.last_seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   <div className="flex items-center gap-1.5">
                     <button
+                      type="button"
                       onClick={() => setEditingServer(server)}
-                      className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95"
+                      disabled={deletingServerId === server.id}
+                      className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95 disabled:opacity-50"
                       title="Edit Server Name"
                       aria-label="Edit Server Name"
                     >
                       <Edit2 size={16} />
                     </button>
                     <button
+                      type="button"
                       onClick={() => deleteServer(server.id)}
-                      className="p-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95"
-                      title="Delete Server"
+                      disabled={deletingServerId === server.id}
+                      className="p-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-xl min-w-[44px] min-h-[44px] flex items-center justify-center transition-colors active:scale-95 disabled:opacity-50"
+                      title={deletingServerId === server.id ? "Deleting Server..." : "Delete Server"}
                       aria-label="Delete Server"
                     >
-                      <Trash2 size={16} />
+                      {deletingServerId === server.id ? (
+                        <Loader2 size={16} className="animate-spin text-rose-600 dark:text-rose-400" />
+                      ) : (
+                        <Trash2 size={16} />
+                      )}
                     </button>
                   </div>
                 </div>
