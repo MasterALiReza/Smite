@@ -92,7 +92,7 @@ def test_spec_builder_frp():
 
 def test_spec_builder_gost_deterministic_distinct_ports():
     tunnel1 = DummyTunnel(
-        id="49c73f38-8132-4076-95bc-0c42a0525d31",  # V2 Groot- TR
+        id="t-gost-alpha-1",
         core="gost",
         type="tcp",
         spec={"ports": [1035]}
@@ -100,15 +100,15 @@ def test_spec_builder_gost_deterministic_distinct_ports():
     tunnel1.is_reverse = False
     
     tunnel2 = DummyTunnel(
-        id="23e5b969-3e7a-43a0-95d0-1d212c6de1a7",  # V2 Wexort-TR
+        id="t-gost-beta-2",
         core="gost",
         type="tcp",
         spec={"ports": [8081, 8082]}
     )
     tunnel2.is_reverse = False
 
-    s1, c1 = build_tunnel_node_specs(tunnel1, "217.60.243.179", "213.142.148.254")
-    s2, c2 = build_tunnel_node_specs(tunnel2, "217.60.243.179", "213.142.148.254")
+    s1, c1 = build_tunnel_node_specs(tunnel1, "192.0.2.1", "198.51.100.1")
+    s2, c2 = build_tunnel_node_specs(tunnel2, "192.0.2.1", "198.51.100.1")
 
     # Both must have distinct control ports
     assert s1["control_port"] != s2["control_port"]
