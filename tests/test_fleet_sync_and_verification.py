@@ -232,3 +232,25 @@ async def test_gost_adapter_apply_validation_preserves_running_process():
     adapter.remove.assert_not_called()
     assert adapter.processes["tunnel-gost-1"] is dummy_proc
 
+
+@pytest.mark.asyncio
+async def test_adapter_manager_get_tunnel_status_adopts_persisted_or_pid():
+    """Test AdapterManager.get_tunnel_status recovers and adopts live status when not already in active_tunnels"""
+    from node.app.core_adapters import AdapterManager
+    manager = AdapterManager()
+    
+    # 1. Unregistered tunnel -> active False
+    res = await manager.get_tunnel_status("unknown-tunnel")
+    assert res["active"] is False
+    
+    # 2. Persisted in tunnel_configs with living adapter status -> auto-adopts into active_tunnels
+    mock_adapter = MagicMock()
+    mock_adapter.status.return_value = {"active": True, "type": "gost", "process_running": True}
+    manager.adapters["gost"] = mock_adapter
+    manager.tunnel_configs["persisted-tunnel"] = {"core": "gost", "spec": {}}
+    
+    res = await manager.get_tunnel_status("persisted-tunnel")
+    assert res["active"] is True
+    assert "persisted-tunnel" in manager.active_tunnels
+
+

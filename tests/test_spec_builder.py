@@ -153,3 +153,22 @@ def test_spec_builder_gost_legacy_44300_migrated():
     assert 25000 <= s["control_port"] < 50000
     assert tunnel.spec["control_port"] == s["control_port"]
 
+
+def test_spec_builder_gost_ports_resolution_from_listen_port():
+    """Test that GOST spec builder correctly derives ports array from listen_port if ports is omitted"""
+    tunnel = DummyTunnel(
+        id="listen-port-gost",
+        core="gost",
+        type="tcp",
+        spec={"listen_port": 9990}
+    )
+    tunnel.is_reverse = False
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["ports"] == [9990]
+    assert c["ports"] == [9990]
+    assert s["mode"] == "client"
+    assert s["server_ip"] == "2.2.2.2"
+    assert c["mode"] == "server"
+    assert tunnel.spec["ports"] == [9990]
+
+

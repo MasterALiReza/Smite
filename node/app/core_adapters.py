@@ -2588,10 +2588,29 @@ class AdapterManager:
             await self._remove_tunnel_unlocked(tunnel_id)
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
-        """Get tunnel status"""
+        """Get tunnel status with non-destructive live adoption fallback"""
         if tunnel_id in self.active_tunnels:
             adapter = self.active_tunnels[tunnel_id]
             return adapter.status(tunnel_id)
+        
+        # Fallback 1: check persisted configs and live PID
+        if tunnel_id in self.tunnel_configs:
+            tunnel_core = self.tunnel_configs[tunnel_id].get("core")
+            if tunnel_core:
+                adapter = self.get_adapter(tunnel_core)
+                if adapter:
+                    st = adapter.status(tunnel_id)
+                    if st.get("process_running", False) or st.get("active", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                        self.active_tunnels[tunnel_id] = adapter
+                        return st
+        
+        # Fallback 2: check all registered adapters for living PID
+        for core_name, adapter in self.adapters.items():
+            if _is_tunnel_pid_alive(tunnel_id, core_name):
+                st = adapter.status(tunnel_id)
+                self.active_tunnels[tunnel_id] = adapter
+                return st
+
         return {"active": False}
     
     async def inspect_tunnel_health(
@@ -2643,8 +2662,20 @@ class AdapterManager:
                             missing_ports.append({"port": p_num, "type": f"service_{proto}"})
                 except Exception:
                     pass
+        elif actual_mode == "client" and core == "gost" and not spec.get("is_reverse", False):
+            # Direct GOST tunnel: Iran client node listens locally on service ports
+            for p in checked_ports:
+                try:
+                    p_num = int(p) if isinstance(p, (int, str)) and str(p).isdigit() else None
+                    if p_num:
+                        if is_port_listening_locally(p_num, proto=proto):
+                            listening_ports.append({"port": p_num, "type": f"service_{proto}"})
+                        else:
+                            missing_ports.append({"port": p_num, "type": f"service_{proto}"})
+                except Exception:
+                    pass
                         
-        is_healthy = proc_alive and (len(missing_ports) == 0 if actual_mode == "server" else True)
+        is_healthy = proc_alive and (len(missing_ports) == 0)
         
         return {
             "healthy": is_healthy,

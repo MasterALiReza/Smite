@@ -403,7 +403,12 @@ def build_gost_node_specs(
     if auth_token is None:
         auth_token = spec.get("auth_token") or spec.get("token") or "gost-token"
     if ports is None:
-        ports = spec.get("ports") or [8080]
+        parsed_ports = parse_ports_list(spec)
+        ports = parsed_ports if parsed_ports else [8080]
+
+    spec["ports"] = ports
+    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+        tunnel.spec["ports"] = ports
 
     is_reverse = getattr(tunnel, "is_reverse", False) or False
     cdn_mode = getattr(tunnel, "cdn_mode", False) or False

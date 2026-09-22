@@ -367,7 +367,11 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             tunnel.spec["ports"] = ports
     
     is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
-        tunnel.core == "gost" and (tunnel.is_reverse or bool(getattr(tunnel, "foreign_node_id", None)))
+        tunnel.core == "gost" and (
+            tunnel.is_reverse
+            or bool(getattr(tunnel, "foreign_node_id", None))
+            or bool(getattr(tunnel, "iran_node_id", None))
+        )
     )
     foreign_node = None
     iran_node = None
@@ -1427,7 +1431,7 @@ async def update_tunnel(
 
 
 @router.post("/{tunnel_id}/apply")
-async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db), current_user: Optional[Admin] = Depends(get_current_user)):
     """Apply tunnel configuration to node(s) - handles both single-node and reverse tunnels"""
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
     tunnel = result.scalar_one_or_none()
@@ -1437,7 +1441,11 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     client = NodeClient()
     
     is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
-        tunnel.core == "gost" and (tunnel.is_reverse or bool(getattr(tunnel, "foreign_node_id", None)))
+        tunnel.core == "gost" and (
+            tunnel.is_reverse
+            or bool(getattr(tunnel, "foreign_node_id", None))
+            or bool(getattr(tunnel, "iran_node_id", None))
+        )
     )
     foreign_node = None
     iran_node = None
@@ -1456,7 +1464,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     )
     
     if is_reverse_tunnel:
-        iran_node_id = tunnel.node_id
+        iran_node_id = getattr(tunnel, "iran_node_id", None) or tunnel.node_id
         result = await db.execute(select(Node).where(Node.id == iran_node_id))
         iran_node = result.scalar_one_or_none()
         if not iran_node:
@@ -1737,7 +1745,7 @@ async def reapply_all_tunnels(request: Request, db: AsyncSession = Depends(get_d
     
     for tunnel in tunnels:
         try:
-            result_data = await apply_tunnel(tunnel.id, request, db)
+            result_data = await apply_tunnel(tunnel.id, request, db, current_user=current_user)
             if result_data and result_data.get("status") in ["applied", "success"]:
                 applied += 1
             else:
