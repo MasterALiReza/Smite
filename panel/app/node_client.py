@@ -183,10 +183,13 @@ class NodeClient:
                 return {"status": "error", "message": f"Node {node_id} not found"}
             
             node_address, using_frp = await self._get_node_address(node)
-            url = f"{node_address.rstrip('/')}/api/agent/status"
+            if tunnel_id:
+                url = f"{node_address.rstrip('/')}/api/agent/tunnels/status?tunnel_id={tunnel_id}"
+            else:
+                url = f"{node_address.rstrip('/')}/api/agent/status"
             
             comm_type = "FRP" if using_frp else "HTTP"
-            logger.debug(f"[{comm_type}] Getting tunnel status from node {node_id}")
+            logger.debug(f"[{comm_type}] Getting tunnel status from node {node_id} (tunnel: {tunnel_id or 'all'})")
             
             try:
                 timeout = httpx.Timeout(3.0, connect=2.0)
@@ -199,7 +202,10 @@ class NodeClient:
                     direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
                         try:
-                            direct_url = f"{direct_addr.rstrip('/')}/api/agent/status"
+                            if tunnel_id:
+                                direct_url = f"{direct_addr.rstrip('/')}/api/agent/tunnels/status?tunnel_id={tunnel_id}"
+                            else:
+                                direct_url = f"{direct_addr.rstrip('/')}/api/agent/status"
                             async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
                                 direct_resp = await direct_client.get(direct_url, headers=self._node_token_headers())
                                 direct_resp.raise_for_status()

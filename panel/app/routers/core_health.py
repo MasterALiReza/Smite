@@ -306,30 +306,34 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
             iran_node = None
             foreign_node = None
             
-            if tunnel.node_id:
-                result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                iran_node = result.scalar_one_or_none()
-                if iran_node and iran_node.node_metadata.get("role") != "iran":
-                    foreign_node = iran_node
-                    iran_node = None
+            result_all = await db.execute(select(Node))
+            all_nodes = result_all.scalars().all()
+            
+            iran_node_id = getattr(tunnel, "iran_node_id", None) or tunnel.node_id
+            if iran_node_id:
+                matched_iran = [n for n in all_nodes if n.id == iran_node_id]
+                if matched_iran:
+                    node_obj = matched_iran[0]
+                    if node_obj.node_metadata and node_obj.node_metadata.get("role") != "iran":
+                        foreign_node = node_obj
+                    else:
+                        iran_node = node_obj
+            
+            foreign_node_id = getattr(tunnel, "foreign_node_id", None)
+            if foreign_node_id and not foreign_node:
+                matched_foreign = [n for n in all_nodes if n.id == foreign_node_id]
+                if matched_foreign:
+                    foreign_node = matched_foreign[0]
             
             if not foreign_node:
-                result = await db.execute(select(Node))
-                all_nodes = result.scalars().all()
                 foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
                 if foreign_nodes:
                     foreign_node = foreign_nodes[0]
             
             if not iran_node:
-                if tunnel.node_id:
-                    result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                    iran_node = result.scalar_one_or_none()
-                if not iran_node:
-                    result = await db.execute(select(Node))
-                    all_nodes = result.scalars().all()
-                    iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
-                    if iran_nodes:
-                        iran_node = iran_nodes[0]
+                iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
+                if iran_nodes:
+                    iran_node = iran_nodes[0]
             
             if not foreign_node or not iran_node:
                 logger.warning(f"Tunnel {tunnel.id}: Missing foreign or iran node, skipping reset")

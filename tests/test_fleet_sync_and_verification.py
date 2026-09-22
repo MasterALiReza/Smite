@@ -157,3 +157,78 @@ async def test_node_client_verify_tunnel():
             "proto": "udp"
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_node_client_get_tunnel_status_endpoints():
+    """Test NodeClient.get_tunnel_status routes to tunnel-specific status endpoint when tunnel_id is provided"""
+    from panel.app.node_client import NodeClient
+    client = NodeClient()
+    
+    mock_node = MagicMock()
+    mock_node.id = "node-1"
+    mock_node.node_metadata = {
+        "api_address": "http://10.0.0.1:8888",
+        "api_port": 8888,
+        "token": "test-token"
+    }
+    
+    mock_session = AsyncMock()
+    mock_res = MagicMock()
+    mock_res.scalar_one_or_none.return_value = mock_node
+    mock_session.execute.return_value = mock_res
+    
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__aenter__.return_value = mock_session
+    mock_session_ctx.__aexit__.return_value = None
+    
+    with patch("panel.app.node_client.AsyncSessionLocal", return_value=mock_session_ctx), \
+         patch.object(client, "_get_node_address", AsyncMock(return_value=("http://10.0.0.1:8888", False))), \
+         patch("httpx.AsyncClient") as mock_client_cls:
+        
+        mock_http = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"status": "success", "data": {"active": True}}
+        mock_http.get.return_value = mock_resp
+        mock_client_cls.return_value.__aenter__.return_value = mock_http
+        
+        # 1. With tunnel_id: should target /api/agent/tunnels/status?tunnel_id=...
+        res = await client.get_tunnel_status("node-1", tunnel_id="tunnel-gost-1")
+        assert res["status"] == "success"
+        called_url = mock_http.get.call_args[0][0]
+        assert called_url == "http://10.0.0.1:8888/api/agent/tunnels/status?tunnel_id=tunnel-gost-1"
+        
+        # 2. Without tunnel_id: should target general node status
+        await client.get_tunnel_status("node-1")
+        called_url_general = mock_http.get.call_args[0][0]
+        assert called_url_general == "http://10.0.0.1:8888/api/agent/status"
+
+
+@pytest.mark.asyncio
+async def test_gost_adapter_apply_validation_preserves_running_process():
+    """Test GostAdapter.apply validates spec before killing existing running process"""
+    from node.app.core_adapters import GostAdapter
+    adapter = GostAdapter()
+    adapter.remove = AsyncMock()
+    
+    dummy_proc = MagicMock()
+    adapter.processes["tunnel-gost-1"] = dummy_proc
+    
+    # 1. Missing control_port should raise ValueError and NOT remove running process
+    with pytest.raises(ValueError, match="GOST requires 'control_port'"):
+        await adapter.apply("tunnel-gost-1", {"mode": "client"})
+    adapter.remove.assert_not_called()
+    assert adapter.processes["tunnel-gost-1"] is dummy_proc
+    
+    # 2. Client missing server_ip should raise ValueError and NOT remove running process
+    with pytest.raises(ValueError, match="GOST client requires 'server_ip'"):
+        await adapter.apply("tunnel-gost-1", {"mode": "client", "control_port": 1234})
+    adapter.remove.assert_not_called()
+    assert adapter.processes["tunnel-gost-1"] is dummy_proc
+    
+    # 3. Client missing ports array/listen_port should raise ValueError and NOT remove running process
+    with pytest.raises(ValueError, match="GOST client requires 'ports' array"):
+        await adapter.apply("tunnel-gost-1", {"mode": "client", "control_port": 1234, "server_ip": "1.2.3.4"})
+    adapter.remove.assert_not_called()
+    assert adapter.processes["tunnel-gost-1"] is dummy_proc
+

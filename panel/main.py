@@ -309,56 +309,58 @@ async def _restore_node_tunnels():
             
             logger.info(f"Found {len(tunnels)} active tunnels to check for sync")
             
-            reverse_tunnels = [t for t in tunnels if t.core in ["rathole", "backhaul", "chisel", "frp"]]
-            gost_tunnels = [t for t in tunnels if t.core == "gost" and t.node_id]
+            # All 5 proxy cores (rathole, backhaul, chisel, frp, gost) are 2-node tunnels managed via build_tunnel_node_specs
+            reverse_tunnels = [t for t in tunnels if t.core in ["rathole", "backhaul", "chisel", "frp", "gost"]]
             
-            if not reverse_tunnels and not gost_tunnels:
+            if not reverse_tunnels:
                 logger.info("No node-side tunnels to sync")
                 return
             
-            logger.info(f"Found {len(reverse_tunnels)} active reverse tunnels and {len(gost_tunnels)} node-side GOST tunnels to sync")
+            logger.info(f"Found {len(reverse_tunnels)} active node-side tunnels to sync")
             
             client = NodeClient()
             restored_count = 0
             failed_count = 0
             skipped_count = 0
             
+            result_all_nodes = await db.execute(select(Node))
+            all_nodes = result_all_nodes.scalars().all()
+            foreign_nodes_fallback = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
+            iran_nodes_fallback = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
+            
             for tunnel in reverse_tunnels:
                 try:
                     iran_node = None
                     foreign_node = None
                     
-                    if tunnel.node_id:
-                        result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                        iran_node = result.scalar_one_or_none()
-                        if iran_node and iran_node.node_metadata.get("role") != "iran":
-                            foreign_node = iran_node
-                            iran_node = None
+                    iran_node_id = getattr(tunnel, "iran_node_id", None) or tunnel.node_id
+                    if iran_node_id:
+                        matched_iran = [n for n in all_nodes if n.id == iran_node_id]
+                        if matched_iran:
+                            node_obj = matched_iran[0]
+                            if node_obj.node_metadata and node_obj.node_metadata.get("role") != "iran":
+                                foreign_node = node_obj
+                            else:
+                                iran_node = node_obj
                     
-                    if not foreign_node:
-                        result = await db.execute(select(Node))
-                        all_nodes = result.scalars().all()
-                        foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
-                        if foreign_nodes:
-                            foreign_node = foreign_nodes[0]
+                    foreign_node_id = getattr(tunnel, "foreign_node_id", None)
+                    if foreign_node_id and not foreign_node:
+                        matched_foreign = [n for n in all_nodes if n.id == foreign_node_id]
+                        if matched_foreign:
+                            foreign_node = matched_foreign[0]
                     
-                    if not iran_node:
-                        if tunnel.node_id:
-                            result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                            iran_node = result.scalar_one_or_none()
-                        if not iran_node:
-                            result = await db.execute(select(Node))
-                            all_nodes = result.scalars().all()
-                            iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
-                            if iran_nodes:
-                                iran_node = iran_nodes[0]
+                    if not foreign_node and foreign_nodes_fallback:
+                        foreign_node = foreign_nodes_fallback[0]
+                    
+                    if not iran_node and iran_nodes_fallback:
+                        iran_node = iran_nodes_fallback[0]
                     
                     if not foreign_node or not iran_node:
-                        logger.warning(f"Tunnel {tunnel.id}: Missing foreign or iran node, skipping sync (nodes will restore themselves)")
+                        logger.warning(f"Tunnel {tunnel.id} ({tunnel.core}): Missing foreign or iran node, skipping sync (nodes will restore themselves)")
                         skipped_count += 1
                         continue
                     
-                    iran_node_ip = iran_node.node_metadata.get("ip_address")
+                    iran_node_ip = iran_node.node_metadata.get("ip_address") if iran_node.node_metadata else None
                     if not iran_node_ip:
                         logger.warning(f"Tunnel {tunnel.id}: Iran node has no IP address, skipping sync")
                         skipped_count += 1
@@ -384,7 +386,7 @@ async def _restore_node_tunnels():
                             server_response = {"status": "success", "message": "Already active"}
                             logger.info(f"Tunnel {tunnel.id} is ALREADY active on Iran node {iran_node.id}, skipping disruptive apply")
                         else:
-                            logger.info(f"Restoring tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
+                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying server config to iran node {iran_node.id}")
                             server_response = await client.send_to_node(
                                 node_id=iran_node.id,
                                 endpoint="/api/agent/tunnels/apply",
@@ -414,7 +416,7 @@ async def _restore_node_tunnels():
                             client_response = {"status": "success", "message": "Already active"}
                             logger.info(f"Tunnel {tunnel.id} is ALREADY active on foreign node {foreign_node.id}, skipping disruptive apply")
                         else:
-                            logger.info(f"Restoring tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
+                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying client config to foreign node {foreign_node.id}")
                             client_response = await client.send_to_node(
                                 node_id=foreign_node.id,
                                 endpoint="/api/agent/tunnels/apply",
@@ -440,116 +442,7 @@ async def _restore_node_tunnels():
                     logger.error(f"Failed to restore tunnel {tunnel.id}: {e}", exc_info=True)
                     failed_count += 1
             
-            for tunnel in gost_tunnels:
-                try:
-                    logger.info(f"Restoring GOST tunnel {tunnel.id}: node_id={tunnel.node_id}, spec={tunnel.spec}")
-                    
-                    forward_to = tunnel.spec.get("forward_to") if tunnel.spec else None
-                    listen_port = tunnel.spec.get("listen_port") or tunnel.spec.get("remote_port")
-                    
-                    if forward_to:
-                        if ":" in forward_to:
-                            foreign_ip, remote_port = forward_to.rsplit(":", 1)
-                        else:
-                            foreign_ip = forward_to
-                            remote_port = tunnel.spec.get("remote_port", 8080)
-                    else:
-                        remote_ip = tunnel.spec.get("remote_ip", "127.0.0.1")
-                        remote_port = tunnel.spec.get("remote_port", 8080)
-                        foreign_ip = remote_ip
-                    
-                    if not listen_port:
-                        logger.warning(f"GOST tunnel {tunnel.id}: Missing listen_port, checking if panel-side forwarding...")
-                        panel_port = tunnel.spec.get("remote_port")
-                        if panel_port:
-                            listen_port = panel_port
-                        else:
-                            logger.warning(f"GOST tunnel {tunnel.id}: No listen_port found, skipping node-side restore (may be panel-side)")
-                            continue
-                    
-                    if not tunnel.node_id:
-                        logger.info(f"GOST tunnel {tunnel.id}: No node_id, this is a panel-side forwarding tunnel (handled by _restore_forwards)")
-                        continue
-                    
-                    iran_node = None
-                    if tunnel.node_id:
-                        result = await db.execute(select(Node).where(Node.id == tunnel.node_id))
-                        iran_node = result.scalar_one_or_none()
-                        if iran_node and iran_node.node_metadata.get("role") != "iran":
-                            logger.warning(f"GOST tunnel {tunnel.id}: node_id points to non-iran node, skipping")
-                            continue
-                    
-                    if not iran_node:
-                        result = await db.execute(select(Node))
-                        all_nodes = result.scalars().all()
-                        iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
-                        if iran_nodes:
-                            iran_node = iran_nodes[0]
-                    
-                    if not iran_node:
-                        logger.warning(f"GOST tunnel {tunnel.id}: No iran node found, skipping sync (node will restore itself)")
-                        skipped_count += 1
-                        continue
-                    
-                    if not foreign_ip or foreign_ip in ["127.0.0.1", "localhost"]:
-                        result = await db.execute(select(Node))
-                        all_nodes = result.scalars().all()
-                        foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
-                        if foreign_nodes:
-                            foreign_node = foreign_nodes[0]
-                            foreign_ip = foreign_node.node_metadata.get("ip_address")
-                    
-                    if not foreign_ip:
-                        logger.warning(f"GOST tunnel {tunnel.id}: Cannot determine foreign IP, skipping restore")
-                        continue
-                    
-                    use_ipv6 = tunnel.spec.get("use_ipv6", False)
-                    
-                    gost_spec = {
-                        "listen_port": int(listen_port),
-                        "forward_to": f"{foreign_ip}:{remote_port}",
-                        "type": tunnel.type,
-                        "use_ipv6": use_ipv6
-                    }
-                    
-                    client = NodeClient()
-                    if not iran_node.node_metadata.get("api_address"):
-                        iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
-                        await db.commit()
-                    
-                    try:
-                        gost_status = await client.get_tunnel_status(iran_node.id, tunnel.id)
-                        if gost_status and gost_status.get("status") == "success" and gost_status.get("data", {}).get("active"):
-                            response = {"status": "success", "message": "Already active"}
-                            logger.info(f"GOST tunnel {tunnel.id} is ALREADY active on Iran node {iran_node.id}, skipping disruptive apply")
-                        else:
-                            logger.info(f"Restoring GOST tunnel {tunnel.id}: applying to iran node {iran_node.id}, spec={gost_spec}")
-                            response = await client.send_to_node(
-                                node_id=iran_node.id,
-                                endpoint="/api/agent/tunnels/apply",
-                                data={
-                                    "tunnel_id": tunnel.id,
-                                    "core": "gost",
-                                    "type": tunnel.type,
-                                    "spec": gost_spec
-                                }
-                            )
-                    except Exception as e:
-                        response = {"status": "error", "message": str(e)}
-                    
-                    if response.get("status") != "success":
-                        error_msg = response.get("message", "Unknown error from iran node")
-                        logger.error(f"Failed to restore GOST tunnel {tunnel.id} on iran node {iran_node.id}: {error_msg}")
-                        failed_count += 1
-                    else:
-                        logger.info(f"Successfully restored/confirmed GOST tunnel {tunnel.id} on iran node {iran_node.id}")
-                        restored_count += 1
-                        
-                except Exception as e:
-                    logger.error(f"Failed to restore GOST tunnel {tunnel.id}: {e}", exc_info=True)
-                    failed_count += 1
-            
-            logger.info(f"Tunnel sync completed: {restored_count} synced, {failed_count} failed, {skipped_count} skipped out of {len(reverse_tunnels) + len(gost_tunnels)} total")
+            logger.info(f"Tunnel sync completed: {restored_count} synced, {failed_count} failed, {skipped_count} skipped out of {len(reverse_tunnels)} total")
             logger.info("Note: Nodes restore their own tunnels on startup, so tunnels work even if panel is down")
                     
     except Exception as e:

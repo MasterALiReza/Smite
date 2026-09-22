@@ -1666,15 +1666,29 @@ class GostAdapter:
         """Apply GOST forwarding using native v3 config (JSON)"""
         import json
         
-        if tunnel_id in self.processes:
-            logger.info(f"GOST tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
-            
+        # 1. Validate spec requirements FIRST before mutating or removing running process
         is_reverse = spec.get('is_reverse', False)
         mode = spec.get('mode', 'client')
         control_port = spec.get('control_port') or spec.get('remote_port')
         if not control_port:
             raise ValueError("GOST requires 'control_port' or 'remote_port' in spec")
+            
+        if mode == 'client':
+            server_ip = spec.get('server_ip') or spec.get('remote_ip')
+            if not server_ip:
+                raise ValueError("GOST client requires 'server_ip' or 'remote_ip' in spec")
+            ports = spec.get('ports') or []
+            if not ports:
+                listen_port = spec.get('listen_port')
+                if listen_port:
+                    ports = [int(listen_port) if isinstance(listen_port, (int, str)) and str(listen_port).isdigit() else listen_port]
+            if not ports and not spec.get("port_ranges"):
+                raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
+        
+        # 2. Spec validation passed: cleanly stop existing process if any
+        if tunnel_id in self.processes:
+            logger.info(f"GOST tunnel {tunnel_id} already exists, removing it first")
+            await self.remove(tunnel_id)
             
         auth_token = spec.get('auth_token', '')
         transport_type = spec.get('transport_type') or spec.get('transport') or 'tcp'
@@ -2546,7 +2560,13 @@ class AdapterManager:
                         return
                 
                 logger.info(f"Tunnel {tunnel_id} configuration changed or process inactive, applying new configuration")
-                await self._remove_tunnel_unlocked(tunnel_id)
+                if tunnel_id in self.active_tunnels:
+                    old_adapter = self.active_tunnels[tunnel_id]
+                    try:
+                        await old_adapter.remove(tunnel_id)
+                    except Exception as e:
+                        logger.warning(f"Error removing old adapter process for tunnel {tunnel_id}: {e}")
+                    del self.active_tunnels[tunnel_id]
             
             adapter_name = getattr(adapter, "name", tunnel_core)
             logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
