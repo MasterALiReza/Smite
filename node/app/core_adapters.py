@@ -614,7 +614,7 @@ nodelay = true
 """
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
-            with open(config_path, "w") as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 f.write(config)
         else:
             remote_addr = spec.get('remote_addr', '').strip()
@@ -682,7 +682,7 @@ tls = {tls_val}
                     ca_pem = spec.get('tls_ca_cert_pem')
                     ca_path = self.config_dir / f"{tunnel_id}_ca.crt"
                     if ca_pem:
-                        with open(ca_path, "w") as cf:
+                        with open(ca_path, "w", encoding="utf-8") as cf:
                             cf.write(ca_pem.strip() + "\n")
 
                     sni = sanitize_config_str(
@@ -732,7 +732,7 @@ nodelay = true
 """
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
-            with open(config_path, "w") as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 f.write(config)
             
         mode_flag = "-s" if mode == 'server' else "-c"
