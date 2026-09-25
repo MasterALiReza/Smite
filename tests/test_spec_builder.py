@@ -10,14 +10,24 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from panel.app.spec_builder import (
-    build_tunnel_node_specs,
-    build_rathole_node_specs,
-    build_backhaul_node_specs,
-    build_chisel_node_specs,
-    build_frp_node_specs,
-    build_gost_node_specs,
-)
+try:
+    from panel.app.spec_builder import (
+        build_tunnel_node_specs,
+        build_rathole_node_specs,
+        build_backhaul_node_specs,
+        build_chisel_node_specs,
+        build_frp_node_specs,
+        build_gost_node_specs,
+    )
+except ImportError:
+    from app.spec_builder import (
+        build_tunnel_node_specs,
+        build_rathole_node_specs,
+        build_backhaul_node_specs,
+        build_chisel_node_specs,
+        build_frp_node_specs,
+        build_gost_node_specs,
+    )
 
 
 class DummyTunnel:
