@@ -212,16 +212,17 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         or server_spec.get("accept_udp") is True
         or str(transport).lower() == "udp"
     )
-    if str(transport).lower() == "udp" or str(transport).lower() not in {"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux"}:
-        transport = "tcpmux"
-
     if is_udp:
+        # Musixal/Backhaul strictly requires transport = "tcp" for UDP forwarding (accept_udp = true).
+        # Its tcpmux/ws/wsmux transports have no UDP listener logic.
+        transport = "tcp"
         server_spec["accept_udp"] = True
         client_spec["accept_udp"] = True
         if getattr(tunnel, "spec", None) is not None:
             tunnel.spec["accept_udp"] = True
-            if str(tunnel.spec.get("transport", "")).lower() == "udp":
-                tunnel.spec["transport"] = transport
+            tunnel.spec["transport"] = transport
+    elif str(transport).lower() == "udp" or str(transport).lower() not in {"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux"}:
+        transport = "tcpmux"
 
     token = server_spec.get("token")
     if not token:

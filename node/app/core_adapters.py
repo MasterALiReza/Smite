@@ -900,11 +900,10 @@ class BackhaulAdapter:
                 or spec.get("tunnel_type") in ("udp", "tcp+udp")
                 or transport == "udp"
             )
-            if transport == "udp":
+            if is_udp:
+                transport = "tcp"
+            elif transport == "udp" or transport not in {"tcp", "ws", "wsmux", "tcpmux"}:
                 transport = "tcpmux"
-
-            if transport not in {"tcp", "udp", "ws", "wsmux", "tcpmux"}:
-                raise ValueError(f"Unsupported Backhaul transport '{transport}'")
             
             server_options = dict(spec.get("server_options") or {})
             bind_addr = spec.get("bind_addr")
@@ -1032,11 +1031,10 @@ class BackhaulAdapter:
                 or spec.get("tunnel_type") in ("udp", "tcp+udp")
                 or transport == "udp"
             )
-            if transport == "udp":
+            if is_udp:
+                transport = "tcp"
+            elif transport == "udp" or transport not in {"tcp", "ws", "wsmux", "tcpmux"}:
                 transport = "tcpmux"
-
-            if transport not in {"tcp", "udp", "ws", "wsmux", "tcpmux"}:
-                raise ValueError(f"Unsupported Backhaul transport '{transport}'")
             client_options = dict(spec.get("client_options") or {})
 
             config_dict: Dict[str, Any] = {

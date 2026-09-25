@@ -4191,7 +4191,7 @@ function buildBackhaulSpec(
 ): Record<string, any> {
   const transport = transportOverride ?? base.transport
   const isUdp = transport === 'udp' || base.transport === 'udp'
-  const normalizedTransport = isUdp ? 'tcpmux' : transport
+  const normalizedTransport = isUdp ? 'tcp' : transport
   const controlPort = parseInt(base.control_port, 10)
   const publicPort = parseInt(base.public_port, 10)
   const targetPort = parseInt(base.target_port, 10)
