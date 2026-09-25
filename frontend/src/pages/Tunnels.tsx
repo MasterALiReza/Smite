@@ -4190,6 +4190,8 @@ function buildBackhaulSpec(
   transportOverride?: BackhaulTransport,
 ): Record<string, any> {
   const transport = transportOverride ?? base.transport
+  const isUdp = transport === 'udp' || base.transport === 'udp'
+  const normalizedTransport = isUdp ? 'tcpmux' : transport
   const controlPort = parseInt(base.control_port, 10)
   const publicPort = parseInt(base.public_port, 10)
   const targetPort = parseInt(base.target_port, 10)
@@ -4201,7 +4203,7 @@ function buildBackhaulSpec(
   const effectiveControlPort = !Number.isNaN(controlPort) && controlPort > 0
     ? controlPort
     : (!Number.isNaN(publicPort) && publicPort > 0
-        ? publicPort
+        ? (publicPort + 10000 > 65535 ? publicPort - 10000 : publicPort + 10000)
         : (!Number.isNaN(targetPort) && targetPort > 0 ? targetPort : 3080))
   
   // Parse comma-separated ports from public_port
@@ -4225,7 +4227,7 @@ function buildBackhaulSpec(
   console.log('buildBackhaulSpec: base.public_port (raw):', base.public_port, 'type:', typeof base.public_port, '-> string:', publicPortStr)
   const publicPorts = parsePortsFromString(publicPortStr)
   console.log('buildBackhaulSpec: parsed publicPorts:', publicPorts, 'count:', publicPorts.length)
-  const effectivePublicPort = publicPorts.length > 0 ? publicPorts[0] : (!Number.isNaN(publicPort) && publicPort > 0 ? publicPort : effectiveControlPort)
+  const effectivePublicPort = publicPorts.length > 0 ? publicPorts[0] : (!Number.isNaN(publicPort) && publicPort > 0 ? publicPort : 8080)
   const effectiveTargetPort = publicPorts.length > 0 ? publicPorts[0] : (!Number.isNaN(targetPort) && targetPort > 0 ? targetPort : effectivePublicPort)
 
   const remoteAddr = base.remote_addr.trim() || `${panelHost}:${effectiveControlPort}`
@@ -4310,8 +4312,25 @@ function buildBackhaulSpec(
     }
   })
 
+  if (isUdp) {
+    serverOptions.accept_udp = true
+    clientOptions.accept_udp = true
+  }
+  if (!serverOptions.keepalive_period || Number(serverOptions.keepalive_period) > 25) {
+    serverOptions.keepalive_period = 20
+  }
+  if (!serverOptions.heartbeat || Number(serverOptions.heartbeat) > 25) {
+    serverOptions.heartbeat = 20
+  }
+  if (!clientOptions.keepalive_period || Number(clientOptions.keepalive_period) > 25) {
+    clientOptions.keepalive_period = 20
+  }
+  if (!clientOptions.heartbeat || Number(clientOptions.heartbeat) > 25) {
+    clientOptions.heartbeat = 20
+  }
+
   const spec: Record<string, any> = {
-    transport,
+    transport: normalizedTransport,
     bind_addr: `0.0.0.0:${effectiveControlPort}`,
     remote_addr: remoteAddr,
     listen_ip: listenIp,
@@ -4328,7 +4347,7 @@ function buildBackhaulSpec(
   if (token) {
     spec.token = token
   }
-  if (base.accept_udp && (transport === 'tcp' || transport === 'tcpmux')) {
+  if (isUdp || (base.accept_udp && (normalizedTransport === 'tcp' || normalizedTransport === 'tcpmux'))) {
     spec.accept_udp = true
   }
   if (Object.keys(serverOptions).length > 0) {

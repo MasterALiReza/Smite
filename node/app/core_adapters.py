@@ -894,6 +894,15 @@ class BackhaulAdapter:
         
         if mode == 'server':
             transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
+            is_udp = (
+                spec.get("accept_udp") is True
+                or spec.get("type") in ("udp", "tcp+udp")
+                or spec.get("tunnel_type") in ("udp", "tcp+udp")
+                or transport == "udp"
+            )
+            if transport == "udp":
+                transport = "tcpmux"
+
             if transport not in {"tcp", "udp", "ws", "wsmux", "tcpmux"}:
                 raise ValueError(f"Unsupported Backhaul transport '{transport}'")
             
@@ -968,9 +977,22 @@ class BackhaulAdapter:
                 value = server_options.get(key) or spec.get(key)
                 if value is not None and value != "":
                     server_config[key] = value
+
+            if is_udp:
+                server_config["accept_udp"] = True
             
-            server_config.setdefault("keepalive_period", 20)
-            server_config.setdefault("heartbeat", 20)
+            kp = server_options.get("keepalive_period") or spec.get("keepalive_period")
+            if not kp or not isinstance(kp, (int, float)) or kp > 25:
+                server_config["keepalive_period"] = 20
+            else:
+                server_config["keepalive_period"] = int(kp)
+
+            hb = server_options.get("heartbeat") or spec.get("heartbeat")
+            if not hb or not isinstance(hb, (int, float)) or hb > 25:
+                server_config["heartbeat"] = 20
+            else:
+                server_config["heartbeat"] = int(hb)
+
             server_config.setdefault("nodelay", True)
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
@@ -1004,6 +1026,15 @@ class BackhaulAdapter:
                 remote_addr = remote_addr[6:]
 
             transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
+            is_udp = (
+                spec.get("accept_udp") is True
+                or spec.get("type") in ("udp", "tcp+udp")
+                or spec.get("tunnel_type") in ("udp", "tcp+udp")
+                or transport == "udp"
+            )
+            if transport == "udp":
+                transport = "tcpmux"
+
             if transport not in {"tcp", "udp", "ws", "wsmux", "tcpmux"}:
                 raise ValueError(f"Unsupported Backhaul transport '{transport}'")
             client_options = dict(spec.get("client_options") or {})
@@ -1025,21 +1056,30 @@ class BackhaulAdapter:
                     continue
                 config_dict[key] = value
 
+            if is_udp:
+                config_dict["accept_udp"] = True
+
             if "connection_pool" not in config_dict:
                 config_dict["connection_pool"] = 8
             if "retry_interval" not in config_dict:
                 config_dict["retry_interval"] = 3
             if "dial_timeout" not in config_dict:
                 config_dict["dial_timeout"] = 10
-            if "keepalive_period" not in config_dict:
+
+            kp = client_options.get("keepalive_period") or spec.get("keepalive_period")
+            if not kp or not isinstance(kp, (int, float)) or kp > 25:
                 config_dict["keepalive_period"] = 20
-            if "heartbeat" not in config_dict:
+            else:
+                config_dict["keepalive_period"] = int(kp)
+
+            hb = client_options.get("heartbeat") or spec.get("heartbeat")
+            if not hb or not isinstance(hb, (int, float)) or hb > 25:
                 config_dict["heartbeat"] = 20
+            else:
+                config_dict["heartbeat"] = int(hb)
+
             if "aggressive_pool" not in config_dict:
                 config_dict["aggressive_pool"] = True
-
-            if spec.get("accept_udp") and transport in {"tcp", "tcpmux"}:
-                config_dict["accept_udp"] = True
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"client": config_dict}), encoding="utf-8")

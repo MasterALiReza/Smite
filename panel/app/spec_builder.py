@@ -196,26 +196,41 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
+    tunnel_type = (getattr(tunnel, "type", "tcp") or "tcp").lower()
     transport = (
         server_spec.get("transport")
         or server_spec.get("transport_type")
         or server_spec.get("type")
-        or "tcp"
+        or "tcpmux"
     )
+
+    # UDP handling: Musixal/Backhaul implements UDP forwarding via UDP-over-TCP/TCPMUX with accept_udp = true.
+    # Raw transport = "udp" is invalid/buggy in Backhaul and causes parsing errors or dropped packets.
+    is_udp = (
+        tunnel_type in ("udp", "tcp+udp")
+        or server_spec.get("type") in ("udp", "tcp+udp")
+        or server_spec.get("accept_udp") is True
+        or str(transport).lower() == "udp"
+    )
+    if str(transport).lower() == "udp" or str(transport).lower() not in {"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux"}:
+        transport = "tcpmux"
+
+    if is_udp:
+        server_spec["accept_udp"] = True
+        client_spec["accept_udp"] = True
+        if getattr(tunnel, "spec", None) is not None:
+            tunnel.spec["accept_udp"] = True
+            if str(tunnel.spec.get("transport", "")).lower() == "udp":
+                tunnel.spec["transport"] = transport
+
     token = server_spec.get("token")
     if not token:
         from app.utils import generate_token
         token = generate_token()
         server_spec["token"] = token
-        if tunnel.spec is not None:
+        if getattr(tunnel, "spec", None) is not None:
             tunnel.spec["token"] = token
 
-    port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
-    control_port = (
-        server_spec.get("control_port")
-        or server_spec.get("listen_port")
-        or (3080 + (port_hash % 1000))
-    )
     target_host = server_spec.get("target_host", "127.0.0.1")
 
     ports = server_spec.get("ports", [])
@@ -251,18 +266,65 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
                 processed_ports.append(str(p))
         ports = processed_ports
 
+    # Extract all proxy ports to avoid control port collision
+    proxy_ports = set()
+    for p in ports:
+        if isinstance(p, str) and "=" in p:
+            lp = p.split("=")[0].strip()
+            if lp.isdigit():
+                proxy_ports.add(int(lp))
+        elif str(p).isdigit():
+            proxy_ports.add(int(p))
+
+    port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
+    assigned_control = server_spec.get("control_port")
+    if (
+        not assigned_control
+        or not str(assigned_control).isdigit()
+        or int(assigned_control) < 1024
+        or int(assigned_control) in proxy_ports
+    ):
+        control_port = 25000 + (port_hash % 25000)
+        while control_port in proxy_ports:
+            control_port += 1
+        if getattr(tunnel, "spec", None) is not None:
+            tunnel.spec["control_port"] = control_port
+    else:
+        control_port = int(assigned_control)
+
     bind_ip = server_spec.get("bind_ip") or server_spec.get("listen_ip") or "0.0.0.0"
     server_spec["bind_addr"] = f"{bind_ip}:{control_port}"
     server_spec["control_port"] = control_port
     server_spec["transport"] = transport
     server_spec["type"] = transport
+    server_spec["tunnel_type"] = tunnel_type
     server_spec["ports"] = ports
     server_spec["token"] = token
+
+    # Network stability: clamp keepalive_period and heartbeat to <= 20s to survive Iranian stateful NAT firewalls
+    server_options = dict(server_spec.get("server_options") or {})
+    client_options = dict(client_spec.get("client_options") or {})
+    for opts in (server_options, client_options):
+        kp = opts.get("keepalive_period")
+        if kp is None or not isinstance(kp, (int, float)) or kp > 25:
+            opts["keepalive_period"] = 20
+        hb = opts.get("heartbeat")
+        if hb is None or not isinstance(hb, (int, float)) or hb > 25:
+            opts["heartbeat"] = 20
+        if is_udp:
+            opts["accept_udp"] = True
+
+    server_spec["server_options"] = server_options
+    client_spec["client_options"] = client_options
+    server_spec["keepalive_period"] = 20
+    server_spec["heartbeat"] = 20
+    client_spec["keepalive_period"] = 20
+    client_spec["heartbeat"] = 20
 
     transport_lower = transport.lower()
     host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
     if transport_lower in ("ws", "wsmux"):
-        use_tls = bool(server_spec.get("tls_cert") or server_spec.get("server_options", {}).get("tls_cert"))
+        use_tls = bool(server_spec.get("tls_cert") or server_options.get("tls_cert"))
         proto = "wss://" if use_tls else "ws://"
         client_spec["remote_addr"] = f"{proto}{host_part}:{control_port}"
     else:
@@ -271,6 +333,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     client_spec["control_port"] = control_port
     client_spec["transport"] = transport
     client_spec["type"] = transport
+    client_spec["tunnel_type"] = tunnel_type
     client_spec["ports"] = ports
     client_spec["token"] = token
 
