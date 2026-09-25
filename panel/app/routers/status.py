@@ -4,14 +4,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 import psutil
 
+from typing import Optional
 from app.database import get_db
 from app.models import Tunnel, Node, Admin
-from app.routers.auth import get_current_user
+from app.routers.auth import get_current_user, get_current_user_optional
 
 
 router = APIRouter()
 
 VERSION = "0.1.0"
+
+
+@router.get("/health")
+async def get_health():
+    """Unauthenticated health check endpoint"""
+    return {"status": "ok"}
 
 
 @router.get("/version")
@@ -55,8 +62,13 @@ async def get_version():
 
 
 @router.get("")
-async def get_status(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
-    """Get system status"""
+async def get_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[Admin] = Depends(get_current_user_optional)
+):
+    """Get system status. Returns basic health check if unauthenticated, full status if authenticated."""
+    if not current_user:
+        return {"status": "ok"}
     cpu_percent = psutil.cpu_percent(interval=None)
     memory = psutil.virtual_memory()
     
