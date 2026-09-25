@@ -186,6 +186,65 @@ detect_country_code() {
 }
 
 # -------------------------------------------------------------
+# Helper: Configure Docker registry mirrors for Iran / sanctions
+# -------------------------------------------------------------
+configure_docker_mirrors() {
+    local force=${1:-"auto"}
+    local is_iran="false"
+    
+    if [ "$force" = "force" ]; then
+        is_iran="true"
+    else
+        local cc=$(detect_country_code)
+        if [ "$cc" = "IR" ]; then
+            is_iran="true"
+        else
+            local http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "https://registry-1.docker.io/v2/" 2>/dev/null || echo "000")
+            if [ "$http_code" = "403" ]; then
+                is_iran="true"
+            fi
+        fi
+    fi
+
+    if [ "$is_iran" = "true" ]; then
+        local daemon_file="/etc/docker/daemon.json"
+        if [ ! -f "$daemon_file" ] || ! grep -q "registry-mirrors" "$daemon_file"; then
+            info "Configuring Docker registry mirrors to bypass 403 sanctions (Iran)..."
+            mkdir -p /etc/docker
+            if [ ! -f "$daemon_file" ]; then
+                cat > "$daemon_file" << 'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.arvancloud.ir",
+    "https://docker.iranserver.com",
+    "https://registry.docker.ir"
+  ]
+}
+EOF
+            else
+                if command -v python3 &> /dev/null; then
+                    python3 -c "
+import json
+try:
+    with open('/etc/docker/daemon.json', 'r') as f:
+        d = json.load(f)
+except Exception:
+    d = {}
+d['registry-mirrors'] = ['https://docker.arvancloud.ir', 'https://docker.iranserver.com', 'https://registry.docker.ir']
+with open('/etc/docker/daemon.json', 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
+                fi
+            fi
+            systemctl daemon-reload 2>/dev/null || true
+            systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+            progress "Docker registry mirrors configured"
+            sleep 2
+        fi
+    fi
+}
+
+# -------------------------------------------------------------
 # Helper: Check if a network port is already in use on the host
 # -------------------------------------------------------------
 is_port_in_use() {
@@ -311,6 +370,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${c_name}
     network_mode: host
+    pid: host
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -614,13 +674,38 @@ EOF
     # Apply optimizations
     apply_kernel_optimizations
 
+    # Configure Docker mirrors if in Iran / sanctioned
+    configure_docker_mirrors
+
     # Pull or build image
     if [ -z "${SMITE_VERSION}" ]; then
         export SMITE_VERSION=latest
     fi
 
-    if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
-        (cd "$target_dir" && run_compose build 2>&1 || true)
+    info "Preparing node container image..."
+    local image_ready="false"
+
+    if docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
+        image_ready="true"
+        progress "Pulled prebuilt image from GHCR"
+    fi
+
+    if [ "$image_ready" = "false" ]; then
+        info "GHCR pull unavailable. Building node image locally..."
+        if (cd "$target_dir" && run_compose build); then
+            image_ready="true"
+            progress "Node image built successfully"
+        else
+            warn "Local build failed. Enforcing Iran Docker mirrors and retrying..."
+            configure_docker_mirrors force
+            if (cd "$target_dir" && run_compose build); then
+                image_ready="true"
+                progress "Node image built successfully with Docker mirrors"
+            else
+                err "Failed to build node container image. Check logs above."
+                exit 1
+            fi
+        fi
     fi
 
     # Start the container
@@ -792,13 +877,37 @@ EOF
     apply_kernel_optimizations
 
     echo ""
-    info "Pulling Docker image..."
+    # Configure Docker mirrors if in Iran / sanctioned
+    configure_docker_mirrors
+
+    echo ""
+    info "Preparing node container image..."
     if [ -z "${SMITE_VERSION}" ]; then
         export SMITE_VERSION=latest
     fi
 
-    if ! docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
-        (cd "$target_dir" && run_compose build 2>&1 || true)
+    local image_ready="false"
+    if docker pull "ghcr.io/masteralireza/smite-node:${SMITE_VERSION}" 2>/dev/null; then
+        image_ready="true"
+        progress "Pulled prebuilt image from GHCR"
+    fi
+
+    if [ "$image_ready" = "false" ]; then
+        info "GHCR pull unavailable. Building node image locally..."
+        if (cd "$target_dir" && run_compose build); then
+            image_ready="true"
+            progress "Node image built successfully"
+        else
+            warn "Local build failed. Enforcing Iran Docker mirrors and retrying..."
+            configure_docker_mirrors force
+            if (cd "$target_dir" && run_compose build); then
+                image_ready="true"
+                progress "Node image built successfully with Docker mirrors"
+            else
+                err "Failed to build node container image. Check logs above."
+                exit 1
+            fi
+        fi
     fi
 
     info "Starting node container (${c_name})..."
