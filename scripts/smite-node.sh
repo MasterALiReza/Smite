@@ -109,6 +109,7 @@ ARG_TOKEN=""
 ARG_ROLE=""
 ARG_PORT=""
 ARG_NAME=""
+ARG_IP=""
 ARG_AUTO="false"
 
 while [[ $# -gt 0 ]]; do
@@ -133,6 +134,10 @@ while [[ $# -gt 0 ]]; do
             ARG_NAME="$2"
             shift 2
             ;;
+        --ip|--public-ip)
+            ARG_IP="$2"
+            shift 2
+            ;;
         --auto)
             ARG_AUTO="true"
             shift
@@ -152,6 +157,18 @@ fi
 # -------------------------------------------------------------
 detect_public_ip() {
     local ip=""
+
+    # 1. Check local default route interface IP first
+    local route_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1 || true)
+    if [ -n "$route_ip" ] && [[ "$route_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        # If it's a real public routable IP (not RFC1918 private / loopback)
+        if [[ ! "$route_ip" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|169\.254\.) ]]; then
+            echo "$route_ip"
+            return 0
+        fi
+    fi
+
+    # 2. If behind NAT or private interface, probe external echo services
     for url in "https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com" "https://ident.me" "https://checkip.amazonaws.com"; do
         ip=$(curl -s --connect-timeout 3 "$url" 2>/dev/null | tr -d ' \n\r' || true)
         if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -160,10 +177,8 @@ detect_public_ip() {
         fi
     done
     
-    # Fallback to local default route IP
-    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1 || true)
-    if [ -n "$ip" ]; then
-        echo "$ip"
+    if [ -n "$route_ip" ]; then
+        echo "$route_ip"
         return 0
     fi
     
@@ -387,6 +402,7 @@ services:
     environment:
       - NODE_API_PORT=${port_var}
       - NODE_NAME=${name_var}
+      - NODE_IP=\${NODE_IP:-}
       - PANEL_CA_PATH=${ca_var}
       - PANEL_ADDRESS=${addr_var}
       - PANEL_API_PORT=${pport_var}
@@ -581,8 +597,11 @@ deploy_auto_one_click() {
         node_port=$(find_next_free_port 8888)
     fi
 
-    # Auto-detect public IP
-    local public_ip=$(detect_public_ip)
+    # Auto-detect public IP (or use --ip override)
+    local public_ip="$ARG_IP"
+    if [ -z "$public_ip" ]; then
+        public_ip=$(detect_public_ip)
+    fi
     
     # Node name
     local node_name="$ARG_NAME"
@@ -636,6 +655,7 @@ deploy_auto_one_click() {
 NODE_API_PORT=$node_port
 NODE_NAME=$node_name
 NODE_ROLE=$node_role
+NODE_IP=$public_ip
 SMITE_VERSION=${SMITE_VERSION:-latest}
 
 PANEL_CA_PATH=/etc/smite-node/certs/ca.crt
@@ -837,10 +857,12 @@ deploy_node_instance() {
     fi
     progress "CA certificate saved to ${target_dir}/certs/ca.crt"
 
+    local node_public_ip=$(detect_public_ip)
     cat > "$target_dir/.env" << EOF
 NODE_API_PORT=$NODE_API_PORT
 NODE_NAME=$NODE_NAME
 NODE_ROLE=$NODE_ROLE
+NODE_IP=$node_public_ip
 SMITE_VERSION=${SMITE_VERSION:-latest}
 
 PANEL_CA_PATH=/etc/smite-node/certs/ca.crt

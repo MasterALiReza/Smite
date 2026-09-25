@@ -81,14 +81,17 @@ class PanelClient:
         
         panel_api_url = self._get_panel_api_url()
         
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            node_ip = s.getsockname()[0]
-            s.close()
-        except:
-            node_ip = "0.0.0.0"
+        if getattr(settings, "node_ip", ""):
+            node_ip = settings.node_ip.strip()
+        else:
+            import socket
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                node_ip = s.getsockname()[0]
+                s.close()
+            except:
+                node_ip = "0.0.0.0"
         
         registration_data = {
             "name": settings.node_name,
