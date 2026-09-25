@@ -129,18 +129,12 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
     server_spec["type"] = tunnel_type
     server_spec["token"] = token
 
-    if "websocket_tls" in server_spec:
-        server_spec["websocket_tls"] = server_spec["websocket_tls"]
-    elif "tls" in server_spec:
-        server_spec["websocket_tls"] = server_spec["tls"]
-
     transport_lower = transport.lower()
     if transport_lower in ("websocket", "ws", "wss"):
-        use_tls = bool(server_spec.get("websocket_tls") or server_spec.get("tls") or transport_lower == "wss")
-        proto = "wss://" if use_tls else "ws://"
-        host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
-        client_spec["remote_addr"] = f"{proto}{host_part}:{control_port}"
+        use_tls = (transport_lower == "wss") or bool(server_spec.get("websocket_tls") or server_spec.get("tls"))
+        server_spec["websocket_tls"] = use_tls
         client_spec["websocket_tls"] = use_tls
+
         custom_sni = (
             server_spec.get("custom_sni")
             or server_spec.get("stealth_domain")
@@ -150,6 +144,35 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
         if custom_sni:
             client_spec["custom_sni"] = custom_sni
             server_spec["custom_sni"] = custom_sni
+
+        host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
+        proto = "wss://" if use_tls else "ws://"
+        client_spec["remote_addr"] = f"{proto}{host_part}:{control_port}"
+
+        if use_tls:
+            pfx_b64 = spec.get("tls_pkcs12_b64")
+            pfx_pwd = spec.get("tls_pkcs12_password")
+            ca_pem = spec.get("tls_ca_cert_pem")
+
+            if not (pfx_b64 and pfx_pwd and ca_pem):
+                from app.utils import generate_rathole_tls_bundle
+                san_list = [iran_node_ip]
+                if custom_sni and custom_sni != iran_node_ip:
+                    san_list.append(custom_sni)
+
+                common_name = custom_sni or iran_node_ip
+                pfx_b64, pfx_pwd, ca_pem = generate_rathole_tls_bundle(common_name=common_name, san_list=san_list)
+
+                if getattr(tunnel, "spec", None) is not None:
+                    tunnel.spec["tls_pkcs12_b64"] = pfx_b64
+                    tunnel.spec["tls_pkcs12_password"] = pfx_pwd
+                    tunnel.spec["tls_ca_cert_pem"] = ca_pem
+
+            server_spec["tls_pkcs12_b64"] = pfx_b64
+            server_spec["tls_pkcs12_password"] = pfx_pwd
+            client_spec["tls_ca_cert_pem"] = ca_pem
+            if not custom_sni:
+                client_spec["custom_sni"] = iran_node_ip
     else:
         host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
         client_spec["remote_addr"] = f"{host_part}:{control_port}"

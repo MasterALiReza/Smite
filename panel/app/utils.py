@@ -164,6 +164,108 @@ def generate_noise_keypair() -> tuple[str, str]:
         raise RuntimeError("cryptography package is required for X25519 noise key generation") from e
 
 
+def generate_rathole_tls_bundle(
+    common_name: str,
+    san_list: Optional[list] = None,
+    password: Optional[str] = None
+) -> tuple[str, str, str]:
+    """
+    Generate self-signed Root CA and Server Certificate bundle in PKCS#12 (.pfx) format for Rathole native-tls.
+    
+    Args:
+        common_name: Primary hostname or IP for the server certificate.
+        san_list: Optional list of alternate DNS names or IPs for SubjectAlternativeName.
+        password: Optional password for PKCS#12. If None, a random secure token is generated.
+        
+    Returns:
+        tuple of (pkcs12_base64, password, ca_cert_pem)
+    """
+    import base64
+    import ipaddress
+    from datetime import datetime, timedelta, timezone
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives.serialization import Encoding, BestAvailableEncryption, pkcs12
+    except ImportError as e:
+        raise RuntimeError("cryptography package is required for Rathole TLS generation") from e
+
+    if not password:
+        password = generate_token(20)
+
+    # 1. Root CA
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Smite Rathole Root CA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(days=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    # 2. Server Certificate
+    srv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    clean_cn = str(common_name).strip("[]")
+    srv_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, clean_cn)])
+
+    sans = []
+    # Always include 127.0.0.1 and localhost for local testing/monitoring
+    sans.append(x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")))
+    sans.append(x509.DNSName("localhost"))
+
+    # Add common_name and san_list
+    candidates = [clean_cn]
+    if san_list:
+        for s in san_list:
+            if s:
+                clean_s = str(s).strip("[]")
+                if clean_s not in candidates:
+                    candidates.append(clean_s)
+
+    for item in candidates:
+        try:
+            ip_obj = ipaddress.ip_address(item)
+            if not any(isinstance(existing, x509.IPAddress) and existing.value == ip_obj for existing in sans):
+                sans.append(x509.IPAddress(ip_obj))
+        except ValueError:
+            clean_host = item.split(":")[0].strip()
+            if clean_host and not any(isinstance(existing, x509.DNSName) and existing.value == clean_host for existing in sans):
+                sans.append(x509.DNSName(clean_host))
+
+    srv_cert = (
+        x509.CertificateBuilder()
+        .subject_name(srv_name)
+        .issuer_name(ca_name)
+        .public_key(srv_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(days=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
+        .add_extension(x509.SubjectAlternativeName(sans), critical=False)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    pfx_bytes = pkcs12.serialize_key_and_certificates(
+        name=b"rathole",
+        key=srv_key,
+        cert=srv_cert,
+        cas=[ca_cert],
+        encryption_algorithm=BestAvailableEncryption(password.encode("utf-8"))
+    )
+
+    ca_pem = ca_cert.public_bytes(Encoding.PEM).decode("utf-8")
+    pfx_b64 = base64.b64encode(pfx_bytes).decode("utf-8")
+
+    return pfx_b64, password, ca_pem
+
+
 def sanitize_spec_for_log(spec: Any) -> Any:
     """Sanitize sensitive fields (tokens, keys, passwords) before logging."""
     if not isinstance(spec, dict):
@@ -171,7 +273,8 @@ def sanitize_spec_for_log(spec: Any) -> Any:
     sensitive_keys = {
         "token", "auth_token", "password", "key", "auth",
         "server_private_key", "client_private_key", "noise_key",
-        "server_key", "client_key"
+        "server_key", "client_key", "tls_pkcs12_b64", "tls_pkcs12_password",
+        "tls_ca_cert_pem"
     }
     sanitized = {}
     for k, v in spec.items():

@@ -95,6 +95,19 @@ type = "websocket"
 [server.transport.websocket]
 tls = {tls_val}
 """
+                if is_tls:
+                    pfx_path = self.config_dir / f"{tunnel_id}.pfx"
+                    pfx_b64 = kwargs.get("tls_pkcs12_b64")
+                    pfx_pwd = kwargs.get("tls_pkcs12_password", "")
+                    if pfx_b64:
+                        import base64
+                        with open(pfx_path, "wb") as pf:
+                            pf.write(base64.b64decode(pfx_b64))
+                    config += f"""
+[server.transport.tls]
+pkcs12 = "{pfx_path}"
+pkcs12_password = "{sanitize_config_str(pfx_pwd)}"
+"""
             
             tunnel_type_lower = tunnel_type.lower()
             for i, p in enumerate(resolved_ports):
@@ -215,6 +228,12 @@ nodelay = true
                     config_path.unlink()
                 except Exception as e:
                     logger.warning(f"Failed to delete config file {config_path}: {e}")
+            pfx_path = self.config_dir / f"{tunnel_id}.pfx"
+            if pfx_path.exists():
+                try:
+                    pfx_path.unlink()
+                except Exception:
+                    pass
             del self.server_configs[tunnel_id]
     
     async def is_running(self, tunnel_id: str) -> bool:

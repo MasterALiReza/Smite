@@ -501,7 +501,7 @@ class RatholeAdapter:
         
         transport = (spec.get('transport_type') or spec.get('transport') or 'tcp').lower()
         tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
-        if transport in ['ws', 'websocket']:
+        if transport in ['ws', 'websocket', 'wss']:
             use_websocket = True
             use_noise = False
         elif transport == 'noise':
@@ -511,7 +511,7 @@ class RatholeAdapter:
             use_websocket = False
             use_noise = False
 
-        websocket_tls = spec.get('websocket_tls', False) or spec.get('tls', False) or (transport == 'wss')
+        websocket_tls = (transport == 'wss') or bool(spec.get('websocket_tls', False) or spec.get('tls', False))
         
         if mode == 'server':
             bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
@@ -565,6 +565,23 @@ type = "websocket"
 
 [server.transport.websocket]
 tls = {tls_val}
+"""
+                if websocket_tls:
+                    pfx_path = self.config_dir / f"{tunnel_id}.pfx"
+                    pfx_b64 = spec.get('tls_pkcs12_b64')
+                    pfx_pwd = spec.get('tls_pkcs12_password', '')
+                    if pfx_b64:
+                        import base64
+                        pfx_bytes = base64.b64decode(pfx_b64)
+                        with open(pfx_path, "wb") as pf:
+                            pf.write(pfx_bytes)
+                    elif not pfx_path.exists():
+                        raise ValueError(f"Rathole server in WSS mode requires 'tls_pkcs12_b64' or {pfx_path}")
+
+                    config += f"""
+[server.transport.tls]
+pkcs12 = "{pfx_path}"
+pkcs12_password = "{sanitize_config_str(pfx_pwd)}"
 """
             
             for i, port in enumerate(ports):
@@ -627,6 +644,10 @@ nodelay = true
                 remote_addr = remote_addr[6:]
                 use_websocket = True
                 websocket_tls = True
+            elif transport in ['ws', 'websocket', 'wss']:
+                use_websocket = True
+                if transport == 'wss':
+                    websocket_tls = True
             
             token = sanitize_config_str(token)
             config = f"""[client]
@@ -658,12 +679,26 @@ type = "websocket"
 tls = {tls_val}
 """
                 if websocket_tls:
-                    custom_sni = sanitize_config_str(spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('hostname'))
-                    if custom_sni:
-                        config += f"""
+                    ca_pem = spec.get('tls_ca_cert_pem')
+                    ca_path = self.config_dir / f"{tunnel_id}_ca.crt"
+                    if ca_pem:
+                        with open(ca_path, "w") as cf:
+                            cf.write(ca_pem.strip() + "\n")
+
+                    sni = sanitize_config_str(
+                        spec.get('custom_sni')
+                        or spec.get('stealth_domain')
+                        or spec.get('hostname')
+                        or (remote_addr.split(':')[0].strip('[]') if ':' in remote_addr else remote_addr)
+                    )
+
+                    config += f"""
 [client.transport.tls]
-hostname = "{custom_sni}"
 """
+                    if ca_path.exists():
+                        config += f'trusted_root = "{ca_path}"\n'
+                    if sni:
+                        config += f'hostname = "{sni}"\n'
             
             # Create multiple service sections for multiple ports
             for i, port in enumerate(ports):
@@ -765,6 +800,18 @@ nodelay = true
         if config_path.exists():
             try:
                 config_path.unlink()
+            except Exception:
+                pass
+        pfx_path = self.config_dir / f"{tunnel_id}.pfx"
+        if pfx_path.exists():
+            try:
+                pfx_path.unlink()
+            except Exception:
+                pass
+        ca_path = self.config_dir / f"{tunnel_id}_ca.crt"
+        if ca_path.exists():
+            try:
+                ca_path.unlink()
             except Exception:
                 pass
     

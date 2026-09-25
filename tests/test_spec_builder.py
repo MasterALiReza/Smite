@@ -43,6 +43,42 @@ def test_spec_builder_rathole():
     assert "1.1.1.1" in client_spec["remote_addr"]
 
 
+def test_spec_builder_rathole_ws():
+    tunnel = DummyTunnel(
+        id="t-rathole-ws",
+        core="rathole",
+        type="tcp",
+        spec={"ports": [8080], "transport": "ws", "transport_type": "ws", "token": "test-ws-token"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+
+    assert server_spec["mode"] == "server"
+    assert client_spec["mode"] == "client"
+    assert server_spec["websocket_tls"] is False
+    assert client_spec["websocket_tls"] is False
+    assert client_spec["remote_addr"].startswith("ws://1.1.1.1:")
+
+
+def test_spec_builder_rathole_wss():
+    tunnel = DummyTunnel(
+        id="t-rathole-wss",
+        core="rathole",
+        type="tcp",
+        spec={"ports": [8080], "transport": "wss", "transport_type": "wss", "token": "test-wss-token"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+
+    assert server_spec["mode"] == "server"
+    assert client_spec["mode"] == "client"
+    assert server_spec["websocket_tls"] is True
+    assert client_spec["websocket_tls"] is True
+    assert client_spec["remote_addr"].startswith("wss://1.1.1.1:")
+    assert "tls_pkcs12_b64" in server_spec and len(server_spec["tls_pkcs12_b64"]) > 100
+    assert "tls_pkcs12_password" in server_spec and len(server_spec["tls_pkcs12_password"]) > 0
+    assert "tls_ca_cert_pem" in client_spec and "BEGIN CERTIFICATE" in client_spec["tls_ca_cert_pem"]
+    assert client_spec.get("custom_sni") == "1.1.1.1"
+
+
 def test_spec_builder_backhaul():
     tunnel = DummyTunnel(
         id="t-backhaul-1",
