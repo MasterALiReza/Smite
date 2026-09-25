@@ -1,6 +1,9 @@
 import sys
 from pathlib import Path
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
 from unittest.mock import MagicMock
 
 repo_root = Path(__file__).resolve().parent.parent
@@ -208,3 +211,20 @@ def test_spec_builder_gost_ports_resolution_from_listen_port():
     assert tunnel.spec["ports"] == [9990]
 
 
+if __name__ == "__main__":
+    import inspect
+    current_module = sys.modules[__name__]
+    passed = 0
+    failed = 0
+    for name, func in inspect.getmembers(current_module, inspect.isfunction):
+        if name.startswith("test_"):
+            try:
+                func()
+                passed += 1
+                print(f"PASS: {name}")
+            except Exception as e:
+                failed += 1
+                print(f"FAIL: {name}: {e}")
+    print(f"\nTotal: {passed} passed, {failed} failed")
+    if failed > 0:
+        sys.exit(1)

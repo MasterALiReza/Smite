@@ -4,7 +4,7 @@ import logging
 import shutil
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from app.utils import parse_address_port, format_address_port
 from app.process_manager import start_async_process, stop_async_process, wait_for_port, read_log_tail
@@ -41,7 +41,8 @@ class RatholeServerManager:
         transport_proto: str = "tcp",
         local_private_key: str = "",
         remote_public_key: str = "",
-        websocket_tls: bool = False
+        websocket_tls: bool = False,
+        **kwargs: Any
     ) -> bool:
         """
         Start a Rathole server for a tunnel

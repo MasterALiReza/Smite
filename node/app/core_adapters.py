@@ -653,7 +653,7 @@ nodelay = true
             config = f"""[client]
 remote_addr = "{remote_addr}"
 default_token = "{token}"
-heartbeat_timeout = 25
+heartbeat_timeout = 40
 retry_interval = 1
 """
             
