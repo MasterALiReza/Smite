@@ -1690,12 +1690,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
   
   const [formData, setFormData] = useState({
     name: tunnel.name,
+    node_id: tunnel.node_id || '',
+    iran_node_id: tunnel.iran_node_id || tunnel.node_id || '',
+    foreign_node_id: tunnel.foreign_node_id || '',
     ports: parsePortsFromSpec(tunnel.spec || {}),
     remote_ip: remoteIp,
-    rathole_remote_addr: tunnel.spec?.remote_addr ? (() => {
+    rathole_remote_addr: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : (tunnel.spec?.remote_addr ? (() => {
       const parsed = parseAddressPort(tunnel.spec.remote_addr)
       return parsed.port?.toString() || ''
-    })() : '',
+    })() : ''),
+    rathole_token: tunnel.spec?.token || tunnel.spec?.rathole_token || '',
     rathole_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
     chisel_control_port: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : '',
     frp_bind_port: tunnel.spec?.bind_port ? tunnel.spec.bind_port.toString() : '7000',
@@ -1825,11 +1829,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
       
       if (tunnel.core === 'rathole') {
         if (formData.rathole_remote_addr) {
-          const remoteHost = window.location.hostname
           const remotePort = formData.rathole_remote_addr.includes(':') 
             ? formData.rathole_remote_addr.split(':')[1] 
             : formData.rathole_remote_addr
-          updatedSpec.remote_addr = `${remoteHost}:${remotePort || '23333'}`
+          const parsedPort = parseInt(remotePort) || 23333
+          updatedSpec.control_port = parsedPort
+          const remoteHost = window.location.hostname
+          updatedSpec.remote_addr = `${remoteHost}:${parsedPort}`
+        }
+        if (formData.rathole_token) {
+          updatedSpec.token = formData.rathole_token
         }
         if (formData.node_ipv6) {
           updatedSpec.node_ipv6 = formData.node_ipv6
@@ -1921,9 +1930,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
             : null,
           port_ranges: port_ranges.length > 0 ? port_ranges : null
         }),
-        node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
-        iran_node_id: formData.iran_node_id,
-        foreign_node_id: formData.foreign_node_id
+        node_id: formData.is_reverse ? (formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id) : (formData.foreign_node_id || tunnel.foreign_node_id || tunnel.node_id),
+        iran_node_id: formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id || undefined,
+        foreign_node_id: formData.foreign_node_id || tunnel.foreign_node_id || undefined
       })
       showToast('success', 'Configuration Saved', `${formData.name} was saved safely. Active tunnel remains live until you click Reapply.`)
       onSuccess()

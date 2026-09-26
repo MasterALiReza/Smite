@@ -365,6 +365,42 @@ def test_spec_builder_parse_ports_list_bounds():
     assert cleaned == [80, 443, 65535, 8080]
 
 
+def test_spec_builder_rathole_control_port_preservation():
+    """Verify Rathole respects user control_port < 24000 (such as canonical 23333)"""
+    tunnel = DummyTunnel(
+        id="t-rathole-custom-cp",
+        core="rathole",
+        type="tcp",
+        spec={"ports": [8080], "control_port": 23333, "transport": "tcp"}
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["control_port"] == 23333
+    assert c["control_port"] == 23333
+    assert ":23333" in c["remote_addr"]
+
+
+def test_spec_builder_chisel_control_port_bounds():
+    """Verify Chisel handles custom and invalid control_port safely"""
+    tunnel_valid = DummyTunnel(
+        id="t-chisel-valid",
+        core="chisel",
+        spec={"ports": [8080], "control_port": 18080}
+    )
+    s_v, c_v = build_tunnel_node_specs(tunnel_valid, "1.1.1.1", "2.2.2.2")
+    assert s_v["control_port"] == 18080
+    assert c_v["control_port"] == 18080
+
+    tunnel_invalid = DummyTunnel(
+        id="t-chisel-invalid",
+        core="chisel",
+        spec={"ports": [8080], "control_port": 80}  # below 1024
+    )
+    s_inv, c_inv = build_tunnel_node_specs(tunnel_invalid, "1.1.1.1", "2.2.2.2")
+    assert s_inv["control_port"] >= 1024
+    assert s_inv["control_port"] != 8080
+
+
+
 if __name__ == "__main__":
     import inspect
     current_module = sys.modules[__name__]

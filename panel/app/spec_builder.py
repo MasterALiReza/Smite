@@ -99,11 +99,19 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
 
     # Control port assignment
     control_port = server_spec.get("control_port")
-    if not control_port or int(control_port) < 24000:
+    try:
+        ctrl_p = int(control_port) if control_port else 0
+    except (ValueError, TypeError):
+        ctrl_p = 0
+    if ctrl_p < 1024 or ctrl_p > 65535 or ctrl_p in ports:
         port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
         control_port = 25000 + (port_hash % 25000)
+        while control_port in ports:
+            control_port += 1
         if tunnel.spec is not None:
             tunnel.spec["control_port"] = control_port
+    else:
+        control_port = ctrl_p
 
     # Noise protocol support
     use_noise = (
@@ -480,7 +488,17 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
 
     port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
     first_port = ports[0] if ports else 8080
-    server_control_port = server_spec.get("control_port") or (int(first_port) + 10000 + (port_hash % 1000))
+    raw_control_port = server_spec.get("control_port")
+    try:
+        ctrl_p = int(raw_control_port) if raw_control_port else 0
+    except (ValueError, TypeError):
+        ctrl_p = 0
+    if ctrl_p < 1024 or ctrl_p > 65535 or ctrl_p in ports:
+        server_control_port = int(first_port) + 10000 + (port_hash % 1000)
+        while server_control_port in ports:
+            server_control_port += 1
+    else:
+        server_control_port = ctrl_p
     server_spec["server_port"] = server_control_port
     server_spec["control_port"] = server_control_port
     server_spec["reverse_port"] = first_port
@@ -526,7 +544,15 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["mode"] = "client"
 
     port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
-    bind_port = server_spec.get("bind_port") or (7000 + (port_hash % 1000))
+    raw_bind = server_spec.get("bind_port") or server_spec.get("control_port")
+    try:
+        bind_p = int(raw_bind) if raw_bind else 0
+    except (ValueError, TypeError):
+        bind_p = 0
+    if bind_p < 1024 or bind_p > 65535:
+        bind_port = 7000 + (port_hash % 1000)
+    else:
+        bind_port = bind_p
 
     token = server_spec.get("token")
     if not token:

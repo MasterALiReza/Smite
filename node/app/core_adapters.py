@@ -1,5 +1,5 @@
 """Core adapters for different tunnel types"""
-from typing import Protocol, Dict, Any, Optional, List, Set
+from typing import Protocol, Dict, Any, Optional, List, Set, Iterable, Sequence
 from pathlib import Path
 import subprocess
 import asyncio
@@ -186,39 +186,46 @@ def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> boo
         cmdline = " ".join(p.cmdline()).lower()
         if tunnel_id.lower() in cmdline or (core_name and core_name.lower() in p.name().lower()):
             return True
-        return True
+        return False
     except Exception:
         return False
 
 
-async def free_port(port: Optional[Any]) -> None:
-    """Safely terminate any core proxy process holding the specified port without affecting system or node services."""
-    if not port:
+async def free_ports(ports: Iterable[Any]) -> None:
+    """Safely terminate any core proxy process holding any of the specified ports in a single batch pass."""
+    if not ports:
         return
-    try:
-        port_num = int(port)
-    except (ValueError, TypeError):
+    target_ports: Set[int] = set()
+    for p in ports:
+        if not p:
+            continue
+        try:
+            p_int = int(p)
+            if 0 < p_int <= 65535:
+                target_ports.add(p_int)
+        except (ValueError, TypeError):
+            continue
+    if not target_ports:
         return
-    if port_num <= 0:
-        return
-    
+
     current_pid = os.getpid()
     ignored_pids = {current_pid, os.getppid(), 1}
-    
-    # Method 1: Linux /proc/net + /proc/{pid}/fd scan
-    try:
-        pids = _find_pids_by_port_procfs(port_num)
-        for pid in pids:
-            if pid not in ignored_pids and _is_safe_core_process(pid):
-                logger.warning(f"Kernel socket scan: terminating core process {pid} holding port {port_num}")
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.debug(f"Error in procfs port scan for port {port_num}: {e}")
 
-    # Method 2: psutil process and connection scanning
+    # Method 1: Linux /proc/net + /proc/{pid}/fd scan
+    for port_num in target_ports:
+        try:
+            pids = _find_pids_by_port_procfs(port_num)
+            for pid in pids:
+                if pid not in ignored_pids and _is_safe_core_process(pid):
+                    logger.warning(f"Kernel socket scan: terminating core process {pid} holding port {port_num}")
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"Error in procfs port scan for port {port_num}: {e}")
+
+    # Method 2: Single-pass psutil process and connection scanning
     try:
         for p in psutil.process_iter(['pid', 'name']):
             if p.pid in ignored_pids:
@@ -227,8 +234,8 @@ async def free_port(port: Optional[Any]) -> None:
                 if not _is_safe_core_process(p.pid):
                     continue
                 for conn in p.net_connections(kind='all'):
-                    if conn.laddr and conn.laddr.port == port_num:
-                        logger.warning(f"psutil: Terminating core process {p.pid} ({p.name()}) holding port {port_num}")
+                    if conn.laddr and conn.laddr.port in target_ports:
+                        logger.warning(f"psutil: Terminating core process {p.pid} ({p.name()}) holding port {conn.laddr.port}")
                         p.kill()
                         try:
                             p.wait(timeout=0.5)
@@ -239,73 +246,100 @@ async def free_port(port: Optional[Any]) -> None:
             except Exception:
                 pass
     except Exception as e:
-        logger.debug(f"Error freeing port {port_num} via psutil: {e}")
+        logger.debug(f"Error freeing ports {target_ports} via psutil: {e}")
 
     # Method 3: Tear down lingering half-open kernel TCP sockets on Linux via ss -K (SOCK_DESTROY)
     if os.name == 'posix':
-        try:
-            proc_kill = await asyncio.create_subprocess_exec(
-                "ss", "-K", f"( sport = :{port_num} or dport = :{port_num} )",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL
-            )
-            await asyncio.wait_for(proc_kill.wait(), timeout=1.0)
-        except Exception:
-            pass
+        for port_num in target_ports:
+            try:
+                proc_kill = await asyncio.create_subprocess_exec(
+                    "ss", "-K", f"( sport = :{port_num} or dport = :{port_num} )",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                await asyncio.wait_for(proc_kill.wait(), timeout=0.8)
+            except Exception:
+                pass
 
 
+async def free_port(port: Optional[Any]) -> None:
+    """Safely terminate any core proxy process holding the specified port without affecting system or node services."""
+    if port:
+        await free_ports([port])
 
 
 async def safe_stop_subprocess(
     proc: Optional[asyncio.subprocess.Process] = None,
     patterns: Optional[List[str]] = None,
-    timeout: float = 3.0
+    timeout: float = 3.0,
+    pid: Optional[int] = None
 ) -> None:
     """
     Safely and thoroughly stop a subprocess and any associated process group or orphan processes.
-    Uses process group signaling, psutil process-table scanning, and fallback pattern killing.
+    Uses process group signaling, direct PID termination, psutil process-table scanning, and fallback pattern killing.
     """
-    if proc is not None and proc.returncode is None:
-        if os.name == 'posix':
-            try:
-                pgid = os.getpgid(proc.pid)
-                my_pgid = os.getpgid(os.getpid())
-                if pgid != my_pgid and pgid > 1:
-                    os.killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
-            except Exception as e:
-                logger.debug(f"Error terminating pgid for pid {proc.pid}: {e}")
-        
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            pass
-        except Exception:
-            pass
+    target_pid = proc.pid if proc is not None else pid
+    current_pid = os.getpid()
+    ignored_pids = {current_pid, os.getppid(), 1}
 
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except (asyncio.TimeoutError, Exception):
+    if target_pid and target_pid not in ignored_pids and psutil.pid_exists(target_pid):
+        if _is_safe_core_process(target_pid):
             if os.name == 'posix':
                 try:
-                    pgid = os.getpgid(proc.pid)
-                    my_pgid = os.getpgid(os.getpid())
+                    pgid = os.getpgid(target_pid)
+                    my_pgid = os.getpgid(current_pid)
                     if pgid != my_pgid and pgid > 1:
-                        os.killpg(pgid, signal.SIGKILL)
+                        os.killpg(pgid, signal.SIGTERM)
                 except (ProcessLookupError, PermissionError):
                     pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error terminating pgid for pid {target_pid}: {e}")
+
             try:
-                proc.kill()
-                await asyncio.wait_for(proc.wait(), timeout=1.5)
+                if proc is not None and proc.returncode is None:
+                    proc.terminate()
+                else:
+                    os.kill(target_pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
             except Exception:
                 pass
 
+            wait_success = False
+            if proc is not None:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=timeout)
+                    wait_success = True
+                except (asyncio.TimeoutError, Exception):
+                    wait_success = False
+            else:
+                for _ in range(int(timeout * 10)):
+                    await asyncio.sleep(0.1)
+                    if not psutil.pid_exists(target_pid):
+                        wait_success = True
+                        break
+
+            if not wait_success and psutil.pid_exists(target_pid):
+                if os.name == 'posix':
+                    try:
+                        pgid = os.getpgid(target_pid)
+                        my_pgid = os.getpgid(current_pid)
+                        if pgid != my_pgid and pgid > 1:
+                            os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    except Exception:
+                        pass
+                try:
+                    if proc is not None:
+                        proc.kill()
+                        await asyncio.wait_for(proc.wait(), timeout=1.5)
+                    else:
+                        os.kill(target_pid, signal.SIGKILL)
+                except Exception:
+                    pass
+
     if patterns:
-        current_pid = os.getpid()
-        ignored_pids = {current_pid, os.getppid(), 1}
         for p in psutil.process_iter(['pid', 'name', 'cmdline']):
             if p.pid in ignored_pids:
                 continue
@@ -786,7 +820,7 @@ nodelay = true
     
     async def remove(self, tunnel_id: str):
         """Remove Rathole tunnel"""
-        _remove_tunnel_pid(tunnel_id)
+        pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -796,7 +830,8 @@ nodelay = true
                 pass
             del self.log_handles[tunnel_id]
 
-        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"], pid=pid)
+        _remove_tunnel_pid(tunnel_id)
             
         if config_path.exists():
             try:
@@ -1069,11 +1104,10 @@ class BackhaulAdapter:
             log_fh.flush()
             
             try:
-                proc = await asyncio.create_subprocess_exec(*[str(binary_path), "-c", str(config_path)],
+                proc = await _spawn_core_subprocess(
+                    [str(binary_path), "-c", str(config_path)],
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
-                    cwd=str(self.config_dir),
-                    start_new_session=True,
                 )
             except Exception:
                 log_fh.close()
@@ -1171,7 +1205,8 @@ class BackhaulAdapter:
             log_fh.flush()
 
             try:
-                proc = await asyncio.create_subprocess_exec(*[str(binary_path), "-c", str(config_path)],
+                proc = await _spawn_core_subprocess(
+                    [str(binary_path), "-c", str(config_path)],
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
                 )
@@ -1195,7 +1230,7 @@ class BackhaulAdapter:
         self.log_handles[tunnel_id] = log_fh
 
     async def remove(self, tunnel_id: str):
-        _remove_tunnel_pid(tunnel_id)
+        pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -1205,7 +1240,8 @@ class BackhaulAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        await safe_stop_subprocess(proc, patterns=[tunnel_id])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"], pid=pid)
+        _remove_tunnel_pid(tunnel_id)
 
         if config_path.exists():
             try:
@@ -1235,9 +1271,9 @@ class BackhaulAdapter:
             if isinstance(value, list):
                 if not value:
                     return "[]"
-                rendered = ",\n  ".join(f"\"{str(item)}\"" for item in value)
+                rendered = ",\n  ".join(f"\"{str(item).replace('\\', '\\\\').replace('\"', '\\\"').replace('\r', '\\r').replace('\n', '\\n')}\"" for item in value)
                 return "[\n  " + rendered + "\n]"
-            value_str = str(value).replace("\\", "\\\\").replace('"', '\\"')
+            value_str = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
             return f"\"{value_str}\""
 
         lines: List[str] = []
@@ -1311,14 +1347,16 @@ class ChiselAdapter:
         if mode == 'server':
             control_port = spec.get('control_port') or spec.get('server_port') or spec.get('listen_port') or 8080
             await free_port(control_port)
-            # Free all service reverse ports that client will bind on server
+            # Free all service reverse ports and control port that server will bind
+            ports_to_free = [int(control_port)]
             for p in spec.get('ports') or []:
                 if isinstance(p, (int, str)) and str(p).isdigit():
-                    await free_port(int(p))
+                    ports_to_free.append(int(p))
                 elif isinstance(p, dict):
                     p_num = p.get('remote_port') or p.get('remote') or p.get('port')
                     if p_num and str(p_num).isdigit():
-                        await free_port(int(p_num))
+                        ports_to_free.append(int(p_num))
+            await free_ports(ports_to_free)
 
             auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             key = spec.get('key')
@@ -1339,11 +1377,10 @@ class ChiselAdapter:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
-                proc = await asyncio.create_subprocess_exec(*cmd,
+                proc = await _spawn_core_subprocess(
+                    cmd,
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
-                    cwd=str(self.config_dir),
-                    start_new_session=True
                 )
             except FileNotFoundError:
                 log_f.close()
@@ -1360,7 +1397,7 @@ class ChiselAdapter:
             fingerprint = spec.get('fingerprint')
             keepalive = spec.get('keepalive', '25s')
             max_retry_count = spec.get('max_retry_count')
-            max_retry_interval = spec.get('max_retry_interval')
+            max_retry_interval = spec.get('max_retry_interval') or '15s'
             
             tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
             reverse_specs = []
@@ -1433,11 +1470,10 @@ class ChiselAdapter:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
-                proc = await asyncio.create_subprocess_exec(*cmd,
+                proc = await _spawn_core_subprocess(
+                    cmd,
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
-                    cwd=str(self.config_dir),
-                    start_new_session=True
                 )
             except FileNotFoundError:
                 log_f.close()
@@ -1463,7 +1499,7 @@ class ChiselAdapter:
     
     async def remove(self, tunnel_id: str):
         """Remove Chisel tunnel"""
-        _remove_tunnel_pid(tunnel_id)
+        pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1472,7 +1508,8 @@ class ChiselAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        await safe_stop_subprocess(proc, patterns=[tunnel_id])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.log"], pid=pid)
+        _remove_tunnel_pid(tunnel_id)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -1541,8 +1578,19 @@ class FrpAdapter:
                 bind_port = int(bind_port)
             elif not isinstance(bind_port, int):
                 bind_port = 7000
-            await free_port(bind_port)
+            
+            ports_to_free = [bind_port]
+            for p_item in (spec.get('ports') or []):
+                if isinstance(p_item, (int, str)) and str(p_item).isdigit():
+                    ports_to_free.append(int(p_item))
+                elif isinstance(p_item, dict):
+                    p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
+                    if p_val and str(p_val).isdigit():
+                        ports_to_free.append(int(p_val))
+            await free_ports(ports_to_free)
+
             token = spec.get('token')
+            clean_token = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if token else None
             force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls'])
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
             
@@ -1564,16 +1612,16 @@ class FrpAdapter:
   tls:
     force: {'true' if force_tls else 'false'}
 """
-            if token:
+            if clean_token:
                 config_content += f"""auth:
   method: token
-  token: "{token}"
+  token: "{clean_token}"
 """
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
-            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, token={'set' if token else 'none'}")
+            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, token={'set' if clean_token else 'none'}")
             
             env_path = os.environ.get("FRPS_BINARY")
             if env_path:
@@ -1606,13 +1654,12 @@ class FrpAdapter:
             try:
                 log_f.write(f"Starting FRP server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
-                log_f.write(f"Config: bind_port={bind_port}, token={'set' if token else 'none'}\n")
+                log_f.write(f"Config: bind_port={bind_port}, token={'set' if clean_token else 'none'}\n")
                 log_f.flush()
-                proc = await asyncio.create_subprocess_exec(*cmd,
+                proc = await _spawn_core_subprocess(
+                    cmd,
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
-                    cwd=str(self.config_dir),
-                    start_new_session=True
                 )
             except FileNotFoundError:
                 log_f.close()
@@ -1689,8 +1736,12 @@ class FrpAdapter:
             if not server_addr or server_addr in ["0.0.0.0", "localhost", "127.0.0.1", "::1"]:
                 raise ValueError(f"Invalid FRP server_addr: {server_addr}. Must be a valid foreign server IP address or hostname.")
             
+            clean_server_addr = str(server_addr).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+            clean_token = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if token else None
+            clean_sni = str(custom_sni).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if custom_sni else None
+
             config_file = self.config_dir / f"frpc_{tunnel_id}.yaml"
-            config_content = f"""serverAddr: "{server_addr}"
+            config_content = f"""serverAddr: "{clean_server_addr}"
 serverPort: {server_port}
 loginFailExit: false
 transport:
@@ -1706,13 +1757,13 @@ transport:
     enable: true
     disableCustomTLSFirstByte: true
 """
-                if custom_sni:
-                    config_content += f"""    serverName: "{custom_sni}"\n"""
+                if clean_sni:
+                    config_content += f"""    serverName: "{clean_sni}"\n"""
 
-            if token:
+            if clean_token:
                 config_content += f"""auth:
   method: token
-  token: "{token}"
+  token: "{clean_token}"
 """
             
             config_content += "\nproxies:\n"
@@ -1756,7 +1807,7 @@ transport:
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
-            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={server_addr}:{server_port}")
+            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={clean_server_addr}:{server_port}")
             
             binary_path = self._resolve_binary_path()
             config_file_abs = config_file.resolve()
@@ -1771,14 +1822,12 @@ transport:
             try:
                 log_f.write(f"Starting FRP client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
-                log_f.write(f"Config: type={tunnel_type}, local={local_ip}:{local_port}, remote={remote_port}, server={server_addr}:{server_port}\n")
+                log_f.write(f"Config: type={tunnel_type}, local={local_ip}:{local_port}, remote={remote_port}, server={clean_server_addr}:{server_port}\n")
                 log_f.flush()
-                proc = await asyncio.create_subprocess_exec(*cmd,
+                proc = await _spawn_core_subprocess(
+                    cmd,
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
-                    cwd=str(self.config_dir),
-                    start_new_session=True,
-                    env=os.environ.copy()
                 )
             except FileNotFoundError:
                 log_f.close()
@@ -1804,7 +1853,7 @@ transport:
     
     async def remove(self, tunnel_id: str):
         """Remove FRP tunnel (handles both server and client modes)"""
-        _remove_tunnel_pid(tunnel_id)
+        pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1815,8 +1864,10 @@ transport:
 
         await safe_stop_subprocess(
             proc,
-            patterns=[tunnel_id]
+            patterns=[tunnel_id, f"frps_{tunnel_id}", f"frpc_{tunnel_id}"],
+            pid=pid
         )
+        _remove_tunnel_pid(tunnel_id)
 
         for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
             cfg_path = self.config_dir / cfg_name
@@ -2400,12 +2451,10 @@ class GostAdapter:
             log_f.write(f"Command: {' '.join(cmd)}\n")
             log_f.flush()
             
-            proc = await asyncio.create_subprocess_exec(*cmd,
+            proc = await _spawn_core_subprocess(
+                cmd,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                cwd=str(self.config_dir),
-                start_new_session=True,
-                close_fds=(os.name == 'posix')
             )
         except Exception as e:
             log_f.close()
@@ -2434,7 +2483,7 @@ class GostAdapter:
     
     async def remove(self, tunnel_id: str):
         """Remove GOST tunnel"""
-        _remove_tunnel_pid(tunnel_id)
+        pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -2445,7 +2494,8 @@ class GostAdapter:
 
         config_file = self.config_dir / f"{tunnel_id}.json"
         
-        await safe_stop_subprocess(proc, patterns=[tunnel_id])
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.json"], pid=pid)
+        _remove_tunnel_pid(tunnel_id)
 
         if config_file.exists():
             try:
