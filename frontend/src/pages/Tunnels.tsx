@@ -1935,25 +1935,36 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[100] p-3.5 sm:p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-            Edit Tunnel: {tunnel.name}
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 min-w-[44px] min-h-[44px] flex items-center justify-center -mr-2 cursor-pointer"
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <div className="mb-4 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl">
-          <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1.5">
-            <ShieldCheck size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
-            <span>Zero-Downtime: Saving changes will not drop live connections until you click Reapply.</span>
-          </p>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90dvh] shadow-2xl border border-gray-200/80 dark:border-gray-700/80 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <form onSubmit={handleSubmit} className="flex flex-col h-full max-h-[90dvh] overflow-hidden">
+          {/* Sticky Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700/70 bg-gray-50/70 dark:bg-gray-800/90 shrink-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 shrink-0">
+                <Edit2 size={18} />
+              </span>
+              <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate">
+                Edit Tunnel: <span className="text-blue-600 dark:text-blue-400 font-mono text-base sm:text-lg">{tunnel.name}</span>
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer shrink-0 ml-2"
+              title="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Scrollable Body */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0">
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl">
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                <ShieldCheck size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <span>Zero-Downtime: Saving changes will not drop live connections until you click Reapply.</span>
+              </p>
+            </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -3325,33 +3336,37 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
             </div>
           )}
 
-          <div className="flex flex-wrap gap-3 justify-between items-center pt-2">
+          </div>
+
+          {/* Sticky Footer */}
+          <div className="shrink-0 px-4 sm:px-6 py-3.5 border-t border-gray-100 dark:border-gray-700/80 bg-gray-50/90 dark:bg-gray-800/95 backdrop-blur-xs flex items-center justify-between gap-2.5 sm:gap-3">
             <button
               type="button"
               onClick={handleTestConfig}
               disabled={isTestingConfig}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
             >
               {isTestingConfig ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
                 <Zap size={16} />
               )}
-              <span>{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
+              <span className="hidden xs:inline sm:inline">{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
+              <span className="inline xs:hidden sm:hidden">{isTestingConfig ? '...' : 'Test'}</span>
             </button>
 
-            <div className="flex gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer"
               >
                 {t.tunnels.cancel}
               </button>
               <button
                 type="submit"
                 disabled={isTestingConfig}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
               >
                 Save Changes
               </button>
@@ -3762,26 +3777,48 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[100] p-3.5 sm:p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.tunnels.createTunnel}</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90dvh] shadow-2xl border border-gray-200/80 dark:border-gray-700/80 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <form onSubmit={handleSubmit} className="flex flex-col h-full max-h-[90dvh] overflow-hidden">
+          {/* Sticky Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700/70 bg-gray-50/70 dark:bg-gray-800/90 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <span className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400">
+                <Plus size={18} />
+              </span>
+              <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">
+                {t.tunnels.createTunnel}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+              title="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Scrollable Form Body */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
                 Name
               </label>
               <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
+                placeholder="e.g. My-Backhaul-Tunnel"
                 required
               />
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1 h-5">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1">
-                  <Tag size={13} className="text-blue-500" />
+              <div className="flex items-center justify-between mb-1.5 h-5">
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <Tag size={14} className="text-blue-500" />
                   <span>{t.tunnels.categories || 'Category'}</span>
                 </label>
                 <button
@@ -3795,7 +3832,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               <select
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
               >
                 <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
                 {categories.map((c) => (
@@ -3832,15 +3869,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
-              <div className="flex items-center justify-between mb-1 h-5">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <div className="flex items-center justify-between mb-1.5 h-5">
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300">
                   {t.tunnels.iranNode}
                 </label>
               </div>
               <select
                 value={formData.iran_node_id || formData.node_id}
                 onChange={(e) => setFormData({ ...formData, iran_node_id: e.target.value, node_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                 required={formData.core === 'rathole' || formData.core === 'backhaul' || formData.core === 'frp' || formData.core === 'chisel'}
               >
                 <option value="">{t.tunnels.selectIranNode}</option>
@@ -3852,15 +3889,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               </select>
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1 h-5">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <div className="flex items-center justify-between mb-1.5 h-5">
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300">
                   {t.tunnels.foreignServer}
                 </label>
               </div>
               <select
                 value={formData.foreign_node_id}
                 onChange={(e) => setFormData({ ...formData, foreign_node_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                 required={formData.core === 'rathole' || formData.core === 'backhaul' || formData.core === 'frp' || formData.core === 'chisel'}
               >
                 <option value="">{t.tunnels.selectForeignServer}</option>
@@ -3875,15 +3912,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
-              <div className="flex items-center justify-between mb-1 h-5">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <div className="flex items-center justify-between mb-1.5 h-5">
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300">
                   {t.tunnels.core}
                 </label>
               </div>
               <select
                 value={formData.core}
                 onChange={(e) => handleCoreChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
               >
                 <option value="gost">GOST</option>
                 <option value="rathole">Rathole</option>
@@ -3893,8 +3930,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               </select>
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1 h-5">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <div className="flex items-center justify-between mb-1.5 h-5">
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300">
                   {t.tunnels.type}
                 </label>
               </div>
@@ -3907,7 +3944,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                     setBackhaulState((prev) => ({ ...prev, transport: value }))
                   }
                 }}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                 disabled={formData.core === 'chisel'}
               >
                 {formData.core === 'chisel' ? (
@@ -5210,33 +5247,37 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
             </div>
           )}
 
-          <div className="flex flex-wrap gap-3 justify-between items-center pt-2">
+          </div>
+
+          {/* Sticky Footer */}
+          <div className="shrink-0 px-4 sm:px-6 py-3.5 border-t border-gray-100 dark:border-gray-700/80 bg-gray-50/90 dark:bg-gray-800/95 backdrop-blur-xs flex items-center justify-between gap-2.5 sm:gap-3">
             <button
               type="button"
               onClick={handleTestConfig}
               disabled={isTestingConfig}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
             >
               {isTestingConfig ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
                 <Zap size={16} />
               )}
-              <span>{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
+              <span className="hidden xs:inline sm:inline">{isTestingConfig ? 'Testing...' : 'Test Connection'}</span>
+              <span className="inline xs:hidden sm:hidden">{isTestingConfig ? '...' : 'Test'}</span>
             </button>
 
-            <div className="flex gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer"
               >
                 {t.tunnels.cancel}
               </button>
               <button
                 type="submit"
                 disabled={isTestingConfig}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
               >
                 {t.tunnels.createTunnel}
               </button>
