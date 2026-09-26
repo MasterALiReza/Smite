@@ -539,8 +539,9 @@ class RatholeAdapter:
             for p in ports:
                 await free_port(p)
             
+            bind_addr_str = f"[{bind_host}]:{bind_port}" if (is_ipv6 and not bind_host.startswith("[")) else f"{bind_host}:{bind_port}"
             config = f"""[server]
-bind_addr = "{bind_host}:{bind_port}"
+bind_addr = "{bind_addr_str}"
 default_token = "{token}"
 heartbeat_interval = 10
 """
@@ -881,6 +882,9 @@ class BackhaulAdapter:
         )
         self.binary_candidates = [
             Path(default_binary),
+            Path("/usr/local/bin/backhaul"),
+            Path("/usr/bin/backhaul"),
+            Path("/opt/backhaul/backhaul"),
             Path("backhaul"),
         ]
 
@@ -934,26 +938,42 @@ class BackhaulAdapter:
                 else:
                     ports = []
             
+            target_host = spec.get("target_host", "127.0.0.1")
             if isinstance(ports, list):
                 processed_ports = []
                 for p in ports:
                     if not p:
                         continue
                     if isinstance(p, str):
-                        processed_ports.append(p)
+                        if '=' in p:
+                            processed_ports.append(p)
+                        elif p.isdigit():
+                            processed_ports.append(f"{p}={target_host}:{p}")
+                        else:
+                            processed_ports.append(p)
                     elif isinstance(p, (int, float)):
-                        processed_ports.append(str(p))
+                        port_int = int(p)
+                        processed_ports.append(f"{port_int}={target_host}:{port_int}")
                     elif isinstance(p, dict):
                         local = p.get("local") or p.get("listen_port") or p.get("public_port")
-                        target_host = p.get("target_host") or spec.get("target_host", "127.0.0.1")
-                        target_port = p.get("target_port") or p.get("remote_port") or local
+                        tgt_host = p.get("target_host") or target_host
+                        tgt_port = p.get("target_port") or p.get("remote_port") or local
                         if local:
-                            processed_ports.append(f"{local}={target_host}:{target_port}")
+                            processed_ports.append(f"{local}={tgt_host}:{tgt_port}")
                     else:
                         processed_ports.append(str(p))
                 ports = processed_ports
             else:
                 ports = [str(ports)] if ports else []
+            
+            # Free all service ports on the server node to prevent port conflicts
+            for p_entry in ports:
+                if isinstance(p_entry, str) and "=" in p_entry:
+                    lp = p_entry.split("=")[0].strip()
+                    if lp.isdigit():
+                        await free_port(int(lp))
+                elif str(p_entry).isdigit():
+                    await free_port(int(p_entry))
             
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: processed ports: {ports} (count: {len(ports)})")
             
@@ -1229,13 +1249,23 @@ class ChiselAdapter:
         mode = spec.get('mode', 'client')
         
         if mode == 'server':
-            control_port = spec.get('control_port') or spec.get('listen_port') or 8080
+            control_port = spec.get('control_port') or spec.get('server_port') or spec.get('listen_port') or 8080
             await free_port(control_port)
-            auth_token = spec.get('token') or spec.get('auth_token')
+            # Free all service reverse ports that client will bind on server
+            for p in spec.get('ports') or []:
+                if isinstance(p, (int, str)) and str(p).isdigit():
+                    await free_port(int(p))
+                elif isinstance(p, dict):
+                    p_num = p.get('remote_port') or p.get('remote') or p.get('port')
+                    if p_num and str(p_num).isdigit():
+                        await free_port(int(p_num))
+
+            auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             key = spec.get('key')
             reverse_only = spec.get('reverse_only', True)
             
-            cmd = ["chisel", "server", "--port", str(control_port)]
+            binary_path = self._resolve_binary_path()
+            cmd = [str(binary_path), "server", "--port", str(control_port)]
             if auth_token:
                 cmd.extend(["--auth", auth_token])
             if key:
@@ -1266,41 +1296,63 @@ class ChiselAdapter:
             if not server_url.startswith("http://") and not server_url.startswith("https://"):
                 server_url = f"http://{server_url}"
             
-            auth_token = spec.get('token') or spec.get('auth_token')
+            auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             fingerprint = spec.get('fingerprint')
             keepalive = spec.get('keepalive', '25s')
             max_retry_count = spec.get('max_retry_count')
             max_retry_interval = spec.get('max_retry_interval')
             
+            tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
             reverse_specs = []
             ports = spec.get('ports') or []
             if not ports:
                 local_port = spec.get('local_port') or spec.get('port')
                 remote_port = spec.get('remote_port')
                 if local_port and remote_port:
-                    reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
+                    if tunnel_proto == 'udp':
+                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}/udp")
+                    elif tunnel_proto == 'tcp+udp':
+                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
+                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}/udp")
+                    else:
+                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
                 elif local_port:
-                    reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
+                    if tunnel_proto == 'udp':
+                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}/udp")
+                    elif tunnel_proto == 'tcp+udp':
+                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
+                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}/udp")
+                    else:
+                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
             else:
                 for port_item in ports:
+                    remote_p = None
+                    local_p = None
                     if isinstance(port_item, dict):
                         local_p = port_item.get('local_port') or port_item.get('port')
                         remote_p = port_item.get('remote_port') or local_p
-                        if local_p:
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
                     elif isinstance(port_item, str) and ":" in port_item:
                         parts = port_item.split(":")
                         if len(parts) == 2:
                             remote_p, local_p = parts
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
                     else:
                         port_num = int(port_item) if isinstance(port_item, (int, str)) and str(port_item).isdigit() else port_item
-                        reverse_specs.append(f"R:{port_num}:127.0.0.1:{port_num}")
+                        remote_p = local_p = port_num
+
+                    if remote_p and local_p:
+                        if tunnel_proto == 'udp':
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}/udp")
+                        elif tunnel_proto == 'tcp+udp':
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}/udp")
+                        else:
+                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
             
             if not reverse_specs:
                 raise ValueError("Chisel client requires at least one port mapping (R:remote:local)")
             
-            cmd = ["chisel", "client"]
+            binary_path = self._resolve_binary_path()
+            cmd = [str(binary_path), "client"]
             if auth_token:
                 cmd.extend(["--auth", auth_token])
             if fingerprint:
@@ -1429,6 +1481,7 @@ class FrpAdapter:
                 bind_port = int(bind_port)
             elif not isinstance(bind_port, int):
                 bind_port = 7000
+            await free_port(bind_port)
             token = spec.get('token')
             force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls'])
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
@@ -1567,8 +1620,8 @@ class FrpAdapter:
                 raise ValueError("FRP client requires 'server_addr' (foreign server address) in spec")
             if not ports:
                 raise ValueError("FRP client requires 'ports' array or 'remote_port'/'listen_port' in spec")
-            if tunnel_type not in ['tcp', 'udp']:
-                raise ValueError(f"FRP only supports 'tcp' and 'udp' types, got '{tunnel_type}'")
+            if tunnel_type not in ['tcp', 'udp', 'tcp+udp']:
+                raise ValueError(f"FRP only supports 'tcp', 'udp', and 'tcp+udp' types, got '{tunnel_type}'")
             
             if server_addr.startswith('[') and server_addr.endswith(']'):
                 server_addr = server_addr[1:-1]
@@ -1611,7 +1664,26 @@ transport:
                     local_port = remote_port = port_config
                 
                 proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                config_content += f"""  - name: {proxy_name}
+                if tunnel_type == 'tcp+udp':
+                    config_content += f"""  - name: {proxy_name}_tcp
+    type: tcp
+    localIP: {local_ip}
+    localPort: {local_port}
+    remotePort: {remote_port}
+    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if use_compression else 'false'}
+  - name: {proxy_name}_udp
+    type: udp
+    localIP: {local_ip}
+    localPort: {local_port}
+    remotePort: {remote_port}
+    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if use_compression else 'false'}
+"""
+                else:
+                    config_content += f"""  - name: {proxy_name}
     type: {tunnel_type}
     localIP: {local_ip}
     localPort: {local_port}
@@ -2200,13 +2272,13 @@ class GostAdapter:
                         }
                     
                     service_tcp = {
-                        "name": f"tcp-in-{port_num}",
+                        "name": f"tcp-in-{port_num}-{tunnel_id}",
                         "addr": f":{port_num}" if is_reverse else listen_addr,
                         "handler": handler_tcp,
                         "listener": listener_tcp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-tcp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
+                                {"name": f"target-tcp-{port_num}-{tunnel_id}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
                     }
@@ -2231,13 +2303,13 @@ class GostAdapter:
                         }
                     
                     service_udp = {
-                        "name": f"udp-in-{port_num}",
+                        "name": f"udp-in-{port_num}-{tunnel_id}",
                         "addr": f":{port_num}" if is_reverse else listen_addr,
                         "handler": handler_udp,
                         "listener": listener_udp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-udp-{port_num}", "addr": f"{target_address}:{target_port_num}"}
+                                {"name": f"target-udp-{port_num}-{tunnel_id}", "addr": f"{target_address}:{target_port_num}"}
                             ]
                         }
                     }

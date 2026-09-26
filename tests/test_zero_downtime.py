@@ -17,7 +17,12 @@ from node.app.core_adapters import (
     _is_tunnel_pid_alive,
     _is_safe_core_process,
     AdapterManager,
-    ALLOWED_CORE_BINARIES
+    ALLOWED_CORE_BINARIES,
+    RatholeAdapter,
+    BackhaulAdapter,
+    ChiselAdapter,
+    FrpAdapter,
+    GostAdapter
 )
 
 
@@ -222,4 +227,201 @@ async def test_adapter_manager_tunnel_lock_serializes_concurrent_calls(monkeypat
     
     # The first must finish before the second starts
     assert order == ["start-1", "end-1", "start-2", "end-2"]
+
+
+@pytest.mark.asyncio
+async def test_rathole_adapter_ipv6_brackets(monkeypatch, tmp_path):
+    """Test RatholeAdapter properly encloses IPv6 addresses in square brackets in bind_addr."""
+    adapter = RatholeAdapter()
+    adapter.config_dir = tmp_path
+    
+    # Mock subprocess spawn and free_port
+    monkeypatch.setattr("node.app.core_adapters._spawn_core_subprocess", lambda *args, **kwargs: asyncio.sleep(0.01))
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    
+    class DummyProc:
+        pid = 1234
+        returncode = None
+    
+    async def mock_spawn(*args, **kwargs):
+        return DummyProc()
+    
+    monkeypatch.setattr("node.app.core_adapters._spawn_core_subprocess", mock_spawn)
+    
+    spec = {
+        "mode": "server",
+        "bind_addr": "2001:db8::1:23333",
+        "token": "tok123",
+        "ports": [8080]
+    }
+    await adapter.apply("rathole-ipv6", spec)
+    cfg = (tmp_path / "rathole-ipv6.toml").read_text(encoding="utf-8")
+    assert 'bind_addr = "[2001:db8::1]:23333"' in cfg
+    await adapter.remove("rathole-ipv6")
+
+
+@pytest.mark.asyncio
+async def test_backhaul_adapter_ports_formatting(monkeypatch, tmp_path):
+    """Test BackhaulAdapter properly normalizes raw port integers/strings with target_host in server mode."""
+    adapter = BackhaulAdapter()
+    adapter.config_dir = tmp_path
+    
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
+    
+    class DummyProc:
+        pid = 1235
+        returncode = None
+        
+    async def mock_exec(*args, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    spec = {
+        "mode": "server",
+        "bind_addr": "0.0.0.0:3080",
+        "token": "bh-tok",
+        "ports": [8080, "8081", "9000=127.0.0.1:9000"],
+        "target_host": "127.0.0.1"
+    }
+    await adapter.apply("backhaul-test", spec)
+    cfg = (tmp_path / "backhaul-test.toml").read_text(encoding="utf-8")
+    assert '"8080=127.0.0.1:8080"' in cfg
+    assert '"8081=127.0.0.1:8081"' in cfg
+    assert '"9000=127.0.0.1:9000"' in cfg
+    await adapter.remove("backhaul-test")
+
+
+@pytest.mark.asyncio
+async def test_chisel_adapter_arguments_and_udp(monkeypatch, tmp_path):
+    """Test ChiselAdapter passes resolved control_port, auth token, and UDP reverse mappings."""
+    adapter = ChiselAdapter()
+    adapter.config_dir = tmp_path
+    
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/chisel"))
+    
+    captured_server_cmd = []
+    captured_client_cmd = []
+    
+    class DummyProc:
+        pid = 1236
+        returncode = None
+        
+    async def mock_exec_server(*cmd, **kwargs):
+        captured_server_cmd.extend(cmd)
+        return DummyProc()
+        
+    async def mock_exec_client(*cmd, **kwargs):
+        captured_client_cmd.extend(cmd)
+        return DummyProc()
+    
+    # 1. Server mode test
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec_server)
+    server_spec = {
+        "mode": "server",
+        "control_port": 26500,
+        "auth": "secret_token",
+        "ports": [8080]
+    }
+    await adapter.apply("chisel-srv", server_spec)
+    assert "--port" in captured_server_cmd
+    assert "26500" in captured_server_cmd
+    assert "--auth" in captured_server_cmd
+    assert "secret_token" in captured_server_cmd
+    assert "--reverse" in captured_server_cmd
+    await adapter.remove("chisel-srv")
+    
+    # 2. Client mode with UDP test
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec_client)
+    client_spec = {
+        "mode": "client",
+        "server_url": "http://1.1.1.1:26500",
+        "auth": "secret_token",
+        "ports": [8080],
+        "tunnel_type": "tcp+udp"
+    }
+    await adapter.apply("chisel-cli", client_spec)
+    assert "R:8080:127.0.0.1:8080" in captured_client_cmd
+    assert "R:8080:127.0.0.1:8080/udp" in captured_client_cmd
+    assert "--auth" in captured_client_cmd
+    assert "secret_token" in captured_client_cmd
+    await adapter.remove("chisel-cli")
+
+
+@pytest.mark.asyncio
+async def test_frp_adapter_dual_stack_tcp_udp(monkeypatch, tmp_path):
+    """Test FrpAdapter generates both TCP and UDP proxy sections when type is tcp+udp."""
+    adapter = FrpAdapter()
+    adapter.config_dir = tmp_path
+    
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/frpc"))
+    
+    class DummyProc:
+        pid = 1237
+        returncode = None
+        
+    async def mock_exec(*cmd, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    client_spec = {
+        "mode": "client",
+        "server_addr": "1.1.1.1",
+        "server_port": 7000,
+        "token": "frp-secret",
+        "type": "tcp+udp",
+        "ports": [{"local": 8080, "remote": 8080}]
+    }
+    await adapter.apply("frp-dual", client_spec)
+    cfg = (tmp_path / "frpc_frp-dual.yaml").read_text(encoding="utf-8")
+    assert "name: frp-dual_tcp" in cfg
+    assert "type: tcp" in cfg
+    assert "name: frp-dual_udp" in cfg
+    assert "type: udp" in cfg
+    await adapter.remove("frp-dual")
+
+
+@pytest.mark.asyncio
+async def test_gost_adapter_unique_service_names(monkeypatch, tmp_path):
+    """Test GostAdapter formats unique service names containing tunnel_id to prevent collision."""
+    import json
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+    
+    class DummyProc:
+        pid = 1238
+        returncode = None
+        
+    async def mock_exec(*cmd, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    spec = {
+        "mode": "client",
+        "server_ip": "1.1.1.1",
+        "control_port": 28000,
+        "ports": [8080],
+        "type": "tcp+udp"
+    }
+    await adapter.apply("tun-gost-xyz", spec)
+    cfg_data = json.loads((tmp_path / "tun-gost-xyz.json").read_text(encoding="utf-8"))
+    
+    service_names = [s["name"] for s in cfg_data["services"]]
+    assert "tcp-in-8080-tun-gost-xyz" in service_names
+    assert "udp-in-8080-tun-gost-xyz" in service_names
+    await adapter.remove("tun-gost-xyz")
+
 

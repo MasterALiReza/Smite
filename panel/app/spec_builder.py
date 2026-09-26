@@ -359,15 +359,23 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     first_port = ports[0] if ports else 8080
     server_control_port = server_spec.get("control_port") or (int(first_port) + 10000 + (port_hash % 1000))
     server_spec["server_port"] = server_control_port
+    server_spec["control_port"] = server_control_port
     server_spec["reverse_port"] = first_port
+    server_spec["ports"] = ports
 
-    auth = server_spec.get("auth")
+    auth = server_spec.get("auth") or server_spec.get("token") or server_spec.get("auth_token")
     if not auth:
         from app.utils import generate_token
         auth = generate_token()
-        server_spec["auth"] = auth
-        if tunnel.spec is not None:
-            tunnel.spec["auth"] = auth
+    server_spec["auth"] = auth
+    server_spec["auth_token"] = auth
+    server_spec["token"] = auth
+    if tunnel.spec is not None:
+        tunnel.spec["auth"] = auth
+        tunnel.spec["auth_token"] = auth
+        tunnel.spec["token"] = auth
+        tunnel.spec["control_port"] = server_control_port
+        tunnel.spec["ports"] = ports
 
     fingerprint = server_spec.get("fingerprint")
     if fingerprint:
@@ -376,9 +384,13 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
 
     host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
     client_spec["server_url"] = f"http://{host_part}:{server_control_port}"
+    client_spec["server_port"] = server_control_port
+    client_spec["control_port"] = server_control_port
     client_spec["reverse_port"] = first_port
     client_spec["ports"] = ports
     client_spec["auth"] = auth
+    client_spec["auth_token"] = auth
+    client_spec["token"] = auth
 
     return server_spec, client_spec
 
@@ -432,9 +444,12 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["use_encryption"] = use_encryption
     client_spec["use_compression"] = use_compression
 
-    tunnel_type = tunnel.type.lower() if tunnel.type else "tcp"
-    if tunnel_type not in ["tcp", "udp"]:
+    tunnel_type = (getattr(tunnel, "type", None) or getattr(tunnel, "tunnel_type", None) or server_spec.get("tunnel_type") or server_spec.get("type") or "tcp").lower()
+    if tunnel_type not in ["tcp", "udp", "tcp+udp"]:
         tunnel_type = "tcp"
+    server_spec["tunnel_type"] = tunnel_type
+    server_spec["type"] = tunnel_type
+    client_spec["tunnel_type"] = tunnel_type
     client_spec["type"] = tunnel_type
     local_ip = server_spec.get("local_ip") or "127.0.0.1"
     client_spec["local_ip"] = local_ip

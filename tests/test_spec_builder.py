@@ -119,8 +119,13 @@ def test_spec_builder_chisel():
     assert server_spec["mode"] == "server"
     assert client_spec["mode"] == "client"
     assert server_spec["reverse_port"] == 9000
-    assert "http://1.1.1.1:" in client_spec["server_url"]
+    assert server_spec["control_port"] == server_spec["server_port"]
+    assert client_spec["control_port"] == server_spec["control_port"]
+    assert f"http://1.1.1.1:{server_spec['control_port']}" == client_spec["server_url"]
+    assert server_spec["auth"] == "user:pass"
+    assert server_spec["token"] == "user:pass"
     assert client_spec["auth"] == "user:pass"
+    assert client_spec["token"] == "user:pass"
 
 
 def test_spec_builder_frp():
@@ -137,6 +142,21 @@ def test_spec_builder_frp():
     assert client_spec["server_addr"] == "1.1.1.1"
     assert client_spec["token"] == "frp-secret"
     assert client_spec["ports"] == [{"local": 443, "remote": 443}]
+
+
+def test_spec_builder_frp_tcp_udp():
+    tunnel = DummyTunnel(
+        id="t-frp-dual",
+        core="frp",
+        type="tcp+udp",
+        spec={"ports": [8080], "token": "frp-dual-secret"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert server_spec["tunnel_type"] == "tcp+udp"
+    assert server_spec["type"] == "tcp+udp"
+    assert client_spec["tunnel_type"] == "tcp+udp"
+    assert client_spec["type"] == "tcp+udp"
 
 
 def test_spec_builder_gost_deterministic_distinct_ports():
