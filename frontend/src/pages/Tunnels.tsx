@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -1877,7 +1877,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[100] p-3.5 sm:p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-md max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">
             Edit Tunnel: {tunnel.name}
@@ -2336,296 +2336,488 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           {/* Advanced GOST Settings */}
           {tunnel.core === 'gost' && (
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">Advanced GOST Settings</h4>
-                <span className="text-xs px-2 py-0.5 rounded font-mono bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300">GOST v3.0</span>
-              </div>
-
-              {/* Quick Presets */}
-              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800/40 rounded-lg border border-gray-200/80 dark:border-gray-700">
-                <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">One-Click Presets:</p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'grpc',
-                        security_type: 'utls',
-                        utls_fingerprint: 'chrome',
-                        stealth_domain: 'www.google.com'
-                      }));
-                      showToast('info', 'Preset Applied', 'Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition-colors"
-                  >
-                    🛡️ Stealth (gRPC + uTLS)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'quic',
-                        security_type: 'tls',
-                        gaming_mode: true
-                      }));
-                      showToast('info', 'Preset Applied', 'Ultra-Low Latency (QUIC UDP) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 transition-colors"
-                  >
-                    ⚡ Fast UDP (QUIC / Gaming)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'kcp',
-                        security_type: 'none',
-                        gaming_mode: true
-                      }));
-                      showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors"
-                  >
-                    🚀 Anti-Loss (KCP)
-                  </button>
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-purple-50/60 via-gray-50 to-blue-50/40 dark:from-purple-950/20 dark:via-gray-800/60 dark:to-blue-950/20 border border-purple-200/70 dark:border-purple-900/40 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-gray-200/70 dark:border-gray-700/70">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300">
+                      <Zap size={16} />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
+                        Advanced GOST Settings
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Next-Gen Anti-DPI & High-Performance Routing Core
+                      </p>
+                    </div>
+                  </div>
+                  <span className="self-start sm:self-auto text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-purple-100/80 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                    GOST v3.0 Core
+                  </span>
                 </div>
-              </div>
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                {/* Quick Presets Grid */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <span>⚡</span> Quick Presets (1-Click Optimization)
+                    </span>
+                    <span className="text-[11px] text-gray-400 dark:text-gray-500">Auto-configures transport & security</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'grpc',
+                          security_type: 'utls',
+                          utls_fingerprint: 'chrome',
+                          stealth_domain: 'www.google.com',
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '🛡️ Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'grpc' && formData.security_type === 'utls'
+                          ? 'bg-purple-100/80 dark:bg-purple-900/50 border-purple-400 dark:border-purple-500 ring-2 ring-purple-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-purple-50 dark:hover:bg-purple-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">🛡️</span>
+                        <span className="text-xs font-bold text-purple-700 dark:text-purple-300">Stealth Anti-DPI</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        gRPC + uTLS Chrome. Bypasses deep packet inspection.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'quic',
+                          security_type: 'tls',
+                          gaming_mode: true,
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '⚡ Ultra-Low Ping (QUIC HTTP/3) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'quic'
+                          ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">⚡</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        QUIC / HTTP/3. Fast 0-RTT UDP for gaming & streaming.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'kcp',
+                          security_type: 'none',
+                          gaming_mode: true,
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '🚀 Anti-Packet-Loss (KCP ARQ) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'kcp'
+                          ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">🚀</span>
+                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Anti-Packet-Loss</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        KCP ARQ. Aggressive retransmission for bad networks.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Transport & Security Selects */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start pt-1">
                   <div>
-                    <div className="flex items-center justify-between mb-1 h-5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Transport Type</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                        Transport Protocol
+                      </label>
+                      <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                        {formData.transport_type}
+                      </span>
                     </div>
                     <select
                       value={formData.transport_type}
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
                     >
                       <option value="tcp">TCP (Standard)</option>
                       <option value="ws">WebSocket (WS)</option>
                       <option value="mws">Multiplex WS (MWS)</option>
-                      <option value="quic">QUIC / HTTP/3 (Fast UDP, 0-RTT)</option>
-                      <option value="grpc">gRPC (Multiplexed Stealth API)</option>
+                      <option value="quic">QUIC (HTTP/3 UDP, 0-RTT)</option>
+                      <option value="grpc">gRPC (Multiplexed Stealth)</option>
                       <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
-                      <option value="ssh">SSH Tunnel (Native Encrypted)</option>
+                      <option value="ssh">SSH (Encrypted Subsystem)</option>
                     </select>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                      {formData.transport_type === 'quic' && '⚡ 0-RTT fast UDP handshake. Resilient to packet loss.'}
+                      {formData.transport_type === 'grpc' && '🛡️ Multiplexed HTTP/2. Mimics legitimate enterprise API traffic.'}
+                      {formData.transport_type === 'kcp' && '🚀 Aggressive ARQ UDP. Ideal for high packet-loss links.'}
+                      {formData.transport_type === 'ws' && '🌐 Standard WebSocket. Compatible with CDN proxies.'}
+                      {formData.transport_type === 'mws' && '📦 Multiplexed WebSocket. Bundles multiple TCP streams.'}
+                      {formData.transport_type === 'tcp' && '🔌 Direct raw TCP socket tunnel.'}
+                      {formData.transport_type === 'ssh' && '🔒 Native SSH subsystem encrypted protocol.'}
+                    </p>
                   </div>
+
                   <div>
-                    <div className="flex items-center justify-between mb-1 h-5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Security Type</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                        Security / Encryption
+                      </label>
+                      <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                        {formData.security_type}
+                      </span>
                     </div>
                     <select
                       value={formData.security_type}
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
                     >
-                      <option value="none">None (Plaintext)</option>
-                      <option value="tls">TLS (Standard)</option>
-                      <option value="utls">uTLS (Browser Fingerprint Spoofing)</option>
+                      <option value="none">None (Plaintext / Low Overhead)</option>
+                      <option value="tls">TLS (Standard Encryption)</option>
+                      <option value="utls">uTLS (Browser Spoofing Anti-DPI)</option>
                     </select>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                      {formData.security_type === 'none' && '💨 No TLS wrapper. Lowest CPU overhead.'}
+                      {formData.security_type === 'tls' && '🔐 Standard TLS 1.3 handshake encryption.'}
+                      {formData.security_type === 'utls' && '🎭 Camouflages ClientHello to impersonate real browsers.'}
+                    </p>
                   </div>
                 </div>
 
+                {/* uTLS Fingerprint Card */}
                 {formData.security_type === 'utls' && (
-                  <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900/40">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">uTLS Browser Fingerprint</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mimic exact TLS ClientHello fingerprint of major browsers</p>
+                  <div className="p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/50 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                        <span>🎭</span> uTLS Client Fingerprint
+                      </label>
+                      <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-indigo-200/60 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300">
+                        Anti-DPI Spoofing
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
+                      Replicates exact TLS cipher suites, extensions, and curves of legitimate web browsers:
+                    </p>
                     <select
                       value={formData.utls_fingerprint || 'chrome'}
                       onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 font-medium"
                     >
-                      <option value="chrome">Google Chrome (Recommended)</option>
+                      <option value="chrome">Google Chrome (Recommended - Highest Compatibility)</option>
                       <option value="firefox">Mozilla Firefox</option>
                       <option value="ios">Apple iOS Safari</option>
                       <option value="android">Android Chrome</option>
                       <option value="edge">Microsoft Edge</option>
-                      <option value="randomized">Randomized (Rotates per connection)</option>
+                      <option value="randomized">Randomized (Rotates browser signature per connection)</option>
                     </select>
                   </div>
                 )}
 
-                <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Failover & Additional Foreign IPs</label>
-                    {formData.failover_ips && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                {/* Failover IPs & Selector Strategy */}
+                <div className="p-3.5 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                        <span>🌐</span> Failover & Additional Foreign Endpoints
+                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Add secondary foreign IPs for automatic high-availability failover or load balancing (one per line)
+                      </p>
+                    </div>
+                    {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
+                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 shrink-0">
                         Multi-Node Active
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to or load-balance across (One per line)</p>
                   <textarea
                     value={formData.failover_ips}
                     onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="1.2.3.4&#10;5.6.7.8"
+                    className="w-full px-3 py-2 text-sm sm:text-xs font-mono rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20"
+                    placeholder={"1.2.3.4\n5.6.7.8"}
                     rows={2}
                   />
 
                   {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Load Balancing / Failover Strategy</label>
+                    <div className="pt-2 border-t border-gray-200/80 dark:border-gray-700/80 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                          <span>⚖️</span> Load Balancing / Failover Strategy
+                        </label>
+                        <span className="text-[11px] font-mono text-gray-400">
+                          {formData.selector_strategy || 'fifo'}
+                        </span>
+                      </div>
                       <select
                         value={formData.selector_strategy || 'fifo'}
                         onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 font-medium"
                       >
-                        <option value="fifo">Failover (FIFO - Primary first, backup on failure)</option>
+                        <option value="fifo">FIFO Failover (Primary first, fallback to backup IPs)</option>
                         <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
                         <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
-                        <option value="rand">Random (Random distribution)</option>
+                        <option value="rand">Random (Random distribution across nodes)</option>
                       </select>
                     </div>
                   )}
                 </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Iran node will act as a client and connect to the foreign server</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.is_reverse} onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
 
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">CDN Mode</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Optimize traffic for CDN / Cloudflare</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.cdn_mode} onChange={(e) => {
-                      const isChecked = e.target.checked;
-                      const updates: any = { cdn_mode: isChecked };
-                      if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
-                        updates.transport_type = 'ws';
-                        showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Transport type auto-switched to WS.')
-                      }
-                      setFormData({...formData, ...updates});
-                    }} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Gaming Mode (Mux)</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Enable multiplexing (Yamux) to reduce latency</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.gaming_mode} onChange={(e) => setFormData({...formData, gaming_mode: e.target.checked})} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-
-                {/* Security & Traffic Limits */}
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider text-red-500">Security & Limits</h4>
-                  <div className="space-y-4">
-                    
-                    {/* IP Whitelist Toggle */}
-                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div>
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">IP Whitelist (ACL)</label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Restrict access to specific IPs (One per line)</p>
+                {/* Mode Switches */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🔄</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={formData.allowed_ips_enabled} onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})} />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Iran connects to foreign
+                      </p>
                     </div>
-                    {formData.allowed_ips_enabled && (
-                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
-                        <textarea
-                          value={formData.allowed_ips}
-                          onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                          placeholder="192.168.1.1&#10;10.0.0.0/24"
-                          rows={3}
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.is_reverse}
+                      onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🌐</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">CDN Mode</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Cloudflare / WS proxy
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.cdn_mode}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        const updates: any = { cdn_mode: isChecked };
+                        if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
+                          updates.transport_type = 'ws';
+                          showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Auto-switched to WS.')
+                        }
+                        setFormData({...formData, ...updates});
+                      }}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🎮</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">Gaming (Mux)</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Yamux lower ping
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.gaming_mode}
+                      onChange={(e) => setFormData({...formData, gaming_mode: e.target.checked})}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+                </div>
+
+                {/* Security, Limits & KeepAlive Tuning */}
+                <div className="pt-3 border-t border-gray-200/80 dark:border-gray-700/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <span>🛡️</span> Security & Network Guard
+                    </h5>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* KeepAlive Interval Card */}
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1">
+                          <span>💓</span> KeepAlive (Anti-Drop)
+                        </label>
+                        <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+                          {formData.keepalive_interval || 15}s
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                        Probe interval to keep stateful NAT firewalls alive
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="5"
+                          max="120"
+                          value={formData.keepalive_interval || 15}
+                          onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
+                          className="w-20 px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                         />
-                      </div>
-                    )}
-
-                    {/* Rate Limit Toggle */}
-                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div>
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Bandwidth Limit (Client-side)</label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Limit speed per connection to save server bandwidth</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={formData.rate_limit_enabled} onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})} />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-                    {formData.rate_limit_enabled && (
-                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={formData.rate_limit_mbps}
-                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g. 5"
-                            min="0.1"
-                            step="0.1"
-                          />
-                          <span className="text-sm text-gray-600 dark:text-gray-400">Mbps</span>
+                        <div className="flex items-center gap-1">
+                          {[10, 15, 30].map(sec => (
+                            <button
+                              key={sec}
+                              type="button"
+                              onClick={() => setFormData({...formData, keepalive_interval: sec})}
+                              className={`text-[10px] font-mono px-2 py-1 rounded-md border transition-all cursor-pointer ${
+                                (formData.keepalive_interval || 15) === sec
+                                  ? 'bg-blue-600 text-white border-blue-600 font-bold'
+                                  : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-100'
+                              }`}
+                            >
+                              {sec}s
+                            </button>
+                          ))}
                         </div>
                       </div>
-                    )}
+                    </div>
 
-                    {/* Stealth Domain */}
-                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Stealth SNI (TLS Spoofing)</label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mask your traffic as a legitimate website</p>
+                    {/* Stealth Domain Card */}
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1 mb-1">
+                        <span>🕵️</span> Stealth SNI (TLS Spoof)
+                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                        Mask traffic as legitimate website
+                      </p>
                       <input
                         type="text"
                         value={formData.stealth_domain}
                         onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                         placeholder="e.g. www.google.com"
                       />
                     </div>
+                  </div>
 
-                    {/* KeepAlive Interval */}
-                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">KeepAlive Interval (Anti-Drop)</label>
-                        <span className="text-xs text-blue-600 dark:text-blue-400 font-mono">{formData.keepalive_interval || 15}s</span>
+                  {/* IP Whitelist & Rate Limit Toggles */}
+                  <div className="space-y-2">
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                            <span>🛡️</span> IP Whitelist (ACL)
+                          </label>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Restrict tunnel access to specific IP ranges
+                          </p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={formData.allowed_ips_enabled}
+                            onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})}
+                          />
+                          <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                        </label>
                       </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Probe interval in seconds to keep stateful NAT firewalls alive</p>
-                      <input
-                        type="number"
-                        min="5"
-                        max="120"
-                        value={formData.keepalive_interval || 15}
-                        onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="15"
-                      />
+                      {formData.allowed_ips_enabled && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-200/80 dark:border-gray-700/80">
+                          <textarea
+                            value={formData.allowed_ips}
+                            onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
+                            className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder={"192.168.1.1\n10.0.0.0/24"}
+                            rows={2}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                            <span>⚡</span> Bandwidth Rate Limit
+                          </label>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Throttle client speed per connection
+                          </p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={formData.rate_limit_enabled}
+                            onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})}
+                          />
+                          <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                        </label>
+                      </div>
+                      {formData.rate_limit_enabled && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-200/80 dark:border-gray-700/80 flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={formData.rate_limit_mbps}
+                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
+                            className="w-24 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder="5"
+                            min="0.1"
+                            step="0.1"
+                          />
+                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Mbps</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
 
+                {/* CDN Mode Extra Options */}
                 {formData.cdn_mode && (
-                  <div className="grid grid-cols-1 gap-4 p-4 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-gray-100 dark:border-gray-700 mt-2">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Custom Host (Metadata)</label>
-                      <input type="text" value={formData.custom_host} onChange={(e) => setFormData({...formData, custom_host: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="e.g. speedtest.net" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Custom SNI</label>
-                      <input type="text" value={formData.custom_sni} onChange={(e) => setFormData({...formData, custom_sni: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="e.g. speedtest.net" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">WebSocket Path</label>
-                      <input type="text" value={formData.ws_path} onChange={(e) => setFormData({...formData, ws_path: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="/graphql" />
+                  <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-900/50 space-y-2.5">
+                    <label className="text-xs font-bold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                      <span>🌐</span> CDN / WebSocket Configuration
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">Custom Host</label>
+                        <input type="text" value={formData.custom_host} onChange={(e) => setFormData({...formData, custom_host: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="e.g. speedtest.net" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">Custom SNI</label>
+                        <input type="text" value={formData.custom_sni} onChange={(e) => setFormData({...formData, custom_sni: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="e.g. speedtest.net" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">WS Path</label>
+                        <input type="text" value={formData.ws_path} onChange={(e) => setFormData({...formData, ws_path: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="/graphql" />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -3104,7 +3296,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[100] p-3.5 sm:p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[90dvh] overflow-y-auto shadow-2xl border border-gray-200/80 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-200">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.tunnels.createTunnel}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
@@ -3643,293 +3835,488 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           {/* Advanced GOST Settings */}
           {formData.core === 'gost' && (
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">Advanced GOST Settings</h4>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-xs text-gray-500 dark:text-gray-400 mr-1">Presets:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'grpc',
-                        security_type: 'utls',
-                        utls_fingerprint: 'chrome',
-                        keepalive_interval: 15
-                      }));
-                      showToast('info', 'Preset Applied', 'Stealth Mode (gRPC + uTLS Chrome) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition-colors"
-                  >
-                    🛡️ Stealth (gRPC + uTLS)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'quic',
-                        security_type: 'tls',
-                        gaming_mode: true,
-                        keepalive_interval: 15
-                      }));
-                      showToast('info', 'Preset Applied', 'Ultra-Low Latency (QUIC UDP) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 transition-colors"
-                  >
-                    ⚡ Fast UDP (QUIC / Gaming)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        transport_type: 'kcp',
-                        security_type: 'none',
-                        gaming_mode: true,
-                        keepalive_interval: 15
-                      }));
-                      showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors"
-                  >
-                    🚀 Anti-Loss (KCP)
-                  </button>
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-purple-50/60 via-gray-50 to-blue-50/40 dark:from-purple-950/20 dark:via-gray-800/60 dark:to-blue-950/20 border border-purple-200/70 dark:border-purple-900/40 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-gray-200/70 dark:border-gray-700/70">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300">
+                      <Zap size={16} />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
+                        Advanced GOST Settings
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Next-Gen Anti-DPI & High-Performance Routing Core
+                      </p>
+                    </div>
+                  </div>
+                  <span className="self-start sm:self-auto text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-purple-100/80 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                    GOST v3.0 Core
+                  </span>
                 </div>
-              </div>
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                {/* Quick Presets Grid */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <span>⚡</span> Quick Presets (1-Click Optimization)
+                    </span>
+                    <span className="text-[11px] text-gray-400 dark:text-gray-500">Auto-configures transport & security</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'grpc',
+                          security_type: 'utls',
+                          utls_fingerprint: 'chrome',
+                          stealth_domain: 'www.google.com',
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '🛡️ Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'grpc' && formData.security_type === 'utls'
+                          ? 'bg-purple-100/80 dark:bg-purple-900/50 border-purple-400 dark:border-purple-500 ring-2 ring-purple-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-purple-50 dark:hover:bg-purple-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">🛡️</span>
+                        <span className="text-xs font-bold text-purple-700 dark:text-purple-300">Stealth Anti-DPI</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        gRPC + uTLS Chrome. Bypasses deep packet inspection.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'quic',
+                          security_type: 'tls',
+                          gaming_mode: true,
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '⚡ Ultra-Low Ping (QUIC HTTP/3) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'quic'
+                          ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">⚡</span>
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        QUIC / HTTP/3. Fast 0-RTT UDP for gaming & streaming.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          transport_type: 'kcp',
+                          security_type: 'none',
+                          gaming_mode: true,
+                          keepalive_interval: 15
+                        }));
+                        showToast('info', 'Preset Applied', '🚀 Anti-Packet-Loss (KCP ARQ) applied');
+                      }}
+                      className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        formData.transport_type === 'kcp'
+                          ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
+                          : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-base">🚀</span>
+                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Anti-Packet-Loss</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                        KCP ARQ. Aggressive retransmission for bad networks.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Transport & Security Selects */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start pt-1">
                   <div>
-                    <div className="flex items-center justify-between mb-1 h-5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Transport Type</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                        Transport Protocol
+                      </label>
+                      <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                        {formData.transport_type}
+                      </span>
                     </div>
                     <select
                       value={formData.transport_type}
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
                     >
                       <option value="tcp">TCP (Standard)</option>
                       <option value="ws">WebSocket (WS)</option>
                       <option value="mws">Multiplex WS (MWS)</option>
-                      <option value="quic">QUIC / HTTP/3 (Fast UDP, 0-RTT)</option>
-                      <option value="grpc">gRPC (Multiplexed Stealth API)</option>
+                      <option value="quic">QUIC (HTTP/3 UDP, 0-RTT)</option>
+                      <option value="grpc">gRPC (Multiplexed Stealth)</option>
                       <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
-                      <option value="ssh">SSH Tunnel (Native Encrypted)</option>
+                      <option value="ssh">SSH (Encrypted Subsystem)</option>
                     </select>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                      {formData.transport_type === 'quic' && '⚡ 0-RTT fast UDP handshake. Resilient to packet loss.'}
+                      {formData.transport_type === 'grpc' && '🛡️ Multiplexed HTTP/2. Mimics legitimate enterprise API traffic.'}
+                      {formData.transport_type === 'kcp' && '🚀 Aggressive ARQ UDP. Ideal for high packet-loss links.'}
+                      {formData.transport_type === 'ws' && '🌐 Standard WebSocket. Compatible with CDN proxies.'}
+                      {formData.transport_type === 'mws' && '📦 Multiplexed WebSocket. Bundles multiple TCP streams.'}
+                      {formData.transport_type === 'tcp' && '🔌 Direct raw TCP socket tunnel.'}
+                      {formData.transport_type === 'ssh' && '🔒 Native SSH subsystem encrypted protocol.'}
+                    </p>
                   </div>
+
                   <div>
-                    <div className="flex items-center justify-between mb-1 h-5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Security Type</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                        Security / Encryption
+                      </label>
+                      <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                        {formData.security_type}
+                      </span>
                     </div>
                     <select
                       value={formData.security_type}
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
                     >
-                      <option value="none">None (Plaintext)</option>
-                      <option value="tls">TLS (Standard)</option>
-                      <option value="utls">uTLS (Browser Fingerprint Spoofing)</option>
+                      <option value="none">None (Plaintext / Low Overhead)</option>
+                      <option value="tls">TLS (Standard Encryption)</option>
+                      <option value="utls">uTLS (Browser Spoofing Anti-DPI)</option>
                     </select>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                      {formData.security_type === 'none' && '💨 No TLS wrapper. Lowest CPU overhead.'}
+                      {formData.security_type === 'tls' && '🔐 Standard TLS 1.3 handshake encryption.'}
+                      {formData.security_type === 'utls' && '🎭 Camouflages ClientHello to impersonate real browsers.'}
+                    </p>
                   </div>
                 </div>
 
+                {/* uTLS Fingerprint Card */}
                 {formData.security_type === 'utls' && (
-                  <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900/40">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">uTLS Browser Fingerprint</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mimic exact TLS ClientHello fingerprint of major browsers</p>
+                  <div className="p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/50 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                        <span>🎭</span> uTLS Client Fingerprint
+                      </label>
+                      <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-indigo-200/60 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300">
+                        Anti-DPI Spoofing
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
+                      Replicates exact TLS cipher suites, extensions, and curves of legitimate web browsers:
+                    </p>
                     <select
                       value={formData.utls_fingerprint || 'chrome'}
                       onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 font-medium"
                     >
-                      <option value="chrome">Google Chrome (Recommended)</option>
+                      <option value="chrome">Google Chrome (Recommended - Highest Compatibility)</option>
                       <option value="firefox">Mozilla Firefox</option>
                       <option value="ios">Apple iOS Safari</option>
                       <option value="android">Android Chrome</option>
                       <option value="edge">Microsoft Edge</option>
-                      <option value="randomized">Randomized (Rotates per connection)</option>
+                      <option value="randomized">Randomized (Rotates browser signature per connection)</option>
                     </select>
                   </div>
                 )}
 
-                <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Failover & Additional Foreign IPs</label>
-                    {formData.failover_ips && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                {/* Failover IPs & Selector Strategy */}
+                <div className="p-3.5 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                        <span>🌐</span> Failover & Additional Foreign Endpoints
+                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Add secondary foreign IPs for automatic high-availability failover or load balancing (one per line)
+                      </p>
+                    </div>
+                    {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
+                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 shrink-0">
                         Multi-Node Active
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to or load-balance across (One per line)</p>
                   <textarea
                     value={formData.failover_ips}
                     onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="1.2.3.4&#10;5.6.7.8"
+                    className="w-full px-3 py-2 text-sm sm:text-xs font-mono rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20"
+                    placeholder={"1.2.3.4\n5.6.7.8"}
                     rows={2}
                   />
 
                   {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Load Balancing / Failover Strategy</label>
+                    <div className="pt-2 border-t border-gray-200/80 dark:border-gray-700/80 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                          <span>⚖️</span> Load Balancing / Failover Strategy
+                        </label>
+                        <span className="text-[11px] font-mono text-gray-400">
+                          {formData.selector_strategy || 'fifo'}
+                        </span>
+                      </div>
                       <select
                         value={formData.selector_strategy || 'fifo'}
                         onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 font-medium"
                       >
-                        <option value="fifo">Failover (FIFO - Primary first, backup on failure)</option>
+                        <option value="fifo">FIFO Failover (Primary first, fallback to backup IPs)</option>
                         <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
                         <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
-                        <option value="rand">Random (Random distribution)</option>
+                        <option value="rand">Random (Random distribution across nodes)</option>
                       </select>
                     </div>
                   )}
                 </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Reverse Tunnel Mode</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Iran node will act as a client and connect to the foreign server</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.is_reverse} onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
 
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">CDN Mode</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Optimize traffic for CDN / Cloudflare</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.cdn_mode} onChange={(e) => {
-                      const isChecked = e.target.checked;
-                      const updates: any = { cdn_mode: isChecked };
-                      if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
-                        updates.transport_type = 'ws';
-                        showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Transport type auto-switched to WS.')
-                      }
-                      setFormData({...formData, ...updates});
-                    }} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Gaming Mode (Mux)</label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Enable multiplexing (Yamux) to reduce latency</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={formData.gaming_mode} onChange={(e) => setFormData({...formData, gaming_mode: e.target.checked})} />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-
-                {/* Security & Traffic Limits */}
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider text-red-500">Security & Limits</h4>
-                  <div className="space-y-4">
-                    
-                    {/* IP Whitelist Toggle */}
-                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div>
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">IP Whitelist (ACL)</label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Restrict access to specific IPs (One per line)</p>
+                {/* Mode Switches */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🔄</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={formData.allowed_ips_enabled} onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})} />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Iran connects to foreign
+                      </p>
                     </div>
-                    {formData.allowed_ips_enabled && (
-                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
-                        <textarea
-                          value={formData.allowed_ips}
-                          onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                          placeholder="192.168.1.1&#10;10.0.0.0/24"
-                          rows={3}
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.is_reverse}
+                      onChange={(e) => setFormData({...formData, is_reverse: e.target.checked})}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🌐</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">CDN Mode</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Cloudflare / WS proxy
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.cdn_mode}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        const updates: any = { cdn_mode: isChecked };
+                        if (isChecked && ['tcp', 'udp', 'tcp+udp'].includes(formData.transport_type)) {
+                          updates.transport_type = 'ws';
+                          showToast('info', 'Transport Switched', 'CDN mode requires WebSocket transport. Auto-switched to WS.')
+                        }
+                        setFormData({...formData, ...updates});
+                      }}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+
+                  <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                    <div className="pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm">🎮</span>
+                        <span className="text-xs font-bold text-gray-900 dark:text-white">Gaming (Mux)</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                        Yamux lower ping
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={formData.gaming_mode}
+                      onChange={(e) => setFormData({...formData, gaming_mode: e.target.checked})}
+                    />
+                    <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                  </label>
+                </div>
+
+                {/* Security, Limits & KeepAlive Tuning */}
+                <div className="pt-3 border-t border-gray-200/80 dark:border-gray-700/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <span>🛡️</span> Security & Network Guard
+                    </h5>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* KeepAlive Interval Card */}
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1">
+                          <span>💓</span> KeepAlive (Anti-Drop)
+                        </label>
+                        <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+                          {formData.keepalive_interval || 15}s
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                        Probe interval to keep stateful NAT firewalls alive
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="5"
+                          max="120"
+                          value={formData.keepalive_interval || 15}
+                          onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
+                          className="w-20 px-2.5 py-1.5 text-xs font-mono font-semibold rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                         />
-                      </div>
-                    )}
-
-                    {/* Rate Limit Toggle */}
-                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div>
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Bandwidth Limit (Client-side)</label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Limit speed per connection to save server bandwidth</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={formData.rate_limit_enabled} onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})} />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-                    {formData.rate_limit_enabled && (
-                      <div className="mt-2 pl-2 border-l-2 border-blue-500">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={formData.rate_limit_mbps}
-                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g. 5"
-                            min="0.1"
-                            step="0.1"
-                          />
-                          <span className="text-sm text-gray-600 dark:text-gray-400">Mbps</span>
+                        <div className="flex items-center gap-1">
+                          {[10, 15, 30].map(sec => (
+                            <button
+                              key={sec}
+                              type="button"
+                              onClick={() => setFormData({...formData, keepalive_interval: sec})}
+                              className={`text-[10px] font-mono px-2 py-1 rounded-md border transition-all cursor-pointer ${
+                                (formData.keepalive_interval || 15) === sec
+                                  ? 'bg-blue-600 text-white border-blue-600 font-bold'
+                                  : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-100'
+                              }`}
+                            >
+                              {sec}s
+                            </button>
+                          ))}
                         </div>
                       </div>
-                    )}
+                    </div>
 
-                    {/* Stealth Domain */}
-                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Stealth SNI (TLS Spoofing)</label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mask your traffic as a legitimate website</p>
+                    {/* Stealth Domain Card */}
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1 mb-1">
+                        <span>🕵️</span> Stealth SNI (TLS Spoof)
+                      </label>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                        Mask traffic as legitimate website
+                      </p>
                       <input
                         type="text"
                         value={formData.stealth_domain}
                         onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                         placeholder="e.g. www.google.com"
                       />
                     </div>
+                  </div>
 
-                    {/* KeepAlive Interval */}
-                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">KeepAlive Interval (Anti-Drop)</label>
-                        <span className="text-xs text-blue-600 dark:text-blue-400 font-mono">{formData.keepalive_interval || 15}s</span>
+                  {/* IP Whitelist & Rate Limit Toggles */}
+                  <div className="space-y-2">
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                            <span>🛡️</span> IP Whitelist (ACL)
+                          </label>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Restrict tunnel access to specific IP ranges
+                          </p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={formData.allowed_ips_enabled}
+                            onChange={(e) => setFormData({...formData, allowed_ips_enabled: e.target.checked})}
+                          />
+                          <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                        </label>
                       </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Probe interval in seconds to keep stateful NAT firewalls alive</p>
-                      <input
-                        type="number"
-                        min="5"
-                        max="120"
-                        value={formData.keepalive_interval || 15}
-                        onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="15"
-                      />
+                      {formData.allowed_ips_enabled && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-200/80 dark:border-gray-700/80">
+                          <textarea
+                            value={formData.allowed_ips}
+                            onChange={(e) => setFormData({...formData, allowed_ips: e.target.value})}
+                            className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder={"192.168.1.1\n10.0.0.0/24"}
+                            rows={2}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                            <span>⚡</span> Bandwidth Rate Limit
+                          </label>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Throttle client speed per connection
+                          </p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={formData.rate_limit_enabled}
+                            onChange={(e) => setFormData({...formData, rate_limit_enabled: e.target.checked})}
+                          />
+                          <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                        </label>
+                      </div>
+                      {formData.rate_limit_enabled && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-200/80 dark:border-gray-700/80 flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={formData.rate_limit_mbps}
+                            onChange={(e) => setFormData({...formData, rate_limit_mbps: e.target.value})}
+                            className="w-24 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder="5"
+                            min="0.1"
+                            step="0.1"
+                          />
+                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Mbps</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
 
+                {/* CDN Mode Extra Options */}
                 {formData.cdn_mode && (
-                  <div className="grid grid-cols-1 gap-4 p-4 bg-gray-50 dark:bg-gray-800/30 rounded-lg border border-gray-100 dark:border-gray-700 mt-2">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Custom Host (Metadata)</label>
-                      <input type="text" value={formData.custom_host} onChange={(e) => setFormData({...formData, custom_host: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="e.g. speedtest.net" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Custom SNI</label>
-                      <input type="text" value={formData.custom_sni} onChange={(e) => setFormData({...formData, custom_sni: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="e.g. speedtest.net" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">WebSocket Path</label>
-                      <input type="text" value={formData.ws_path} onChange={(e) => setFormData({...formData, ws_path: e.target.value})} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500" placeholder="/graphql" />
+                  <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-900/50 space-y-2.5">
+                    <label className="text-xs font-bold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                      <span>🌐</span> CDN / WebSocket Configuration
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">Custom Host</label>
+                        <input type="text" value={formData.custom_host} onChange={(e) => setFormData({...formData, custom_host: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="e.g. speedtest.net" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">Custom SNI</label>
+                        <input type="text" value={formData.custom_sni} onChange={(e) => setFormData({...formData, custom_sni: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="e.g. speedtest.net" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">WS Path</label>
+                        <input type="text" value={formData.ws_path} onChange={(e) => setFormData({...formData, ws_path: e.target.value})} className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" placeholder="/graphql" />
+                      </div>
                     </div>
                   </div>
                 )}
