@@ -1657,6 +1657,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.spec?.custom_sni || '',
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type || 'none',
+    selector_strategy: tunnel.selector_strategy || 'fifo',
+    utls_fingerprint: tunnel.utls_fingerprint || 'chrome',
+    keepalive_interval: tunnel.keepalive_interval || 15,
     failover_ips: tunnel.failover_ips && Array.isArray(tunnel.failover_ips) ? tunnel.failover_ips.join('\n') : '',
     rate_limit_mbps: tunnel.rate_limit_mbps ? tunnel.rate_limit_mbps.toString() : '',
     allowed_ips: tunnel.allowed_ips && Array.isArray(tunnel.allowed_ips) ? tunnel.allowed_ips.join('\n') : '',
@@ -1850,6 +1853,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           is_reverse: formData.is_reverse,
           stealth_domain: formData.stealth_domain || null,
           security_type: formData.security_type,
+          selector_strategy: formData.selector_strategy || 'fifo',
+          utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
+          keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
@@ -2330,7 +2336,64 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           {/* Advanced GOST Settings */}
           {tunnel.core === 'gost' && (
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">Advanced GOST Settings</h4>
+                <span className="text-xs px-2 py-0.5 rounded font-mono bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300">GOST v3.0</span>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800/40 rounded-lg border border-gray-200/80 dark:border-gray-700">
+                <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">One-Click Presets:</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'grpc',
+                        security_type: 'utls',
+                        utls_fingerprint: 'chrome',
+                        stealth_domain: 'www.google.com'
+                      }));
+                      showToast('info', 'Preset Applied', 'Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition-colors"
+                  >
+                    🛡️ Stealth (gRPC + uTLS)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'quic',
+                        security_type: 'tls',
+                        gaming_mode: true
+                      }));
+                      showToast('info', 'Preset Applied', 'Ultra-Low Latency (QUIC UDP) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 transition-colors"
+                  >
+                    ⚡ Fast UDP (QUIC / Gaming)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'kcp',
+                        security_type: 'none',
+                        gaming_mode: true
+                      }));
+                      showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors"
+                  >
+                    🚀 Anti-Loss (KCP)
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
@@ -2342,9 +2405,13 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                     >
-                      <option value="tcp">TCP</option>
+                      <option value="tcp">TCP (Standard)</option>
                       <option value="ws">WebSocket (WS)</option>
                       <option value="mws">Multiplex WS (MWS)</option>
+                      <option value="quic">QUIC / HTTP/3 (Fast UDP, 0-RTT)</option>
+                      <option value="grpc">gRPC (Multiplexed Stealth API)</option>
+                      <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
+                      <option value="ssh">SSH Tunnel (Native Encrypted)</option>
                     </select>
                   </div>
                   <div>
@@ -2356,16 +2423,42 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                     >
-                      <option value="none">None</option>
-                      <option value="tls">TLS</option>
-                      <option value="utls">uTLS (Stealth TLS)</option>
+                      <option value="none">None (Plaintext)</option>
+                      <option value="tls">TLS (Standard)</option>
+                      <option value="utls">uTLS (Browser Fingerprint Spoofing)</option>
                     </select>
                   </div>
                 </div>
 
+                {formData.security_type === 'utls' && (
+                  <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900/40">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">uTLS Browser Fingerprint</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mimic exact TLS ClientHello fingerprint of major browsers</p>
+                    <select
+                      value={formData.utls_fingerprint || 'chrome'}
+                      onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="chrome">Google Chrome (Recommended)</option>
+                      <option value="firefox">Mozilla Firefox</option>
+                      <option value="ios">Apple iOS Safari</option>
+                      <option value="android">Android Chrome</option>
+                      <option value="edge">Microsoft Edge</option>
+                      <option value="randomized">Randomized (Rotates per connection)</option>
+                    </select>
+                  </div>
+                )}
+
                 <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Failover IPs</label>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to if the main IP is blocked (One per line)</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Failover & Additional Foreign IPs</label>
+                    {formData.failover_ips && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                        Multi-Node Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to or load-balance across (One per line)</p>
                   <textarea
                     value={formData.failover_ips}
                     onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
@@ -2373,6 +2466,22 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                     placeholder="1.2.3.4&#10;5.6.7.8"
                     rows={2}
                   />
+
+                  {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Load Balancing / Failover Strategy</label>
+                      <select
+                        value={formData.selector_strategy || 'fifo'}
+                        onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="fifo">Failover (FIFO - Primary first, backup on failure)</option>
+                        <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
+                        <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
+                        <option value="rand">Random (Random distribution)</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
@@ -2481,6 +2590,24 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g. www.google.com"
+                      />
+                    </div>
+
+                    {/* KeepAlive Interval */}
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">KeepAlive Interval (Anti-Drop)</label>
+                        <span className="text-xs text-blue-600 dark:text-blue-400 font-mono">{formData.keepalive_interval || 15}s</span>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Probe interval in seconds to keep stateful NAT firewalls alive</p>
+                      <input
+                        type="number"
+                        min="5"
+                        max="120"
+                        value={formData.keepalive_interval || 15}
+                        onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="15"
                       />
                     </div>
                   </div>
@@ -2647,6 +2774,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     stealth_domain: '',
     transport_type: 'tcp',
     security_type: 'none',
+    selector_strategy: 'fifo',
+    utls_fingerprint: 'chrome',
+    keepalive_interval: 15,
     failover_ips: '',
     rate_limit_mbps: '',
     allowed_ips: '',
@@ -2908,6 +3038,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           stealth_domain: formData.stealth_domain || null,
           transport_type: formData.transport_type,
           security_type: formData.security_type,
+          selector_strategy: formData.selector_strategy || 'fifo',
+          utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
+          keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
@@ -3510,7 +3643,61 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           {/* Advanced GOST Settings */}
           {formData.core === 'gost' && (
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 uppercase tracking-wider">Advanced GOST Settings</h4>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wider">Advanced GOST Settings</h4>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 mr-1">Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'grpc',
+                        security_type: 'utls',
+                        utls_fingerprint: 'chrome',
+                        keepalive_interval: 15
+                      }));
+                      showToast('info', 'Preset Applied', 'Stealth Mode (gRPC + uTLS Chrome) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition-colors"
+                  >
+                    🛡️ Stealth (gRPC + uTLS)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'quic',
+                        security_type: 'tls',
+                        gaming_mode: true,
+                        keepalive_interval: 15
+                      }));
+                      showToast('info', 'Preset Applied', 'Ultra-Low Latency (QUIC UDP) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 transition-colors"
+                  >
+                    ⚡ Fast UDP (QUIC / Gaming)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        transport_type: 'kcp',
+                        security_type: 'none',
+                        gaming_mode: true,
+                        keepalive_interval: 15
+                      }));
+                      showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors"
+                  >
+                    🚀 Anti-Loss (KCP)
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div>
@@ -3522,9 +3709,13 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                     >
-                      <option value="tcp">TCP</option>
+                      <option value="tcp">TCP (Standard)</option>
                       <option value="ws">WebSocket (WS)</option>
                       <option value="mws">Multiplex WS (MWS)</option>
+                      <option value="quic">QUIC / HTTP/3 (Fast UDP, 0-RTT)</option>
+                      <option value="grpc">gRPC (Multiplexed Stealth API)</option>
+                      <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
+                      <option value="ssh">SSH Tunnel (Native Encrypted)</option>
                     </select>
                   </div>
                   <div>
@@ -3536,16 +3727,42 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       onChange={(e) => setFormData({...formData, security_type: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                     >
-                      <option value="none">None</option>
-                      <option value="tls">TLS</option>
-                      <option value="utls">uTLS (Stealth TLS)</option>
+                      <option value="none">None (Plaintext)</option>
+                      <option value="tls">TLS (Standard)</option>
+                      <option value="utls">uTLS (Browser Fingerprint Spoofing)</option>
                     </select>
                   </div>
                 </div>
 
+                {formData.security_type === 'utls' && (
+                  <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-100 dark:border-blue-900/40">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">uTLS Browser Fingerprint</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Mimic exact TLS ClientHello fingerprint of major browsers</p>
+                    <select
+                      value={formData.utls_fingerprint || 'chrome'}
+                      onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="chrome">Google Chrome (Recommended)</option>
+                      <option value="firefox">Mozilla Firefox</option>
+                      <option value="ios">Apple iOS Safari</option>
+                      <option value="android">Android Chrome</option>
+                      <option value="edge">Microsoft Edge</option>
+                      <option value="randomized">Randomized (Rotates per connection)</option>
+                    </select>
+                  </div>
+                )}
+
                 <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Failover IPs</label>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to if the main IP is blocked (One per line)</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Failover & Additional Foreign IPs</label>
+                    {formData.failover_ips && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                        Multi-Node Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Foreign IPs to fallback to or load-balance across (One per line)</p>
                   <textarea
                     value={formData.failover_ips}
                     onChange={(e) => setFormData({...formData, failover_ips: e.target.value})}
@@ -3553,6 +3770,22 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                     placeholder="1.2.3.4&#10;5.6.7.8"
                     rows={2}
                   />
+
+                  {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Load Balancing / Failover Strategy</label>
+                      <select
+                        value={formData.selector_strategy || 'fifo'}
+                        onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="fifo">Failover (FIFO - Primary first, backup on failure)</option>
+                        <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
+                        <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
+                        <option value="rand">Random (Random distribution)</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
                   <div>
@@ -3661,6 +3894,24 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         onChange={(e) => setFormData({...formData, stealth_domain: e.target.value})}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g. www.google.com"
+                      />
+                    </div>
+
+                    {/* KeepAlive Interval */}
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">KeepAlive Interval (Anti-Drop)</label>
+                        <span className="text-xs text-blue-600 dark:text-blue-400 font-mono">{formData.keepalive_interval || 15}s</span>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Probe interval in seconds to keep stateful NAT firewalls alive</p>
+                      <input
+                        type="number"
+                        min="5"
+                        max="120"
+                        value={formData.keepalive_interval || 15}
+                        onChange={(e) => setFormData({...formData, keepalive_interval: parseInt(e.target.value) || 15})}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="15"
                       />
                     </div>
                   </div>

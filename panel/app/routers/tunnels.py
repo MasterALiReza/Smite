@@ -119,6 +119,8 @@ class TunnelCreate(BaseModel):
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
     category: str | None = None
+    selector_strategy: str | None = "fifo"
+    keepalive_interval: int | None = 15
 
 
 class TunnelUpdate(BaseModel):
@@ -148,6 +150,8 @@ class TunnelUpdate(BaseModel):
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
     category: str | None = None
+    selector_strategy: str | None = None
+    keepalive_interval: int | None = None
 
 
 class TunnelResponse(BaseModel):
@@ -180,6 +184,8 @@ class TunnelResponse(BaseModel):
     bypass_ips: list[str] | None = None
     dns_resolvers: list[str] | None = None
     category: str | None = None
+    selector_strategy: str | None = "fifo"
+    keepalive_interval: int | None = 15
     status: str
     error_message: str | None = None
     revision: int
@@ -477,6 +483,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         bypass_ips=tunnel.bypass_ips,
         dns_resolvers=tunnel.dns_resolvers,
         category=tunnel.category,
+        selector_strategy=tunnel.selector_strategy or "fifo",
+        keepalive_interval=tunnel.keepalive_interval or 15,
         status="pending"
     )
     db.add(db_tunnel)
@@ -1328,7 +1336,9 @@ async def update_tunnel(
         (tunnel_update.mux_type is not None and tunnel_update.mux_type != tunnel.mux_type) or
         (tunnel_update.relay_hops is not None and tunnel_update.relay_hops != tunnel.relay_hops) or
         (tunnel_update.bypass_ips is not None and tunnel_update.bypass_ips != tunnel.bypass_ips) or
-        (tunnel_update.dns_resolvers is not None and tunnel_update.dns_resolvers != tunnel.dns_resolvers)
+        (tunnel_update.dns_resolvers is not None and tunnel_update.dns_resolvers != tunnel.dns_resolvers) or
+        (tunnel_update.selector_strategy is not None and tunnel_update.selector_strategy != tunnel.selector_strategy) or
+        (tunnel_update.keepalive_interval is not None and tunnel_update.keepalive_interval != tunnel.keepalive_interval)
     )
     
     if tunnel_update.name is not None:
@@ -1388,6 +1398,10 @@ async def update_tunnel(
         tunnel.dns_resolvers = tunnel_update.dns_resolvers
     if tunnel_update.category is not None:
         tunnel.category = tunnel_update.category.strip() if tunnel_update.category.strip() else None
+    if tunnel_update.selector_strategy is not None:
+        tunnel.selector_strategy = tunnel_update.selector_strategy
+    if tunnel_update.keepalive_interval is not None:
+        tunnel.keepalive_interval = tunnel_update.keepalive_interval
         
     if spec_changed or tunnel_update.spec is not None:
         await check_port_conflicts(
@@ -1684,6 +1698,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             spec_for_node["transport_type"] = getattr(tunnel, "transport_type", "tcp")
             spec_for_node["security_type"] = getattr(tunnel, "security_type", "none")
             spec_for_node["failover_ips"] = getattr(tunnel, "failover_ips", None)
+            spec_for_node["selector_strategy"] = getattr(tunnel, "selector_strategy", "fifo")
+            spec_for_node["keepalive_interval"] = getattr(tunnel, "keepalive_interval", 15)
         
         if tunnel.core == "frp":
             try:

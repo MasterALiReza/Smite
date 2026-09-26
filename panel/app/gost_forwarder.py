@@ -51,7 +51,7 @@ class GostForwarder:
                         "name": f"forward-{tunnel_id}-{proto}",
                         "addr": listen_addr,
                         "handler": {"type": proto, "metadata": {"keepAlive": True}},
-                        "listener": {"type": proto, "metadata": {"keepAlive": True, "keepAliveInterval": "25s"}},
+                        "listener": {"type": proto, "metadata": {"keepAlive": True, "keepAliveInterval": "15s", "nodelay": True}},
                         "forwarder": {
                             "nodes": [
                                 {"name": f"target-{tunnel_id}-{proto}", "addr": target_addr}
@@ -59,10 +59,10 @@ class GostForwarder:
                         }
                     })
             else:
-                listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux"] else "tcp"
-                handler_type = "udp" if tunnel_type == "udp" else "tcp"
+                listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux", "quic", "kcp"] else "tcp"
+                handler_type = "udp" if tunnel_type in ["udp", "kcp"] else "tcp"
                 
-                listener_metadata = {"keepAlive": True, "keepAliveInterval": "25s"}
+                listener_metadata = {"keepAlive": True, "keepAliveInterval": "15s", "nodelay": True}
                 if path and tunnel_type == "ws":
                     listener_metadata["path"] = path
 

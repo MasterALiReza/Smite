@@ -1776,8 +1776,8 @@ class GostAdapter:
             await self.remove(tunnel_id)
             
         auth_token = spec.get('auth_token', '')
-        transport_type = spec.get('transport_type') or spec.get('transport') or 'tcp'
-        security_type = spec.get('security_type', 'none')
+        transport_type = (spec.get('transport_type') or spec.get('transport') or 'tcp').lower()
+        security_type = (spec.get('security_type') or 'none').lower()
         use_ipv6 = spec.get('use_ipv6', False)
         
         if transport_type in ["multiplex ws", "multiplex_ws"]:
@@ -1823,11 +1823,13 @@ class GostAdapter:
             handler_type = spec.get("handler_type") or "relay"
             mux_type = spec.get("mux_type") or "yamux"
             
+            keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
             listener_metadata = {
                 "keepAlive": True,
-                "keepAliveInterval": "25s",
-                "keepAliveTimeout": "120s",
+                "keepAliveInterval": keepalive_interval,
+                "keepAliveTimeout": "60s",
                 "idleTimeout": "0s",
+                "nodelay": True,
             }
             if spec.get("ws_path"):
                 listener_metadata["path"] = spec.get("ws_path")
@@ -1836,12 +1838,18 @@ class GostAdapter:
             if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
                 listener_metadata["mux.type"] = mux_type
                 listener_metadata["nodelay"] = True
+            if gost_type == "kcp":
+                listener_metadata["nodelay"] = True
+                listener_metadata["interval"] = "20ms"
+                listener_metadata["resend"] = 2
+                listener_metadata["nc"] = 1
                 
-            listener = {"type": gost_type}
+            server_listener_type = "sshd" if gost_type == "ssh" else gost_type
+            listener = {"type": server_listener_type}
             if listener_metadata:
                 listener["metadata"] = listener_metadata
             
-            if security_type in ["tls", "utls"] and gost_type not in ["tcp", "udp", "rtcp", "rudp"]:
+            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "quic", "grpc"]) and gost_type not in ["tcp", "udp", "rtcp", "rudp", "kcp", "ssh", "sshd"]:
                 cert_path = self.config_dir / "dummy_cert.pem"
                 key_path = self.config_dir / "dummy_key.pem"
                 if not cert_path.exists() or not key_path.exists():
@@ -2016,18 +2024,27 @@ class GostAdapter:
                     }
                 ]
                 
-            dialer = {"type": gost_type}
+            dialer_client_type = "ssh" if gost_type in ["ssh", "sshd"] else gost_type
+            dialer = {"type": dialer_client_type}
             if spec.get("bypass_ips"):
                 dialer["bypass"] = f"bypass-{tunnel_id}"
             if spec.get("dns_resolvers"):
                 dialer["resolver"] = f"resolver-{tunnel_id}"
             
-            # keepalive metadata for stability
+            # keepalive & socket metadata for stability
+            keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
             dialer_metadata["keepAlive"] = True
-            dialer_metadata["keepAliveInterval"] = "25s"
-            dialer_metadata["keepAliveTimeout"] = "120s"
-            dialer_metadata["timeout"] = "30s"
+            dialer_metadata["keepAliveInterval"] = keepalive_interval
+            dialer_metadata["keepAliveTimeout"] = "60s"
+            dialer_metadata["timeout"] = "20s"
             dialer_metadata["idleTimeout"] = "0s"
+            dialer_metadata["nodelay"] = True
+            
+            if gost_type == "kcp":
+                dialer_metadata["nodelay"] = True
+                dialer_metadata["interval"] = "20ms"
+                dialer_metadata["resend"] = 2
+                dialer_metadata["nc"] = 1
             
             mux_type = spec.get("mux_type") or "yamux"
             if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
@@ -2036,7 +2053,7 @@ class GostAdapter:
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if security_type in ["tls", "utls"] and gost_type not in ["udp"]:
+            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "quic", "grpc"]) and gost_type not in ["udp", "kcp", "ssh", "sshd"]:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
@@ -2097,10 +2114,18 @@ class GostAdapter:
                 "nodes": hop_nodes
             }
             if failover_ips:
+                strategy = spec.get("selector_strategy") or spec.get("strategy") or "fifo"
+                if strategy not in ["fifo", "round", "parallel", "rand", "hash"]:
+                    strategy = "fifo"
+                max_fails = int(spec.get("max_fails") or 2)
+                fail_timeout = str(spec.get("fail_timeout") or "15s")
+                if not str(fail_timeout).endswith("s"):
+                    fail_timeout = f"{fail_timeout}s"
+
                 hop_obj["selector"] = {
-                    "strategy": "fifo",
-                    "maxFails": 1,
-                    "failTimeout": "10s"
+                    "strategy": strategy,
+                    "maxFails": max_fails,
+                    "failTimeout": fail_timeout
                 }
 
             chain_hops = []

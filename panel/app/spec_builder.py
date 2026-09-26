@@ -536,12 +536,21 @@ def build_gost_node_specs(
         "relay_hops": getattr(tunnel, "relay_hops", None),
         "bypass_ips": getattr(tunnel, "bypass_ips", None),
         "dns_resolvers": getattr(tunnel, "dns_resolvers", None),
+        "selector_strategy": getattr(tunnel, "selector_strategy", None) or spec.get("selector_strategy") or "fifo",
+        "keepalive_interval": getattr(tunnel, "keepalive_interval", None) or spec.get("keepalive_interval") or 15,
     }
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex"]:
+        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout"]:
             if k in tunnel.spec:
                 base_spec[k] = tunnel.spec[k]
+
+    # Normalize allowed_ips to list
+    allowed_list: List[str] = []
+    if isinstance(allowed_ips, str):
+        allowed_list = [x.strip() for x in allowed_ips.replace("\r", "\n").split("\n") if x.strip()]
+    elif isinstance(allowed_ips, list):
+        allowed_list = [str(x).strip() for x in allowed_ips if str(x).strip()]
 
     if is_reverse:
         # Reverse Tunnel: Iran Node is GOST Server, Foreign Node is GOST Client
@@ -552,8 +561,8 @@ def build_gost_node_specs(
         client_spec["mode"] = "client"
         client_spec["server_ip"] = iran_node_ip
 
-        if allowed_ips:
-            allowed_ips_server = allowed_ips.copy()
+        if allowed_list:
+            allowed_ips_server = list(allowed_list)
             if foreign_node_ip and foreign_node_ip not in allowed_ips_server:
                 allowed_ips_server.append(foreign_node_ip)
             server_spec["allowed_ips"] = allowed_ips_server
@@ -569,8 +578,8 @@ def build_gost_node_specs(
         client_spec = base_spec.copy()
         client_spec["mode"] = "server"
 
-        if allowed_ips:
-            allowed_ips_foreign = allowed_ips.copy()
+        if allowed_list:
+            allowed_ips_foreign = list(allowed_list)
             if iran_node_ip and iran_node_ip not in allowed_ips_foreign:
                 allowed_ips_foreign.append(iran_node_ip)
             client_spec["allowed_ips"] = allowed_ips_foreign

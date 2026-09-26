@@ -153,6 +153,14 @@ async def migrate_db():
             logger.info("Adding category column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN category VARCHAR"))
 
+        if "selector_strategy" not in columns:
+            logger.info("Adding selector_strategy column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN selector_strategy VARCHAR DEFAULT 'fifo'"))
+
+        if "keepalive_interval" not in columns:
+            logger.info("Adding keepalive_interval column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN keepalive_interval INTEGER DEFAULT 15"))
+
 
 async def init_db():
     """Initialize database tables"""

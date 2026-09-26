@@ -64,6 +64,8 @@ class Tunnel(Base):
     dns_resolvers = Column(JSON, nullable=True)       # Custom DNS resolvers
     
     category = Column(String, nullable=True, index=True) # Category/Group name
+    selector_strategy = Column(String, default="fifo") # e.g., 'fifo', 'round', 'parallel', 'rand'
+    keepalive_interval = Column(Integer, default=15)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
