@@ -1271,10 +1271,14 @@ class BackhaulAdapter:
             if isinstance(value, list):
                 if not value:
                     return "[]"
-                rendered = ",\n  ".join(f"\"{str(item).replace('\\', '\\\\').replace('\"', '\\\"').replace('\r', '\\r').replace('\n', '\\n')}\"" for item in value)
+                escaped_items = []
+                for item in value:
+                    item_str = str(item).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '\\r').replace('\n', '\\n')
+                    escaped_items.append(f'"{item_str}"')
+                rendered = ",\n  ".join(escaped_items)
                 return "[\n  " + rendered + "\n]"
-            value_str = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
-            return f"\"{value_str}\""
+            value_str = str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '\\r').replace('\n', '\\n')
+            return f'"{value_str}"'
 
         lines: List[str] = []
         for section, values in data.items():
