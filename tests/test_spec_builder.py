@@ -31,12 +31,15 @@ except ImportError:
 
 
 class DummyTunnel:
-    def __init__(self, id, core, type="tcp", spec=None):
+    def __init__(self, id, core, type="tcp", spec=None, gaming_mode=False, **kwargs):
         self.id = id
         self.core = core
         self.type = type
         self.spec = spec or {}
         self.is_reverse = True
+        self.gaming_mode = gaming_mode
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 
 def test_spec_builder_rathole():
@@ -105,6 +108,81 @@ def test_spec_builder_backhaul():
     assert client_spec["mode"] == "client"
     assert "8080=127.0.0.1:8080" in server_spec["ports"]
     assert "1.1.1.1" in client_spec["remote_addr"]
+
+
+def test_spec_builder_backhaul_pure_udp():
+    """Verify Pure UDP transport is preserved for low-jitter competitive gaming without forcing TCP."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-pure-udp",
+        core="backhaul",
+        type="udp",
+        spec={"ports": ["27015=127.0.0.1:27015"], "transport": "udp", "token": "game-token"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert server_spec["transport"] == "udp"
+    assert client_spec["transport"] == "udp"
+    assert server_spec.get("accept_udp") is not True
+
+
+def test_spec_builder_backhaul_udp_over_tcp():
+    """Verify UDP-over-TCP is used when accept_udp is true or type is tcp+udp."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-udp-tcp",
+        core="backhaul",
+        type="tcp+udp",
+        spec={"ports": [8080], "transport": "tcpmux", "token": "tok"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert server_spec["transport"] == "tcp"
+    assert client_spec["transport"] == "tcp"
+    assert server_spec["accept_udp"] is True
+    assert client_spec["accept_udp"] is True
+
+
+def test_spec_builder_backhaul_port_ranges_and_control_collision():
+    """Verify Backhaul port range (e.g. 27000-27050) is preserved and control port avoids colliding with any port in the range."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-range",
+        core="backhaul",
+        type="udp",
+        spec={"ports": ["27000-27050"], "transport": "udp", "token": "game-tok"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert "27000-27050" in server_spec["ports"]
+    # Control port must NOT be between 27000 and 27050 inclusive
+    ctrl_p = server_spec["control_port"]
+    assert not (27000 <= ctrl_p <= 27050)
+
+
+def test_spec_builder_backhaul_gaming_mode_and_v072_tuning():
+    """Verify gaming mode auto-injects low-latency tuning and propagates v0.7.2 options."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-gaming",
+        core="backhaul",
+        type="udp",
+        gaming_mode=True,
+        spec={
+            "ports": [7777],
+            "transport": "udp",
+            "server_options": {"proxy_protocol": True, "skip_optz": True},
+            "client_options": {"mss": 1380}
+        }
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert server_spec["gaming_mode"] is True
+    assert client_spec["gaming_mode"] is True
+    assert server_spec["server_options"]["nodelay"] is True
+    assert client_spec["client_options"]["nodelay"] is True
+    assert server_spec["server_options"]["channel_size"] == 8192
+    assert server_spec["server_options"]["mux_framesize"] == 4096
+    assert server_spec["proxy_protocol"] is True
+    assert server_spec["skip_optz"] is True
+    assert client_spec["mss"] == 1380
+
 
 
 def test_spec_builder_chisel():

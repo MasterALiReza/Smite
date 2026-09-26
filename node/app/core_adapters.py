@@ -863,6 +863,8 @@ class BackhaulAdapter:
         "so_rcvbuf",
         "so_sndbuf",
         "accept_udp",
+        "heartbeat",
+        "channel_size",
     ]
 
     def __init__(
@@ -897,16 +899,20 @@ class BackhaulAdapter:
         mode = spec.get('mode', 'client')
         
         if mode == 'server':
-            transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
-            is_udp = (
+            raw_transport = (spec.get("transport") or spec.get("type") or "tcpmux").lower()
+            is_pure_udp = raw_transport == "udp"
+            is_udp_over_tcp = (
                 spec.get("accept_udp") is True
-                or spec.get("type") in ("udp", "tcp+udp")
-                or spec.get("tunnel_type") in ("udp", "tcp+udp")
-                or transport == "udp"
+                or (spec.get("type") in ("udp", "tcp+udp") and not is_pure_udp)
+                or (spec.get("tunnel_type") in ("udp", "tcp+udp") and not is_pure_udp)
             )
-            if is_udp:
+            if is_pure_udp:
+                transport = "udp"
+            elif is_udp_over_tcp:
                 transport = "tcp"
-            elif transport == "udp" or transport not in {"tcp", "ws", "wsmux", "tcpmux"}:
+            elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
+                transport = raw_transport
+            else:
                 transport = "tcpmux"
             
             server_options = dict(spec.get("server_options") or {})
@@ -945,12 +951,19 @@ class BackhaulAdapter:
                     if not p:
                         continue
                     if isinstance(p, str):
-                        if '=' in p:
-                            processed_ports.append(p)
-                        elif p.isdigit():
-                            processed_ports.append(f"{p}={target_host}:{p}")
+                        p_clean = p.strip()
+                        if '=' in p_clean:
+                            processed_ports.append(p_clean)
+                        elif p_clean.isdigit():
+                            processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
+                        elif '-' in p_clean:
+                            # Port range
+                            if target_host in ("127.0.0.1", "localhost"):
+                                processed_ports.append(p_clean)
+                            else:
+                                processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
                         else:
-                            processed_ports.append(p)
+                            processed_ports.append(p_clean)
                     elif isinstance(p, (int, float)):
                         port_int = int(p)
                         processed_ports.append(f"{port_int}={target_host}:{port_int}")
@@ -961,19 +974,25 @@ class BackhaulAdapter:
                         if local:
                             processed_ports.append(f"{local}={tgt_host}:{tgt_port}")
                     else:
-                        processed_ports.append(str(p))
+                        processed_ports.append(str(p).strip())
                 ports = processed_ports
             else:
-                ports = [str(ports)] if ports else []
+                ports = [str(ports).strip()] if ports else []
             
-            # Free all service ports on the server node to prevent port conflicts
+            # Free all service ports on the server node to prevent port conflicts (including ranges)
             for p_entry in ports:
-                if isinstance(p_entry, str) and "=" in p_entry:
-                    lp = p_entry.split("=")[0].strip()
-                    if lp.isdigit():
-                        await free_port(int(lp))
-                elif str(p_entry).isdigit():
-                    await free_port(int(p_entry))
+                p_str = str(p_entry).strip()
+                lp = p_str.split("=")[0].strip() if "=" in p_str else p_str
+                if lp.isdigit():
+                    await free_port(int(lp))
+                elif "-" in lp:
+                    parts = lp.split("-")
+                    if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
+                        if s_p <= e_p:
+                            check_count = min(e_p - s_p + 1, 64)
+                            for port_num in range(s_p, s_p + check_count):
+                                await free_port(port_num)
             
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: processed ports: {ports} (count: {len(ports)})")
             
@@ -990,14 +1009,18 @@ class BackhaulAdapter:
             SERVER_OPTION_KEYS = [
                 "nodelay", "keepalive_period", "channel_size", "log_level",
                 "heartbeat", "mux_con", "accept_udp", "skip_optz",
-                "tls_cert", "tls_key", "sniffer", "web_port", "proxy_protocol"
+                "tls_cert", "tls_key", "sniffer", "web_port", "proxy_protocol",
+                "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
+                "mux_recievebuffer", "mux_streambuffer"
             ]
             for key in SERVER_OPTION_KEYS:
-                value = server_options.get(key) or spec.get(key)
+                value = server_options.get(key)
+                if value is None or value == "":
+                    value = spec.get(key)
                 if value is not None and value != "":
                     server_config[key] = value
 
-            if is_udp:
+            if is_udp_over_tcp:
                 server_config["accept_udp"] = True
             
             kp = server_options.get("keepalive_period") or spec.get("keepalive_period")
@@ -1044,16 +1067,20 @@ class BackhaulAdapter:
             elif remote_addr.startswith('wss://'):
                 remote_addr = remote_addr[6:]
 
-            transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
-            is_udp = (
+            raw_transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
+            is_pure_udp = raw_transport == "udp"
+            is_udp_over_tcp = (
                 spec.get("accept_udp") is True
-                or spec.get("type") in ("udp", "tcp+udp")
-                or spec.get("tunnel_type") in ("udp", "tcp+udp")
-                or transport == "udp"
+                or (spec.get("type") in ("udp", "tcp+udp") and not is_pure_udp)
+                or (spec.get("tunnel_type") in ("udp", "tcp+udp") and not is_pure_udp)
             )
-            if is_udp:
+            if is_pure_udp:
+                transport = "udp"
+            elif is_udp_over_tcp:
                 transport = "tcp"
-            elif transport == "udp" or transport not in {"tcp", "ws", "wsmux", "tcpmux"}:
+            elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
+                transport = raw_transport
+            else:
                 transport = "tcpmux"
             client_options = dict(spec.get("client_options") or {})
 
@@ -1074,8 +1101,10 @@ class BackhaulAdapter:
                     continue
                 config_dict[key] = value
 
-            if is_udp:
+            if is_udp_over_tcp:
                 config_dict["accept_udp"] = True
+
+            config_dict.setdefault("nodelay", True)
 
             if "connection_pool" not in config_dict:
                 config_dict["connection_pool"] = 8

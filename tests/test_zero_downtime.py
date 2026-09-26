@@ -296,6 +296,109 @@ async def test_backhaul_adapter_ports_formatting(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_backhaul_adapter_pure_udp_client_and_server(monkeypatch, tmp_path):
+    """Test BackhaulAdapter retains transport = 'udp' in both server and client modes for zero HoL blocking, and enforces client nodelay."""
+    adapter = BackhaulAdapter()
+    adapter.config_dir = tmp_path
+    
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
+    
+    class DummyProc:
+        pid = 1240
+        returncode = None
+        
+    async def mock_exec(*args, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    # 1. Server mode test
+    server_spec = {
+        "mode": "server",
+        "bind_addr": "0.0.0.0:3080",
+        "transport": "udp",
+        "token": "pure-udp-tok",
+        "ports": ["27015=127.0.0.1:27015"],
+        "server_options": {
+            "mss": 1380,
+            "skip_optz": True,
+            "proxy_protocol": True,
+            "channel_size": 8192
+        }
+    }
+    await adapter.apply("bh-srv-udp", server_spec)
+    srv_cfg = (tmp_path / "bh-srv-udp.toml").read_text(encoding="utf-8")
+    assert 'transport = "udp"' in srv_cfg
+    assert 'mss = 1380' in srv_cfg
+    assert 'skip_optz = true' in srv_cfg
+    assert 'proxy_protocol = true' in srv_cfg
+    assert 'channel_size = 8192' in srv_cfg
+    await adapter.remove("bh-srv-udp")
+    
+    # 2. Client mode test
+    client_spec = {
+        "mode": "client",
+        "remote_addr": "1.2.3.4:3080",
+        "transport": "udp",
+        "token": "pure-udp-tok",
+        "client_options": {
+            "mss": 1380,
+            "skip_optz": True,
+            "channel_size": 8192
+        }
+    }
+    await adapter.apply("bh-cli-udp", client_spec)
+    cli_cfg = (tmp_path / "bh-cli-udp.toml").read_text(encoding="utf-8")
+    assert 'transport = "udp"' in cli_cfg
+    assert 'nodelay = true' in cli_cfg
+    assert 'mss = 1380' in cli_cfg
+    assert 'skip_optz = true' in cli_cfg
+    assert 'channel_size = 8192' in cli_cfg
+    await adapter.remove("bh-cli-udp")
+
+
+@pytest.mark.asyncio
+async def test_backhaul_adapter_port_range_freeing(monkeypatch, tmp_path):
+    """Test BackhaulAdapter safely iterates and frees ports specified in ranges like 27000-27005."""
+    adapter = BackhaulAdapter()
+    adapter.config_dir = tmp_path
+    
+    freed_ports = []
+    async def mock_free_port(p):
+        freed_ports.append(p)
+        
+    monkeypatch.setattr("node.app.core_adapters.free_port", mock_free_port)
+    monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
+    
+    class DummyProc:
+        pid = 1241
+        returncode = None
+        
+    async def mock_exec(*args, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    spec = {
+        "mode": "server",
+        "bind_addr": "0.0.0.0:3080",
+        "token": "range-tok",
+        "ports": ["27000-27005=127.0.0.1:27000-27005", "8080"],
+        "target_host": "127.0.0.1"
+    }
+    await adapter.apply("bh-range", spec)
+    assert 3080 in freed_ports  # bind port
+    for p in range(27000, 27006):
+        assert p in freed_ports  # range ports
+    assert 8080 in freed_ports  # single port
+    await adapter.remove("bh-range")
+
+
+
+@pytest.mark.asyncio
 async def test_chisel_adapter_arguments_and_udp(monkeypatch, tmp_path):
     """Test ChiselAdapter passes resolved control_port, auth token, and UDP reverse mappings."""
     adapter = ChiselAdapter()

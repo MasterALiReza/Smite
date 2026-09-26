@@ -41,7 +41,7 @@ interface Tunnel {
   updated_at: string
 }
 
-type BackhaulTransport = 'tcp' | 'udp' | 'ws' | 'wsmux' | 'tcpmux'
+type BackhaulTransport = 'tcp' | 'udp' | 'ws' | 'wsmux' | 'tcpmux' | 'wss' | 'wssmux'
 
 interface BackhaulFormState {
   transport: BackhaulTransport
@@ -54,6 +54,7 @@ interface BackhaulFormState {
   target_port: string
   token: string
   accept_udp: boolean
+  gaming_mode?: boolean
 }
 
 interface BackhaulAdvancedServerState {
@@ -69,6 +70,13 @@ interface BackhaulAdvancedServerState {
   sniffer: boolean
   web_port: string
   proxy_protocol: boolean
+  mss: string
+  so_rcvbuf: string
+  so_sndbuf: string
+  mux_version: string
+  mux_framesize: string
+  mux_recievebuffer: string
+  mux_streambuffer: string
 }
 
 interface BackhaulAdvancedClientState {
@@ -76,11 +84,20 @@ interface BackhaulAdvancedClientState {
   retry_interval: string
   dial_timeout: string
   keepalive_period: string
+  heartbeat: string
+  channel_size: string
   log_level: string
   nodelay: boolean
   aggressive_pool: boolean
   edge_ip: string
   skip_optz: boolean
+  mss: string
+  so_rcvbuf: string
+  so_sndbuf: string
+  mux_version: string
+  mux_framesize: string
+  mux_recievebuffer: string
+  mux_streambuffer: string
 }
 
 interface BackhaulAdvancedState {
@@ -100,12 +117,13 @@ const createDefaultBackhaulState = (): BackhaulFormState => ({
   target_port: '8080',
   token: '',
   accept_udp: false,
+  gaming_mode: false,
 })
 
 const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => ({
   server: {
-    keepalive_period: '75',
-    heartbeat: '40',
+    keepalive_period: '20',
+    heartbeat: '20',
     channel_size: '2048',
     mux_con: '8',
     log_level: 'info',
@@ -116,17 +134,33 @@ const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => ({
     sniffer: false,
     web_port: '',
     proxy_protocol: false,
+    mss: '',
+    so_rcvbuf: '',
+    so_sndbuf: '',
+    mux_version: '1',
+    mux_framesize: '32768',
+    mux_recievebuffer: '',
+    mux_streambuffer: '',
   },
   client: {
-    connection_pool: '4',
+    connection_pool: '8',
     retry_interval: '3',
     dial_timeout: '10',
-    keepalive_period: '75',
+    keepalive_period: '20',
+    heartbeat: '20',
+    channel_size: '2048',
     log_level: 'info',
     nodelay: true,
-    aggressive_pool: false,
+    aggressive_pool: true,
     edge_ip: '',
     skip_optz: false,
+    mss: '',
+    so_rcvbuf: '',
+    so_sndbuf: '',
+    mux_version: '1',
+    mux_framesize: '32768',
+    mux_recievebuffer: '',
+    mux_streambuffer: '',
   },
   customPorts: '',
 })
@@ -137,11 +171,32 @@ const numericServerKeys = new Set([
   'channel_size',
   'mux_con',
   'web_port',
+  'mss',
+  'so_rcvbuf',
+  'so_sndbuf',
+  'mux_version',
+  'mux_framesize',
+  'mux_recievebuffer',
+  'mux_streambuffer',
 ])
 const booleanServerKeys = new Set(['nodelay', 'skip_optz', 'sniffer', 'proxy_protocol'])
 const stringServerKeys = new Set(['log_level', 'tls_cert', 'tls_key', 'sniffer_log'])
 
-const numericClientKeys = new Set(['connection_pool', 'retry_interval', 'dial_timeout', 'keepalive_period'])
+const numericClientKeys = new Set([
+  'connection_pool',
+  'retry_interval',
+  'dial_timeout',
+  'keepalive_period',
+  'heartbeat',
+  'channel_size',
+  'mss',
+  'so_rcvbuf',
+  'so_sndbuf',
+  'mux_version',
+  'mux_framesize',
+  'mux_recievebuffer',
+  'mux_streambuffer',
+])
 const booleanClientKeys = new Set(['nodelay', 'aggressive_pool', 'skip_optz'])
 const stringClientKeys = new Set(['log_level', 'edge_ip'])
 
@@ -2009,6 +2064,37 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               state={backhaulState}
               onChange={(partial) => {
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
+                if (partial.gaming_mode !== undefined) {
+                  setFormData((prev) => ({ ...prev, gaming_mode: partial.gaming_mode }))
+                  if (partial.gaming_mode) {
+                    setBackhaulAdvanced((prev) => ({
+                      ...prev,
+                      server: {
+                        ...prev.server,
+                        nodelay: true,
+                        channel_size: '8192',
+                        mux_framesize: '4096',
+                        mss: '1380',
+                        keepalive_period: '12',
+                        heartbeat: '12',
+                        so_rcvbuf: '2097152',
+                        so_sndbuf: '2097152',
+                      },
+                      client: {
+                        ...prev.client,
+                        nodelay: true,
+                        channel_size: '8192',
+                        mux_framesize: '4096',
+                        mss: '1380',
+                        keepalive_period: '12',
+                        heartbeat: '12',
+                        so_rcvbuf: '2097152',
+                        so_sndbuf: '2097152',
+                        aggressive_pool: true,
+                      }
+                    }))
+                  }
+                }
               }}
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
               acceptUdpVisible={
@@ -3550,6 +3636,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         core: formData.core,
         type: tunnelType,
         spec: spec,
+        gaming_mode: Boolean(formData.gaming_mode || spec?.gaming_mode),
         ...(formData.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
@@ -3790,10 +3877,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                 ) : formData.core === 'backhaul' ? (
                   <>
                     <option value="tcp">TCP</option>
-                    <option value="udp">UDP</option>
+                    <option value="udp">UDP (Pure UDP - Gaming)</option>
+                    <option value="tcpmux">TCPMux</option>
                     <option value="ws">WebSocket (WS)</option>
                     <option value="wsmux">WebSocket Mux</option>
-                    <option value="tcpmux">TCPMux</option>
+                    <option value="wss">WebSocket Secure (WSS)</option>
+                    <option value="wssmux">WebSocket Secure Mux</option>
                   </>
                 ) : (
                   <>
@@ -3857,6 +3946,37 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
                 if (partial.transport) {
                   setFormData((prev) => ({ ...prev, type: partial.transport as string }))
+                }
+                if (partial.gaming_mode !== undefined) {
+                  setFormData((prev) => ({ ...prev, gaming_mode: partial.gaming_mode }))
+                  if (partial.gaming_mode) {
+                    setBackhaulAdvanced((prev) => ({
+                      ...prev,
+                      server: {
+                        ...prev.server,
+                        nodelay: true,
+                        channel_size: '8192',
+                        mux_framesize: '4096',
+                        mss: '1380',
+                        keepalive_period: '12',
+                        heartbeat: '12',
+                        so_rcvbuf: '2097152',
+                        so_sndbuf: '2097152',
+                      },
+                      client: {
+                        ...prev.client,
+                        nodelay: true,
+                        channel_size: '8192',
+                        mux_framesize: '4096',
+                        mss: '1380',
+                        keepalive_period: '12',
+                        heartbeat: '12',
+                        so_rcvbuf: '2097152',
+                        so_sndbuf: '2097152',
+                        aggressive_pool: true,
+                      }
+                    }))
+                  }
                 }
               }}
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
@@ -5060,7 +5180,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
   )
 }
 
-const BACKHAUL_TRANSPORTS: BackhaulTransport[] = ['tcp', 'udp', 'ws', 'wsmux', 'tcpmux']
+const BACKHAUL_TRANSPORTS: BackhaulTransport[] = ['tcp', 'udp', 'ws', 'wsmux', 'tcpmux', 'wss', 'wssmux']
 
 function BackhaulForm({
   state,
@@ -5085,7 +5205,7 @@ function BackhaulForm({
               Backhaul Settings
             </h4>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              High-Throughput Multiplexed Tunneling Core
+              High-Throughput Multiplexed Tunneling Core (v0.7.2)
             </p>
           </div>
         </div>
@@ -5093,6 +5213,33 @@ function BackhaulForm({
           Backhaul Core
         </span>
       </div>
+
+      {/* ⚡ Ultra-Low Latency Gaming Mode Card */}
+      <label className="p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-gradient-to-r from-indigo-50/90 via-purple-50/40 to-pink-50/30 dark:from-indigo-950/40 dark:via-purple-950/30 dark:to-pink-950/20 flex items-center justify-between cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-all shadow-sm">
+        <div className="pr-3">
+          <div className="flex items-center gap-2">
+            <span className="p-1 rounded-md bg-indigo-100 dark:bg-indigo-900/70 text-indigo-600 dark:text-indigo-400">
+              <Gamepad2 size={16} />
+            </span>
+            <span className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+              ⚡ Ultra-Low Latency Gaming Mode
+              <span className="text-[10px] uppercase font-mono font-bold tracking-wider px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/80 dark:text-indigo-300">
+                Anti-Jitter
+              </span>
+            </span>
+          </div>
+          <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-1 leading-normal">
+            Enforces TCP_NODELAY, 4KB frames, 8K buffer, MSS 1380 clamping, and 12s heartbeat to eliminate packet spikes & HoL blocking.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          className="sr-only peer"
+          checked={Boolean(state.gaming_mode)}
+          onChange={() => onChange({ gaming_mode: !state.gaming_mode })}
+        />
+        <div className="w-10 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600 shrink-0 relative"></div>
+      </label>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
         <div>
@@ -5113,7 +5260,7 @@ function BackhaulForm({
             max={65535}
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Port where the node connects back to the panel.
+            Port where the foreign node connects back to the Iran server.
           </p>
         </div>
 
@@ -5121,7 +5268,7 @@ function BackhaulForm({
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
               <Radio size={14} className="text-teal-500" />
-              Forwarded Ports
+              Forwarded Ports & Ranges
             </label>
             <span className="text-[11px] text-gray-400">Public & Target</span>
           </div>
@@ -5132,10 +5279,10 @@ function BackhaulForm({
               onChange({ public_port: e.target.value, target_port: e.target.value })
             }}
             className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-mono"
-            placeholder="8080,8081,8082"
+            placeholder="8080,8081 or 27000-27050"
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Ports (comma-separated, same for public and target).
+            Single ports (8080), comma list (8080,8081), or ranges (27000-27050).
           </p>
         </div>
       </div>
@@ -5156,7 +5303,7 @@ function BackhaulForm({
           placeholder="Leave empty for auto-generation"
         />
         <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-          Authentication token (auto-generated if empty).
+          Mutual auth token (auto-generated if empty).
         </p>
       </div>
 
@@ -5165,10 +5312,10 @@ function BackhaulForm({
           <div className="pr-2">
             <div className="flex items-center gap-1.5">
               <Zap size={15} className="text-emerald-600 dark:text-emerald-400" />
-              <span className="text-xs font-bold text-gray-900 dark:text-white">Allow UDP over TCP</span>
+              <span className="text-xs font-bold text-gray-900 dark:text-white">Allow UDP over TCP (Turbo)</span>
             </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
-              Encapsulate UDP packets inside TCP streams
+              Encapsulate UDP packets inside TCP streams for networks with strict UDP filtering
             </p>
           </div>
           <input
@@ -5232,272 +5379,355 @@ function BackhaulAdvancedDrawer({
 
   return (
     <div className="fixed inset-0 z-[100] flex">
-      <div className="flex-1 bg-black bg-opacity-40" onClick={onClose} />
-      <div className="w-full max-w-xl h-full bg-white dark:bg-gray-900 shadow-xl overflow-y-auto p-6">
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Backhaul Advanced Settings</h3>
+      <div className="flex-1 bg-black/50 backdrop-blur-sm transition-opacity" onClick={onClose} />
+      <div className="w-full max-w-2xl h-full bg-white dark:bg-gray-900 shadow-2xl overflow-y-auto p-6 border-l border-gray-200 dark:border-gray-800">
+        <div className="flex justify-between items-center pb-4 mb-6 border-b border-gray-200 dark:border-gray-800">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
+              <Settings2 size={20} />
+            </span>
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Backhaul Engine Tuning</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Upstream Musixal/Backhaul v0.7.2 High-Performance Core</p>
+            </div>
+          </div>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           >
-            Close
+            <X size={18} />
           </button>
         </div>
 
         <div className="space-y-6">
-          <div>
-            <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-3">
-              Server Options
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Keepalive (s)</label>
-                <input
-                  type="number"
-                  value={state.server.keepalive_period}
-                  onChange={(e) => updateServer('keepalive_period', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Heartbeat (s)</label>
-                <input
-                  type="number"
-                  value={state.server.heartbeat}
-                  onChange={(e) => updateServer('heartbeat', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Channel Size</label>
-                <input
-                  type="number"
-                  value={state.server.channel_size}
-                  onChange={(e) => updateServer('channel_size', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mux Concurrency</label>
-                <input
-                  type="number"
-                  value={state.server.mux_con}
-                  onChange={(e) => updateServer('mux_con', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Log Level</label>
-                <select
-                  value={state.server.log_level}
-                  onChange={(e) => updateServer('log_level', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                >
-                  <option value="panic">panic</option>
-                  <option value="fatal">fatal</option>
-                  <option value="error">error</option>
-                  <option value="warn">warn</option>
-                  <option value="info">info</option>
-                  <option value="debug">debug</option>
-                  <option value="trace">trace</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Web UI Port</label>
-                <input
-                  type="number"
-                  value={state.server.web_port}
-                  onChange={(e) => updateServer('web_port', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  placeholder="0 (disable)"
-                  min={0}
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">Enable Sniffer</label>
+          {/* Card 1: ⚡ Low-Latency & Gaming Tuning */}
+          <div className="p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-indigo-50/30 dark:bg-indigo-950/20 space-y-4">
+            <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold text-xs uppercase tracking-wider">
+              <Zap size={15} />
+              <span>Latency & WAN Transmission (Gaming & Real-time)</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">Server TCP Nodelay</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Disables Nagle buffering</span>
+                </div>
                 <input
                   type="checkbox"
-                  checked={state.server.sniffer}
-                  onChange={() => updateServer('sniffer', !state.server.sniffer)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
-                />
-              </div>
-              <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sniffer Log Path</label>
-                <input
-                  type="text"
-                  value={state.server.sniffer_log}
-                  onChange={(e) => updateServer('sniffer_log', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  placeholder="/var/log/backhaul.json"
-                />
-              </div>
-              <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">TLS Certificate Path</label>
-                <input
-                  type="text"
-                  value={state.server.tls_cert}
-                  onChange={(e) => updateServer('tls_cert', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                />
-              </div>
-              <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">TLS Key Path</label>
-                <input
-                  type="text"
-                  value={state.server.tls_key}
-                  onChange={(e) => updateServer('tls_key', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">Disable Optimizations</label>
-                <input
-                  type="checkbox"
-                  checked={state.server.skip_optz}
-                  onChange={() => updateServer('skip_optz', !state.server.skip_optz)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">Enable Proxy Protocol</label>
-                <input
-                  type="checkbox"
-                  checked={state.server.proxy_protocol}
-                  onChange={() => updateServer('proxy_protocol', !state.server.proxy_protocol)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">TCP Nodelay</label>
-                <input
-                  type="checkbox"
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
                   checked={state.server.nodelay}
-                  onChange={() => updateServer('nodelay', !state.server.nodelay)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
+                  onChange={(e) => updateServer('nodelay', e.target.checked)}
                 />
+              </label>
+
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">Client TCP Nodelay</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Instant client tick dispatch</span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                  checked={state.client.nodelay}
+                  onChange={(e) => updateClient('nodelay', e.target.checked)}
+                />
+              </label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  MSS Clamping (MTU Optimization)
+                </label>
+                <input
+                  type="number"
+                  value={state.server.mss}
+                  onChange={(e) => {
+                    updateServer('mss', e.target.value)
+                    updateClient('mss', e.target.value)
+                  }}
+                  placeholder="e.g. 1380 (prevents fragmentation)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={1000}
+                  max={1500}
+                />
+                <span className="text-[10px] text-gray-400">Recommended 1360-1400 for WAN gaming</span>
               </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Heartbeat & Keepalive (seconds)
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    value={state.server.heartbeat}
+                    onChange={(e) => {
+                      updateServer('heartbeat', e.target.value)
+                      updateClient('heartbeat', e.target.value)
+                    }}
+                    placeholder="Heartbeat (12)"
+                    className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                    min={1}
+                    max={25}
+                  />
+                  <input
+                    type="number"
+                    value={state.server.keepalive_period}
+                    onChange={(e) => {
+                      updateServer('keepalive_period', e.target.value)
+                      updateClient('keepalive_period', e.target.value)
+                    }}
+                    placeholder="Keepalive (12)"
+                    className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                    min={1}
+                    max={25}
+                  />
+                </div>
+                <span className="text-[10px] text-gray-400">Fast link loss detection (≤ 25s)</span>
+              </div>
+
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer col-span-1 sm:col-span-2">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">Skip Kernel Sysctl Optimizations (Docker Mode)</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Bypasses sysctl error logs in unprivileged Docker containers</span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                  checked={state.server.skip_optz || state.client.skip_optz}
+                  onChange={(e) => {
+                    updateServer('skip_optz', e.target.checked)
+                    updateClient('skip_optz', e.target.checked)
+                  }}
+                />
+              </label>
             </div>
           </div>
 
-          <div>
-            <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-3">
-              Client Options
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
+          {/* Card 2: 🚀 Buffer & Socket Capacity */}
+          <div className="p-4 rounded-xl border border-teal-200/80 dark:border-teal-900/50 bg-teal-50/30 dark:bg-teal-950/20 space-y-4">
+            <div className="flex items-center gap-2 text-teal-700 dark:text-teal-300 font-bold text-xs uppercase tracking-wider">
+              <Activity size={15} />
+              <span>Socket & Buffer Capacity</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Connection Pool</label>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Channel Queue Size
+                </label>
+                <input
+                  type="number"
+                  value={state.server.channel_size}
+                  onChange={(e) => {
+                    updateServer('channel_size', e.target.value)
+                    updateClient('channel_size', e.target.value)
+                  }}
+                  placeholder="2048 (default) or 8192 (gaming)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={512}
+                />
+                <span className="text-[10px] text-gray-400">Queue buffer for high-frequency game bursts</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Client Connection Pool
+                </label>
                 <input
                   type="number"
                   value={state.client.connection_pool}
                   onChange={(e) => updateClient('connection_pool', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                   min={1}
                 />
+                <span className="text-[10px] text-gray-400">Parallel multiplex connections (default 8)</span>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Retry Interval (s)</label>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Socket RCV Buffer (so_rcvbuf bytes)
+                </label>
                 <input
                   type="number"
-                  value={state.client.retry_interval}
-                  onChange={(e) => updateClient('retry_interval', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
+                  value={state.server.so_rcvbuf}
+                  onChange={(e) => {
+                    updateServer('so_rcvbuf', e.target.value)
+                    updateClient('so_rcvbuf', e.target.value)
+                  }}
+                  placeholder="e.g. 2097152 (2MB)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Dial Timeout (s)</label>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Socket SND Buffer (so_sndbuf bytes)
+                </label>
                 <input
                   type="number"
-                  value={state.client.dial_timeout}
-                  onChange={(e) => updateClient('dial_timeout', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
+                  value={state.server.so_sndbuf}
+                  onChange={(e) => {
+                    updateServer('so_sndbuf', e.target.value)
+                    updateClient('so_sndbuf', e.target.value)
+                  }}
+                  placeholder="e.g. 2097152 (2MB)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Keepalive (s)</label>
+
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer col-span-1 sm:col-span-2">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">Aggressive Pool</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Maintain pooled connections in hot standby state</span>
+                </div>
                 <input
-                  type="number"
-                  value={state.client.keepalive_period}
-                  onChange={(e) => updateClient('keepalive_period', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  min={1}
+                  type="checkbox"
+                  className="rounded text-teal-600 focus:ring-teal-500"
+                  checked={state.client.aggressive_pool}
+                  onChange={(e) => updateClient('aggressive_pool', e.target.checked)}
                 />
-              </div>
+              </label>
+            </div>
+          </div>
+
+          {/* Card 3: 🔀 SMUX Multiplexing Engine */}
+          <div className="p-4 rounded-xl border border-cyan-200/80 dark:border-cyan-900/50 bg-cyan-50/30 dark:bg-cyan-950/20 space-y-4">
+            <div className="flex items-center gap-2 text-cyan-700 dark:text-cyan-300 font-bold text-xs uppercase tracking-wider">
+              <Network size={15} />
+              <span>SMUX Multiplexing Engine</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Log Level</label>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Yamux Protocol Version
+                </label>
                 <select
-                  value={state.client.log_level}
-                  onChange={(e) => updateClient('log_level', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  value={state.server.mux_version || '1'}
+                  onChange={(e) => {
+                    updateServer('mux_version', e.target.value)
+                    updateClient('mux_version', e.target.value)
+                  }}
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 >
-                  <option value="panic">panic</option>
-                  <option value="fatal">fatal</option>
-                  <option value="error">error</option>
-                  <option value="warn">warn</option>
-                  <option value="info">info</option>
-                  <option value="debug">debug</option>
-                  <option value="trace">trace</option>
+                  <option value="1">Version 1 (Standard)</option>
+                  <option value="2">Version 2 (Modern)</option>
                 </select>
               </div>
-              <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Edge IP (for WS/WSS)</label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Mux Frame Size (bytes)
+                </label>
                 <input
-                  type="text"
-                  value={state.client.edge_ip}
-                  onChange={(e) => updateClient('edge_ip', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  placeholder="Optional CDN edge IP"
+                  type="number"
+                  value={state.server.mux_framesize}
+                  onChange={(e) => {
+                    updateServer('mux_framesize', e.target.value)
+                    updateClient('mux_framesize', e.target.value)
+                  }}
+                  placeholder="32768 (default) or 4096 (gaming)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                />
+                <span className="text-[10px] text-gray-400">4096 bytes dispatches game ticks instantly</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Mux Concurrency
+                </label>
+                <input
+                  type="number"
+                  value={state.server.mux_con}
+                  onChange={(e) => updateServer('mux_con', e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={1}
                 />
               </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">Aggressive Pool</label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Stream Buffer (bytes)
+                </label>
                 <input
-                  type="checkbox"
-                  checked={state.client.aggressive_pool}
-                  onChange={() => updateClient('aggressive_pool', !state.client.aggressive_pool)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">TCP Nodelay</label>
-                <input
-                  type="checkbox"
-                  checked={state.client.nodelay}
-                  onChange={() => updateClient('nodelay', !state.client.nodelay)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
-                />
-              </div>
-              <div className="col-span-2 flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1">Disable Optimizations</label>
-                <input
-                  type="checkbox"
-                  checked={state.client.skip_optz}
-                  onChange={() => updateClient('skip_optz', !state.client.skip_optz)}
-                  className="h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
+                  type="number"
+                  value={state.server.mux_streambuffer}
+                  onChange={(e) => {
+                    updateServer('mux_streambuffer', e.target.value)
+                    updateClient('mux_streambuffer', e.target.value)
+                  }}
+                  placeholder="e.g. 131072 (128KB)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
               </div>
             </div>
           </div>
 
-          <div>
-            <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-3">
-              Custom Ports
-            </h4>
-            <textarea
-              value={state.customPorts}
-              onChange={(e) => onChange({ ...state, customPorts: e.target.value })}
-              className="w-full min-h-[120px] px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-              placeholder={`One entry per line. Examples:\n443\n443=127.0.0.1:8080\n443=[2001:db8::1]:8080\n2000-2100=127.0.0.1:22`}
-            />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Format matches Backhaul ports syntax. Leave empty to use the single public port above.
-            </p>
+          {/* Card 4: 🛡️ Security, Proxy & Monitoring */}
+          <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/40 space-y-4">
+            <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300 font-bold text-xs uppercase tracking-wider">
+              <ShieldCheck size={15} />
+              <span>Security, Proxy & Port Ranges</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer col-span-1 sm:col-span-2">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">HAProxy Proxy Protocol</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Preserves original client IP addresses across reverse proxies</span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                  checked={state.server.proxy_protocol}
+                  onChange={(e) => updateServer('proxy_protocol', e.target.checked)}
+                />
+              </label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Log Level</label>
+                <select
+                  value={state.server.log_level}
+                  onChange={(e) => {
+                    updateServer('log_level', e.target.value)
+                    updateClient('log_level', e.target.value)
+                  }}
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                >
+                  <option value="info">Info</option>
+                  <option value="warn">Warn</option>
+                  <option value="error">Error</option>
+                  <option value="debug">Debug</option>
+                  <option value="trace">Trace</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Web Monitor Port</label>
+                <input
+                  type="number"
+                  value={state.server.web_port}
+                  onChange={(e) => updateServer('web_port', e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  placeholder="0 (disabled)"
+                  min={0}
+                />
+              </div>
+
+              <div className="col-span-1 sm:col-span-2">
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Custom Port Mappings & Ranges
+                </label>
+                <textarea
+                  value={state.customPorts}
+                  onChange={(e) => onChange({ ...state, customPorts: e.target.value })}
+                  className="w-full min-h-[90px] px-3 py-2 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  placeholder={`One entry per line. Examples:\n443\n443=127.0.0.1:8080\n27000-27050=127.0.0.1:27000-27050`}
+                />
+                <span className="text-[10px] text-gray-400">Leave empty to use single port from main form</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -5511,8 +5741,9 @@ function buildBackhaulSpec(
   transportOverride?: BackhaulTransport,
 ): Record<string, any> {
   const transport = transportOverride ?? base.transport
-  const isUdp = transport === 'udp' || base.transport === 'udp'
-  const normalizedTransport = isUdp ? 'tcp' : transport
+  const isPureUdp = transport === 'udp'
+  const isUdpOverTcp = !isPureUdp && (base.accept_udp || transport === 'tcp' && base.accept_udp || transport === 'tcpmux' && base.accept_udp)
+  const normalizedTransport = transport
   const controlPort = parseInt(base.control_port, 10)
   const publicPort = parseInt(base.public_port, 10)
   const targetPort = parseInt(base.target_port, 10)
@@ -5527,65 +5758,59 @@ function buildBackhaulSpec(
         ? (publicPort + 10000 > 65535 ? publicPort - 10000 : publicPort + 10000)
         : (!Number.isNaN(targetPort) && targetPort > 0 ? targetPort : 3080))
   
-  // Parse comma-separated ports from public_port
-  const parsePortsFromString = (portStr: string): number[] => {
+  // Parse comma-separated ports or ranges from public_port without truncating ranges
+  const parsePortsFromString = (portStr: string): string[] => {
     if (!portStr || typeof portStr !== 'string') {
-      console.warn('parsePortsFromString: invalid input:', portStr, 'type:', typeof portStr)
       return []
     }
     const parsed = portStr
       .split(',')
       .map(p => p.trim())
-      .filter(p => p)
-      .map(p => parseInt(p, 10))
-      .filter(p => !isNaN(p) && p > 0 && p <= 65535)
-    console.log('parsePortsFromString: input:', portStr, '-> parsed:', parsed, 'count:', parsed.length)
+      .filter(p => {
+        if (!p) return false
+        if (p.includes('-')) {
+          const parts = p.split('-').map(x => parseInt(x.trim(), 10))
+          return parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]) && parts[0] > 0 && parts[1] <= 65535 && parts[0] <= parts[1]
+        }
+        const num = parseInt(p, 10)
+        return !isNaN(num) && num > 0 && num <= 65535
+      })
     return parsed
   }
   
-  // CRITICAL: Ensure base.public_port is a string before parsing
   const publicPortStr = String(base.public_port || '')
-  console.log('buildBackhaulSpec: base.public_port (raw):', base.public_port, 'type:', typeof base.public_port, '-> string:', publicPortStr)
   const publicPorts = parsePortsFromString(publicPortStr)
-  console.log('buildBackhaulSpec: parsed publicPorts:', publicPorts, 'count:', publicPorts.length)
-  const effectivePublicPort = publicPorts.length > 0 ? publicPorts[0] : (!Number.isNaN(publicPort) && publicPort > 0 ? publicPort : 8080)
-  const effectiveTargetPort = publicPorts.length > 0 ? publicPorts[0] : (!Number.isNaN(targetPort) && targetPort > 0 ? targetPort : effectivePublicPort)
+  const firstPortRaw = publicPorts.length > 0 ? publicPorts[0] : ''
+  const firstPortNum = firstPortRaw.includes('-')
+    ? parseInt(firstPortRaw.split('-')[0], 10)
+    : parseInt(firstPortRaw, 10)
+  const effectivePublicPort = !Number.isNaN(firstPortNum) && firstPortNum > 0
+    ? firstPortNum
+    : (!Number.isNaN(publicPort) && publicPort > 0 ? publicPort : 8080)
+  const effectiveTargetPort = !Number.isNaN(targetPort) && targetPort > 0 ? targetPort : effectivePublicPort
 
   const remoteAddr = base.remote_addr.trim() || `${panelHost}:${effectiveControlPort}`
   const listenedPort = listenIp !== '0.0.0.0' ? `${listenIp}:${effectivePublicPort}` : `${effectivePublicPort}`
   const defaultPortEntry = `${listenedPort}=${targetHost}:${effectiveTargetPort}`
 
-  // Use customPorts if provided, otherwise build from comma-separated public_port
   let ports: string[] = []
-  
-  // CRITICAL: Check if customPorts is set AND has content
-  // If customPorts is empty or just whitespace, use publicPorts instead
   const hasCustomPorts = advanced.customPorts && advanced.customPorts.trim().length > 0
   
   if (hasCustomPorts) {
-    // User manually entered ports in CUSTOM PORTS field
     ports = advanced.customPorts
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-    console.log('buildBackhaulSpec: Using customPorts, count:', ports.length, 'ports:', ports)
   } else if (publicPorts.length > 0) {
-    // Build ports array from comma-separated public_port (e.g., "8080,8081,8082")
-    // This is the automatic conversion from Ports field to Backhaul format
     ports = publicPorts.map(p => {
       const listenedPort = listenIp !== '0.0.0.0' ? `${listenIp}:${p}` : `${p}`
       return `${listenedPort}=${targetHost}:${p}`
     })
-    console.log('buildBackhaulSpec: Built ports from publicPorts:', publicPorts, '-> ports:', ports, 'count:', ports.length)
   }
   
   if (ports.length === 0) {
     ports.push(defaultPortEntry)
-    console.log('buildBackhaulSpec: No ports found, using default:', defaultPortEntry)
   }
-  
-  // Final verification - ensure we have ports
-  console.log('buildBackhaulSpec: Final ports array:', ports, 'count:', ports.length)
 
   const serverOptions: Record<string, any> = {}
   Object.entries(advanced.server).forEach(([key, value]) => {
@@ -5633,21 +5858,21 @@ function buildBackhaulSpec(
     }
   })
 
-  if (isUdp) {
+  if (isUdpOverTcp) {
     serverOptions.accept_udp = true
     clientOptions.accept_udp = true
   }
   if (!serverOptions.keepalive_period || Number(serverOptions.keepalive_period) > 25) {
-    serverOptions.keepalive_period = 20
+    serverOptions.keepalive_period = base.gaming_mode ? 12 : 20
   }
   if (!serverOptions.heartbeat || Number(serverOptions.heartbeat) > 25) {
-    serverOptions.heartbeat = 20
+    serverOptions.heartbeat = base.gaming_mode ? 12 : 20
   }
   if (!clientOptions.keepalive_period || Number(clientOptions.keepalive_period) > 25) {
-    clientOptions.keepalive_period = 20
+    clientOptions.keepalive_period = base.gaming_mode ? 12 : 20
   }
   if (!clientOptions.heartbeat || Number(clientOptions.heartbeat) > 25) {
-    clientOptions.heartbeat = 20
+    clientOptions.heartbeat = base.gaming_mode ? 12 : 20
   }
 
   const spec: Record<string, any> = {
@@ -5668,8 +5893,11 @@ function buildBackhaulSpec(
   if (token) {
     spec.token = token
   }
-  if (isUdp || (base.accept_udp && (normalizedTransport === 'tcp' || normalizedTransport === 'tcpmux'))) {
+  if (isUdpOverTcp) {
     spec.accept_udp = true
+  }
+  if (base.gaming_mode) {
+    spec.gaming_mode = true
   }
   if (Object.keys(serverOptions).length > 0) {
     spec.server_options = serverOptions
@@ -5734,6 +5962,9 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
   state.public_host = spec.public_host ?? ''
   state.remote_addr = spec.remote_addr ?? ''
   state.accept_udp = Boolean(spec.accept_udp)
+  if (spec.gaming_mode !== undefined) {
+    state.gaming_mode = Boolean(spec.gaming_mode)
+  }
 
   if (Array.isArray(spec.ports) && spec.ports.length > 0) {
     advanced.customPorts = spec.ports.join('\n')
