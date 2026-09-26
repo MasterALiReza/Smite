@@ -867,6 +867,17 @@ class BackhaulAdapter:
         "channel_size",
     ]
 
+    BACKHAUL_NUMERIC_KEYS = {
+        "keepalive_period", "heartbeat", "channel_size", "mux_con", "web_port",
+        "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
+        "mux_recievebuffer", "mux_streambuffer", "connection_pool", "retry_interval",
+        "dial_timeout"
+    }
+
+    BACKHAUL_BOOLEAN_KEYS = {
+        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp"
+    }
+
     def __init__(
         self,
         config_dir: Optional[Path] = None,
@@ -1018,6 +1029,16 @@ class BackhaulAdapter:
                 if value is None or value == "":
                     value = spec.get(key)
                 if value is not None and value != "":
+                    if key in self.BACKHAUL_NUMERIC_KEYS:
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            pass
+                    elif key in self.BACKHAUL_BOOLEAN_KEYS:
+                        if isinstance(value, str):
+                            value = value.lower() in ("true", "1", "yes")
+                        else:
+                            value = bool(value)
                     server_config[key] = value
 
             if is_udp_over_tcp:
@@ -1099,6 +1120,16 @@ class BackhaulAdapter:
                     value = spec.get(key)
                 if value is None or value == "":
                     continue
+                if key in self.BACKHAUL_NUMERIC_KEYS:
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        pass
+                elif key in self.BACKHAUL_BOOLEAN_KEYS:
+                    if isinstance(value, str):
+                        value = value.lower() in ("true", "1", "yes")
+                    else:
+                        value = bool(value)
                 config_dict[key] = value
 
             if is_udp_over_tcp:

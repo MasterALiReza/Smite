@@ -41,6 +41,16 @@ class BackhaulManager:
         "proxy_protocol",
     ]
 
+    NUMERIC_OPTION_KEYS = {
+        "keepalive_period", "heartbeat", "channel_size", "mux_con", "web_port",
+        "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
+        "mux_recievebuffer", "mux_streambuffer"
+    }
+
+    BOOLEAN_OPTION_KEYS = {
+        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "accept_udp"
+    }
+
     def __init__(
         self,
         config_dir: Optional[Path] = None,
@@ -191,6 +201,16 @@ class BackhaulManager:
             value = server_options.get(key)
             if value is None or value == "":
                 continue
+            if key in self.NUMERIC_OPTION_KEYS:
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    pass
+            elif key in self.BOOLEAN_OPTION_KEYS:
+                if isinstance(value, str):
+                    value = value.lower() in ("true", "1", "yes")
+                else:
+                    value = bool(value)
             server_config[key] = value
 
         tls_cert = spec.get("tls_cert") or spec.get("tls_cert_path")

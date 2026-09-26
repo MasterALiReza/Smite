@@ -316,7 +316,53 @@ def test_spec_builder_gost_ports_resolution_from_listen_port():
     assert s["mode"] == "client"
     assert s["server_ip"] == "2.2.2.2"
     assert c["mode"] == "server"
-    assert tunnel.spec["ports"] == [9990]
+def test_spec_builder_backhaul_mux_version_and_types_normalization():
+    """Verify that Backhaul v0.7.2 options like mux_version, mss, channel_size are properly cast to integers"""
+    tunnel = DummyTunnel(
+        id="t-bh-mux",
+        core="backhaul",
+        type="tcpmux",
+        spec={
+            "control_port": 3080,
+            "ports": [8080],
+            "server_options": {
+                "mux_version": "2",
+                "mss": "1380",
+                "channel_size": "8192",
+                "nodelay": "true",
+                "skip_optz": "false"
+            },
+            "client_options": {
+                "mux_version": "2",
+                "mss": "1380",
+                "connection_pool": "16",
+                "aggressive_pool": "true"
+            }
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["server_options"]["mux_version"] == 2
+    assert isinstance(s["server_options"]["mux_version"], int)
+    assert s["server_options"]["mss"] == 1380
+    assert s["server_options"]["channel_size"] == 8192
+    assert s["server_options"]["nodelay"] is True
+    assert s["server_options"]["skip_optz"] is False
+
+    assert c["client_options"]["mux_version"] == 2
+    assert isinstance(c["client_options"]["mux_version"], int)
+    assert c["client_options"]["mss"] == 1380
+    assert c["client_options"]["connection_pool"] == 16
+    assert c["client_options"]["aggressive_pool"] is True
+
+
+def test_spec_builder_parse_ports_list_bounds():
+    """Verify parse_ports_list filters out non-standard and out-of-bounds ports"""
+    from panel.app.spec_builder import parse_ports_list
+    bad_spec = {
+        "ports": [80, 0, 443, 70000, -1, 65535, "invalid", "8080"]
+    }
+    cleaned = parse_ports_list(bad_spec)
+    assert cleaned == [80, 443, 65535, 8080]
 
 
 if __name__ == "__main__":

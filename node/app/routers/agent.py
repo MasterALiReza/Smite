@@ -1,13 +1,23 @@
 """Agent API endpoints"""
 from fastapi import APIRouter, Request, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional, List
 import hmac
 import logging
+import re
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+SAFE_TUNNEL_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+
+def validate_tunnel_id(v: str) -> str:
+    """Validate tunnel_id format against path traversal and dangerous characters"""
+    if not isinstance(v, str) or not SAFE_TUNNEL_ID_REGEX.match(v):
+        raise ValueError("Invalid tunnel_id: must be 1-64 alphanumeric characters, underscores, or hyphens.")
+    return v
 
 
 def verify_node_token(request: Request):
@@ -33,9 +43,19 @@ class TunnelApply(BaseModel):
     type: str
     spec: Dict[str, Any]
 
+    @field_validator("tunnel_id")
+    @classmethod
+    def check_tunnel_id(cls, v: str) -> str:
+        return validate_tunnel_id(v)
+
 
 class TunnelRemove(BaseModel):
     tunnel_id: str
+
+    @field_validator("tunnel_id")
+    @classmethod
+    def check_tunnel_id(cls, v: str) -> str:
+        return validate_tunnel_id(v)
 
 
 class TunnelVerify(BaseModel):
@@ -45,6 +65,11 @@ class TunnelVerify(BaseModel):
     ports: Optional[List[int]] = None
     control_port: Optional[int] = None
     proto: Optional[str] = "udp"
+
+    @field_validator("tunnel_id")
+    @classmethod
+    def check_tunnel_id(cls, v: str) -> str:
+        return validate_tunnel_id(v)
 
 
 @router.post("/tunnels/verify")
@@ -101,6 +126,10 @@ async def remove_tunnel(data: TunnelRemove, request: Request):
 @router.get("/tunnels/status")
 async def get_tunnel_status(tunnel_id: str, request: Request):
     """Get tunnel status"""
+    try:
+        validate_tunnel_id(tunnel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     adapter_manager = request.app.state.adapter_manager
     
     try:

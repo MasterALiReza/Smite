@@ -1882,8 +1882,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.use_compression = formData.frp_compression
       } else if (tunnel.core === 'backhaul') {
         updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, tunnel.type as BackhaulTransport)
-        // Override ports if provided
-        if (ports.length > 0) {
+        if ((!updatedSpec.ports || updatedSpec.ports.length === 0) && ports.length > 0) {
           const targetHost = updatedSpec.target_host || '127.0.0.1'
           updatedSpec.ports = ports.map(p => `${p}=${targetHost}:${p}`)
         }
@@ -3690,14 +3689,17 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
 
   const handleCoreChange = (core: string) => {
     let newType = formData.type
-    if (core === 'rathole' || core === 'chisel') {
-      newType = core
+    if (core === 'chisel') {
+      newType = 'chisel'
+    } else if (core === 'rathole') {
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
     } else if (core === 'frp') {
-      // Keep current type if it's tcp or udp, otherwise default to tcp
-      newType = (formData.type === 'tcp' || formData.type === 'udp') ? formData.type : 'tcp'
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
     } else if (core === 'backhaul') {
       newType = backhaulState.transport
-    } else if (formData.type === 'rathole' || formData.type === 'chisel' || formData.core === 'backhaul') {
+    } else if (core === 'gost') {
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux') ? formData.type : 'tcp'
+    } else {
       newType = 'tcp'
     }
     setFormData({ ...formData, core, type: newType })
@@ -5377,6 +5379,20 @@ function BackhaulAdvancedDrawer({
     })
   }
 
+  const updateBoth = (key: string, value: string | boolean) => {
+    onChange({
+      ...state,
+      server: {
+        ...state.server,
+        [key]: value,
+      },
+      client: {
+        ...state.client,
+        [key]: value,
+      },
+    })
+  }
+
   return (
     <div className="fixed inset-0 z-[100] flex">
       <div className="flex-1 bg-black/50 backdrop-blur-sm transition-opacity" onClick={onClose} />
@@ -5441,10 +5457,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.mss}
-                  onChange={(e) => {
-                    updateServer('mss', e.target.value)
-                    updateClient('mss', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('mss', e.target.value)}
                   placeholder="e.g. 1380 (prevents fragmentation)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                   min={1000}
@@ -5461,10 +5474,7 @@ function BackhaulAdvancedDrawer({
                   <input
                     type="number"
                     value={state.server.heartbeat}
-                    onChange={(e) => {
-                      updateServer('heartbeat', e.target.value)
-                      updateClient('heartbeat', e.target.value)
-                    }}
+                    onChange={(e) => updateBoth('heartbeat', e.target.value)}
                     placeholder="Heartbeat (12)"
                     className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                     min={1}
@@ -5473,10 +5483,7 @@ function BackhaulAdvancedDrawer({
                   <input
                     type="number"
                     value={state.server.keepalive_period}
-                    onChange={(e) => {
-                      updateServer('keepalive_period', e.target.value)
-                      updateClient('keepalive_period', e.target.value)
-                    }}
+                    onChange={(e) => updateBoth('keepalive_period', e.target.value)}
                     placeholder="Keepalive (12)"
                     className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                     min={1}
@@ -5494,11 +5501,8 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="checkbox"
                   className="rounded text-indigo-600 focus:ring-indigo-500"
-                  checked={state.server.skip_optz || state.client.skip_optz}
-                  onChange={(e) => {
-                    updateServer('skip_optz', e.target.checked)
-                    updateClient('skip_optz', e.target.checked)
-                  }}
+                  checked={Boolean(state.server.skip_optz || state.client.skip_optz)}
+                  onChange={(e) => updateBoth('skip_optz', e.target.checked)}
                 />
               </label>
             </div>
@@ -5519,10 +5523,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.channel_size}
-                  onChange={(e) => {
-                    updateServer('channel_size', e.target.value)
-                    updateClient('channel_size', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('channel_size', e.target.value)}
                   placeholder="2048 (default) or 8192 (gaming)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                   min={512}
@@ -5551,10 +5552,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.so_rcvbuf}
-                  onChange={(e) => {
-                    updateServer('so_rcvbuf', e.target.value)
-                    updateClient('so_rcvbuf', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('so_rcvbuf', e.target.value)}
                   placeholder="e.g. 2097152 (2MB)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
@@ -5567,10 +5565,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.so_sndbuf}
-                  onChange={(e) => {
-                    updateServer('so_sndbuf', e.target.value)
-                    updateClient('so_sndbuf', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('so_sndbuf', e.target.value)}
                   placeholder="e.g. 2097152 (2MB)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
@@ -5605,10 +5600,7 @@ function BackhaulAdvancedDrawer({
                 </label>
                 <select
                   value={state.server.mux_version || '1'}
-                  onChange={(e) => {
-                    updateServer('mux_version', e.target.value)
-                    updateClient('mux_version', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('mux_version', e.target.value)}
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 >
                   <option value="1">Version 1 (Standard)</option>
@@ -5623,10 +5615,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.mux_framesize}
-                  onChange={(e) => {
-                    updateServer('mux_framesize', e.target.value)
-                    updateClient('mux_framesize', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('mux_framesize', e.target.value)}
                   placeholder="32768 (default) or 4096 (gaming)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
@@ -5653,10 +5642,7 @@ function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.mux_streambuffer}
-                  onChange={(e) => {
-                    updateServer('mux_streambuffer', e.target.value)
-                    updateClient('mux_streambuffer', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('mux_streambuffer', e.target.value)}
                   placeholder="e.g. 131072 (128KB)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
@@ -5689,10 +5675,7 @@ function BackhaulAdvancedDrawer({
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Log Level</label>
                 <select
                   value={state.server.log_level}
-                  onChange={(e) => {
-                    updateServer('log_level', e.target.value)
-                    updateClient('log_level', e.target.value)
-                  }}
+                  onChange={(e) => updateBoth('log_level', e.target.value)}
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 >
                   <option value="info">Info</option>

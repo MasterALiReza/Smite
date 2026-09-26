@@ -58,9 +58,13 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
         if isinstance(p, dict):
             val = p.get("local") or p.get("remote") or p.get("port")
             if val is not None and str(val).isdigit():
-                clean_ports.append(int(val))
+                port_num = int(val)
+                if 1 <= port_num <= 65535:
+                    clean_ports.append(port_num)
         elif isinstance(p, (int, str)) and str(p).isdigit():
-            clean_ports.append(int(p))
+            port_num = int(p)
+            if 1 <= port_num <= 65535:
+                clean_ports.append(port_num)
     return clean_ports
 
 
@@ -393,6 +397,30 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
             opts["heartbeat"] = 12 if is_gaming_mode else 20
         if is_udp_over_tcp:
             opts["accept_udp"] = True
+
+    # Normalize numeric and boolean keys to exact types
+    backhaul_numeric_keys = {
+        "keepalive_period", "heartbeat", "channel_size", "mux_con", "web_port",
+        "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
+        "mux_recievebuffer", "mux_streambuffer", "connection_pool", "retry_interval",
+        "dial_timeout"
+    }
+    backhaul_boolean_keys = {
+        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp"
+    }
+    for opts in (server_options, client_options):
+        for nk in backhaul_numeric_keys:
+            if nk in opts and opts[nk] is not None and opts[nk] != "":
+                try:
+                    opts[nk] = int(opts[nk])
+                except (ValueError, TypeError):
+                    pass
+        for bk in backhaul_boolean_keys:
+            if bk in opts and opts[bk] is not None:
+                if isinstance(opts[bk], str):
+                    opts[bk] = opts[bk].lower() in ("true", "1", "yes")
+                else:
+                    opts[bk] = bool(opts[bk])
 
     # Propagate advanced v0.7.2 options to server & client specs
     v072_keys = [
