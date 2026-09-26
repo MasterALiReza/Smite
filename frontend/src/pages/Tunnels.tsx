@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -106,9 +106,13 @@ interface BackhaulAdvancedState {
   customPorts: string
 }
 
+export const generateRandomControlPort = (): string => {
+  return String(Math.floor(20000 + Math.random() * 25000))
+}
+
 const createDefaultBackhaulState = (): BackhaulFormState => ({
   transport: 'tcp',
-  control_port: '3080',
+  control_port: generateRandomControlPort(),
   public_port: '443',
   listen_ip: '0.0.0.0',
   public_host: '',
@@ -2239,6 +2243,19 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-amber-500" />
                       Rathole Port
                     </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const port = generateRandomControlPort()
+                        const host = window.location.hostname
+                        setFormData({ ...formData, rathole_remote_addr: `${host}:${port}` })
+                      }}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/60 border border-orange-200/60 dark:border-orange-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -2423,7 +2440,15 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-emerald-500" />
                       Control Port
                     </label>
-                    <span className="text-[11px] text-gray-400">Auto-calculated</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, chisel_control_port: generateRandomControlPort() })}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-teal-50 dark:bg-teal-950/40 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/60 border border-teal-200/60 dark:border-teal-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Control Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -2582,7 +2607,15 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-cyan-500" />
                       FRP Bind Port
                     </label>
-                    <span className="text-[11px] text-gray-400">Default: 7000</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, frp_bind_port: generateRandomControlPort() })}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-cyan-50 dark:bg-cyan-950/40 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-100 dark:hover:bg-cyan-900/60 border border-cyan-200/60 dark:border-cyan-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Bind Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -3357,11 +3390,11 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     iran_node_id: '',
     ports: '8080',  // Comma-separated ports (e.g., "8080,8081,8082")
     remote_ip: '127.0.0.1',
-    rathole_remote_addr: String(Math.floor(25000 + Math.random() * 25000)),
+    rathole_remote_addr: generateRandomControlPort(),
     rathole_token: '',
     rathole_transport: 'tcp',
-    chisel_control_port: '',  // Empty means auto (listen_port + 10000)
-    frp_bind_port: '7000',
+    chisel_control_port: generateRandomControlPort(),
+    frp_bind_port: generateRandomControlPort(),
     frp_token: '',
     frp_local_ip: '127.0.0.1',
     frp_transport: 'tcp',
@@ -3689,20 +3722,34 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
 
   const handleCoreChange = (core: string) => {
     let newType = formData.type
+    const updated = { ...formData, core }
     if (core === 'chisel') {
       newType = 'chisel'
+      if (!updated.chisel_control_port) {
+        updated.chisel_control_port = generateRandomControlPort()
+      }
     } else if (core === 'rathole') {
       newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
+      if (!updated.rathole_remote_addr) {
+        updated.rathole_remote_addr = generateRandomControlPort()
+      }
     } else if (core === 'frp') {
       newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
+      if (!updated.frp_bind_port || updated.frp_bind_port === '7000') {
+        updated.frp_bind_port = generateRandomControlPort()
+      }
     } else if (core === 'backhaul') {
       newType = backhaulState.transport
+      if (!backhaulState.control_port || backhaulState.control_port === '3080') {
+        setBackhaulState(prev => ({ ...prev, control_port: generateRandomControlPort() }))
+      }
     } else if (core === 'gost') {
       newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux') ? formData.type : 'tcp'
     } else {
       newType = 'tcp'
     }
-    setFormData({ ...formData, core, type: newType })
+    updated.type = newType
+    setFormData(updated)
   }
 
   const generateUUID = () => {
@@ -4125,6 +4172,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-amber-500" />
                       Rathole Port
                     </label>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, rathole_remote_addr: generateRandomControlPort() })}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/60 border border-orange-200/60 dark:border-orange-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -4265,7 +4321,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-emerald-500" />
                       Control Port
                     </label>
-                    <span className="text-[11px] text-gray-400">Auto-calculated</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, chisel_control_port: generateRandomControlPort() })}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-teal-50 dark:bg-teal-950/40 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/60 border border-teal-200/60 dark:border-teal-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Control Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -4405,7 +4469,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       <Server size={14} className="text-cyan-500" />
                       FRP Bind Port
                     </label>
-                    <span className="text-[11px] text-gray-400">Default: 7000</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, frp_bind_port: generateRandomControlPort() })}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-cyan-50 dark:bg-cyan-950/40 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-100 dark:hover:bg-cyan-900/60 border border-cyan-200/60 dark:border-cyan-800/40 transition-all cursor-pointer shadow-xs"
+                      title="Generate Random Bind Port"
+                    >
+                      <Dices size={12} />
+                      <span>Random</span>
+                    </button>
                   </div>
                   <input
                     type="number"
@@ -5231,7 +5303,7 @@ function BackhaulForm({
             </span>
           </div>
           <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-1 leading-normal">
-            Enforces TCP_NODELAY, 4KB frames, 8K buffer, MSS 1380 clamping, and 12s heartbeat to eliminate packet spikes & HoL blocking.
+            Optimizes real-time streams to eliminate jitter, packet loss, and ping spikes for competitive gaming.
           </p>
         </div>
         <input
@@ -5250,7 +5322,15 @@ function BackhaulForm({
               <Server size={14} className="text-emerald-500" />
               Control Port
             </label>
-            <span className="text-[11px] text-gray-400">Default: 3080</span>
+            <button
+              type="button"
+              onClick={() => onChange({ control_port: generateRandomControlPort() })}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/60 dark:border-emerald-800/40 transition-all cursor-pointer shadow-xs"
+              title="Generate Random Control Port"
+            >
+              <Dices size={12} />
+              <span>Random</span>
+            </button>
           </div>
           <input
             type="number"
