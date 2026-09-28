@@ -249,7 +249,12 @@ async def _restore_chisel_servers():
                         server_port=server_control_port,
                         auth=auth,
                         fingerprint=fingerprint,
-                        use_ipv6=bool(use_ipv6)
+                        use_ipv6=bool(use_ipv6),
+                        tls_cert_pem=tunnel.spec.get("tls_cert_pem"),
+                        tls_key_pem=tunnel.spec.get("tls_key_pem"),
+                        backend_url=tunnel.spec.get("backend_url"),
+                        socks5=tunnel.type == "socks5" or tunnel.spec.get("socks5", False),
+                        keepalive=tunnel.spec.get("keepalive"),
                     )
                 except Exception as exc:
                     logger.error(

@@ -1,6 +1,9 @@
 """Chisel server management for panel"""
 import asyncio
 import logging
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -20,9 +23,21 @@ class ChiselServerManager:
         self.server_configs: Dict[str, dict] = {}
         self.log_files: Dict[str, object] = {}
     
-    async def start_server(self, tunnel_id: str, server_port: int, auth: Optional[str] = None, fingerprint: Optional[str] = None, use_ipv6: bool = False) -> bool:
+    async def start_server(
+        self,
+        tunnel_id: str,
+        server_port: int,
+        auth: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        use_ipv6: bool = False,
+        tls_cert_pem: Optional[str] = None,
+        tls_key_pem: Optional[str] = None,
+        backend_url: Optional[str] = None,
+        socks5: bool = False,
+        keepalive: Optional[str] = None
+    ) -> bool:
         """
-        Start a Chisel server for a tunnel
+        Start a Chisel server for a tunnel with WSS, decoy backend camouflage, and persistent SSH host key
         """
         try:
             if tunnel_id in self.active_servers:
@@ -30,10 +45,16 @@ class ChiselServerManager:
                 await self.stop_server(tunnel_id)
                 await asyncio.sleep(0.5)
             
-            host = "0.0.0.0"
+            host = "::" if use_ipv6 else "0.0.0.0"
+            
+            chisel_binary = "/usr/local/bin/chisel"
+            if not os.path.exists(chisel_binary):
+                chisel_binary = shutil.which("chisel")
+                if not chisel_binary:
+                    raise RuntimeError("chisel binary not found at /usr/local/bin/chisel or in PATH")
             
             cmd = [
-                "/usr/local/bin/chisel",
+                chisel_binary,
                 "server",
                 "--host", host,
                 "--port", str(server_port),
@@ -43,30 +64,78 @@ class ChiselServerManager:
             if auth:
                 cmd.extend(["--auth", auth])
             
-            if fingerprint:
-                cmd.extend(["--fingerprint", fingerprint])
-            
-            chisel_binary = "/usr/local/bin/chisel"
-            import os
-            import shutil
-            if not os.path.exists(chisel_binary):
-                chisel_binary = shutil.which("chisel")
-                if not chisel_binary:
-                    raise RuntimeError("chisel binary not found at /usr/local/bin/chisel or in PATH")
-            
-            cmd[0] = chisel_binary
+            # Persistent SSH host keyfile so clients can reliably pin --fingerprint without MITM risks
+            keyfile_path = self.config_dir / f"{tunnel_id}_ssh.key"
+            if not keyfile_path.exists():
+                try:
+                    subprocess.run(
+                        [chisel_binary, "server", "--keygen", str(keyfile_path)],
+                        check=True,
+                        timeout=5,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    os.chmod(keyfile_path, 0o600)
+                except Exception as e:
+                    logger.warning(f"Could not auto-generate persistent SSH key for chisel server {tunnel_id}: {e}")
+            if keyfile_path.exists():
+                cmd.extend(["--keyfile", str(keyfile_path)])
+
+            # WSS / TLS Certificate configuration
+            cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
+            key_path = self.config_dir / f"{tunnel_id}_key.pem"
+            if tls_cert_pem and tls_key_pem:
+                with open(cert_path, "w") as cf:
+                    cf.write(tls_cert_pem)
+                with open(key_path, "w") as kf:
+                    kf.write(tls_key_pem)
+                try:
+                    os.chmod(key_path, 0o600)
+                except Exception:
+                    pass
+            elif not cert_path.exists() and not key_path.exists() and (tls_cert_pem or tls_key_pem):
+                try:
+                    subprocess.run(
+                        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                         "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
+                         "-subj", "/CN=chisel-tunnel"],
+                        check=True,
+                        timeout=5,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    os.chmod(key_path, 0o600)
+                except Exception as e:
+                    logger.warning(f"Could not auto-generate self-signed cert for chisel server: {e}")
+
+            if cert_path.exists() and key_path.exists():
+                cmd.extend(["--tls-cert", str(cert_path), "--tls-key", str(key_path)])
+
+            # Active Probing Defense / Camouflage
+            if backend_url:
+                cmd.extend(["--backend", str(backend_url).strip()])
+
+            # SOCKS5 dynamic proxy support
+            if socks5:
+                cmd.append("--socks5")
+
+            # Stability / Keepalive tuning
+            if keepalive:
+                cmd.extend(["--keepalive", str(keepalive)])
             
             self.server_configs[tunnel_id] = {
                 "server_port": server_port,
                 "auth": auth,
-                "fingerprint": fingerprint,
-                "use_ipv6": use_ipv6
+                "use_ipv6": use_ipv6,
+                "backend_url": backend_url,
+                "socks5": socks5,
+                "keepalive": keepalive
             }
             
             log_file = self.config_dir / f"chisel_{tunnel_id}.log"
             log_f = open(log_file, 'w', buffering=1)
             log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
-            log_f.write(f"Config: server_port={server_port}, auth={auth is not None}, fingerprint={fingerprint is not None}\n")
+            log_f.write(f"Config: server_port={server_port}, auth={auth is not None}, wss={cert_path.exists()}\n")
             log_f.write(f"Command: {' '.join(cmd)}\n")
             log_f.flush()
             
@@ -104,7 +173,7 @@ class ChiselServerManager:
             raise
     
     async def stop_server(self, tunnel_id: str):
-        """Stop Chisel server for a tunnel"""
+        """Stop Chisel server for a tunnel and cleanup key/cert files"""
         if tunnel_id in self.active_servers:
             proc = self.active_servers[tunnel_id]
             await stop_async_process(proc)
@@ -121,6 +190,15 @@ class ChiselServerManager:
         
         if tunnel_id in self.server_configs:
             del self.server_configs[tunnel_id]
+
+        # Cleanup temporary keys & certificates
+        for suffix in ["_cert.pem", "_key.pem", "_ssh.key"]:
+            fpath = self.config_dir / f"{tunnel_id}{suffix}"
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                except Exception:
+                    pass
     
     async def is_running(self, tunnel_id: str) -> bool:
         """Check if server is running for a tunnel"""

@@ -1757,7 +1757,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         rathole_transport: formData.rathole_transport,
         rathole_remote_addr: formData.rathole_remote_addr,
         frp_token: formData.frp_token,
-        transport: tunnel.core === 'backhaul' ? backhaulState.transport : (tunnel.core === 'rathole' ? formData.rathole_transport : formData.transport_type),
+        frp_transport: formData.frp_transport,
+        chisel_transport: formData.chisel_transport,
+        chisel_backend_url: formData.chisel_backend_url,
+        transport: tunnel.core === 'backhaul' ? backhaulState.transport : (tunnel.core === 'rathole' ? formData.rathole_transport : (tunnel.core === 'chisel' ? formData.chisel_transport : (tunnel.core === 'frp' ? formData.frp_transport : formData.transport_type))),
         is_reverse: formData.is_reverse,
       }
       const response = await api.post('/tunnels/test-config', payload)
@@ -3699,7 +3702,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         rathole_transport: formData.rathole_transport,
         rathole_remote_addr: formData.rathole_remote_addr,
         frp_token: formData.frp_token,
-        transport: formData.core === 'backhaul' ? backhaulState.transport : (formData.core === 'rathole' ? formData.rathole_transport : formData.transport_type),
+        frp_transport: formData.frp_transport,
+        chisel_transport: formData.chisel_transport,
+        chisel_backend_url: formData.chisel_backend_url,
+        transport: formData.core === 'backhaul' ? backhaulState.transport : (formData.core === 'rathole' ? formData.rathole_transport : (formData.core === 'chisel' ? formData.chisel_transport : (formData.core === 'frp' ? formData.frp_transport : formData.transport_type))),
         is_reverse: formData.is_reverse,
       }
       const response = await api.post('/tunnels/test-config', payload)

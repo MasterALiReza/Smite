@@ -719,7 +719,12 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         server_port=server_control_port,
                         auth=auth,
                         fingerprint=fingerprint,
-                        use_ipv6=bool(use_ipv6)
+                        use_ipv6=bool(use_ipv6),
+                        tls_cert_pem=db_tunnel.spec.get("tls_cert_pem"),
+                        tls_key_pem=db_tunnel.spec.get("tls_key_pem"),
+                        backend_url=db_tunnel.spec.get("backend_url"),
+                        socks5=db_tunnel.type == "socks5" or db_tunnel.spec.get("socks5", False),
+                        keepalive=db_tunnel.spec.get("keepalive"),
                     )
                     await asyncio.sleep(1.0)
                     if not await request.app.state.chisel_server_manager.is_running(db_tunnel.id):
@@ -2084,11 +2089,17 @@ async def test_tunnel_config(
             "detail": f"FRP {transport.upper()} mode verified"
         })
     elif core == "chisel":
+        chisel_transport = payload.get("chisel_transport") or payload.get("transport") or "ws"
+        use_wss = str(chisel_transport).lower() in ("wss", "https", "tls")
+        backend_url = payload.get("chisel_backend_url") or spec.get("backend_url")
+        detail_parts = [f"Chisel {'WSS (Secure WebSocket)' if use_wss else 'WS (WebSocket)'}"]
+        if backend_url:
+            detail_parts.append(f"Camouflage Decoy ({backend_url})")
         checks.append({
             "name": "protocol",
             "title": "Chisel Protocol Spec",
             "status": "passed",
-            "detail": "Chisel WebSocket tunnel verified"
+            "detail": " + ".join(detail_parts) + " verified"
         })
     else:
         checks.append({
