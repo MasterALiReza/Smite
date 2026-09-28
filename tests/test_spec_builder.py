@@ -428,7 +428,10 @@ def test_spec_builder_backhaul_mux_version_and_types_normalization():
 
 def test_spec_builder_parse_ports_list_bounds():
     """Verify parse_ports_list filters out non-standard and out-of-bounds ports"""
-    from panel.app.spec_builder import parse_ports_list
+    try:
+        from panel.app.spec_builder import parse_ports_list
+    except ImportError:
+        from app.spec_builder import parse_ports_list
     bad_spec = {
         "ports": [80, 0, 443, 70000, -1, 65535, "invalid", "8080"]
     }
