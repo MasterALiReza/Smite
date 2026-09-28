@@ -934,9 +934,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     if bandwidth_limit:
         client_spec["bandwidth_limit"] = bandwidth_limit
         client_spec["bandwidth_limit_mode"] = bandwidth_limit_mode
+    else:
+        client_spec.pop("bandwidth_limit", None)
+        client_spec.pop("bandwidth_limit_mode", None)
 
     if proxy_protocol_version:
         client_spec["proxy_protocol_version"] = proxy_protocol_version
+    else:
+        client_spec.pop("proxy_protocol_version", None)
 
     if custom_domains:
         client_spec["custom_domains"] = custom_domains
@@ -966,8 +971,12 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 tunnel.spec["health_check_path"] = health_check_path
         if bandwidth_limit:
             tunnel.spec["bandwidth_limit"] = bandwidth_limit
+        else:
+            tunnel.spec.pop("bandwidth_limit", None)
         if proxy_protocol_version:
             tunnel.spec["proxy_protocol_version"] = proxy_protocol_version
+        else:
+            tunnel.spec.pop("proxy_protocol_version", None)
         if custom_domains:
             tunnel.spec["custom_domains"] = custom_domains
 
