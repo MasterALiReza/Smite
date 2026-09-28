@@ -53,10 +53,14 @@ class FrpServerManager:
         bind_port: int, 
         token: Optional[str] = None,
         transport_proto: str = "tcp",
-        force_tls: bool = False
+        force_tls: bool = False,
+        tunnel_type: str = "tcp",
+        vhost_port: Optional[int] = None,
+        tls_cert_pem: Optional[str] = None,
+        tls_key_pem: Optional[str] = None
     ) -> bool:
         """
-        Start an FRP server for a tunnel with full multi-transport and TLS support
+        Start an FRP server for a tunnel with full multi-transport, TLS, and vhost support
         """
         try:
             if tunnel_id in self.active_servers:
@@ -65,6 +69,7 @@ class FrpServerManager:
                 await asyncio.sleep(0.5)
             
             proto = transport_proto.lower()
+            t_type = (tunnel_type or "tcp").lower()
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"bindPort: {bind_port}\n"
             
@@ -74,7 +79,28 @@ class FrpServerManager:
                 config_content += f"kcpBindPort: 0\nquicBindPort: {bind_port}\n"
             else:
                 config_content += "kcpBindPort: 0\nquicBindPort: 0\n"
+
+            if t_type == 'http':
+                hp = vhost_port or (bind_port + 1 if bind_port == 80 else 80)
+                config_content += f"vhostHTTPPort: {hp}\n"
+            elif t_type == 'https':
+                hp = vhost_port or (bind_port + 1 if bind_port == 443 else 443)
+                config_content += f"vhostHTTPSPort: {hp}\n"
             
+            cert_file = None
+            key_file = None
+            if tls_cert_pem and tls_key_pem:
+                cert_file = self.config_dir / f"{tunnel_id}_cert.pem"
+                key_file = self.config_dir / f"{tunnel_id}_key.pem"
+                with open(cert_file, 'w', encoding='utf-8') as cf:
+                    cf.write(tls_cert_pem)
+                with open(key_file, 'w', encoding='utf-8') as kf:
+                    kf.write(tls_key_pem)
+                try:
+                    os.chmod(key_file, 0o600)
+                except Exception:
+                    pass
+
             config_content += f"""transport:
   maxPoolCount: 8
   heartbeatTimeout: 90
@@ -83,10 +109,15 @@ class FrpServerManager:
   tls:
     force: {'true' if force_tls else 'false'}
 """
+            if cert_file and key_file:
+                config_content += f"""    certFile: "{cert_file.resolve()}"
+    keyFile: "{key_file.resolve()}"
+"""
             if token:
+                clean_tok = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
                 config_content += f"""auth:
   method: token
-  token: "{token}"
+  token: "{clean_tok}"
   additionalScopes:
     - HeartBeats
     - NewWorkConns

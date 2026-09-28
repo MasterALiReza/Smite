@@ -779,7 +779,11 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         bind_port=int(bind_port),
                         token=token,
                         transport_proto=transport_type.lower(),
-                        force_tls=force_tls
+                        force_tls=force_tls,
+                        tunnel_type=getattr(db_tunnel, "type", "tcp") or "tcp",
+                        vhost_port=db_tunnel.spec.get("vhost_http_port") or db_tunnel.spec.get("vhost_https_port"),
+                        tls_cert_pem=db_tunnel.spec.get("tls_cert_pem"),
+                        tls_key_pem=db_tunnel.spec.get("tls_key_pem"),
                     )
                     await asyncio.sleep(1.0)
                     if not await request.app.state.frp_server_manager.is_running(db_tunnel.id):

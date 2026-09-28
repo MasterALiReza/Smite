@@ -546,7 +546,7 @@ def test_spec_builder_frp_reliability_and_limits():
 
 
 def test_spec_builder_frp_vhost_http():
-    """Verify HTTP/HTTPS vhost custom domains routing"""
+    """Verify HTTP/HTTPS vhost custom domains routing and separate external vhost port"""
     tunnel = DummyTunnel(
         id="t-frp-vhost",
         core="frp",
@@ -559,8 +559,55 @@ def test_spec_builder_frp_vhost_http():
     s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     assert s["type"] == "http"
     assert c["type"] == "http"
+    assert s["vhost_http_port"] == 80
+    assert s["bind_port"] != s["vhost_http_port"]
     assert s["custom_domains"] == ["api.example.com", "app.example.com"]
     assert c["custom_domains"] == ["api.example.com", "app.example.com"]
+
+
+def test_spec_builder_frp_port_collision_avoidance():
+    """Verify FRP dynamically reallocates bind_port when it conflicts with forwarded service ports"""
+    tunnel = DummyTunnel(
+        id="t-frp-conflict",
+        core="frp",
+        type="tcp",
+        spec={
+            "ports": [7000],
+            "bind_port": 7000
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["bind_port"] != 7000
+    assert c["server_port"] != 7000
+    assert s["bind_port"] == c["server_port"]
+    assert s["ports"] == [7000]
+
+
+def test_spec_builder_frp_bandwidth_normalization():
+    """Verify FRP normalizes bandwidth limits, stripping spaces and units correctly"""
+    tunnel = DummyTunnel(
+        id="t-frp-bw",
+        core="frp",
+        type="tcp",
+        spec={
+            "ports": [8080],
+            "bandwidth_limit": " 50 mb "
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert c["bandwidth_limit"] == "50MB"
+
+    tunnel_invalid = DummyTunnel(
+        id="t-frp-bw-inv",
+        core="frp",
+        type="tcp",
+        spec={
+            "ports": [8080],
+            "bandwidth_limit": "unlimited\nmalicious_yaml"
+        }
+    )
+    s_inv, c_inv = build_tunnel_node_specs(tunnel_invalid, "1.1.1.1", "2.2.2.2")
+    assert "bandwidth_limit" not in c_inv
 
 
 

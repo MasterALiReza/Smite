@@ -1782,10 +1782,23 @@ class FrpAdapter:
             else:
                 config_content += "kcpBindPort: 0\nquicBindPort: 0\n"
 
+            first_service_port = None
+            for p_item in (spec.get('ports') or []):
+                if isinstance(p_item, (int, str)) and str(p_item).isdigit():
+                    first_service_port = int(p_item)
+                    break
+                elif isinstance(p_item, dict):
+                    p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
+                    if p_val and str(p_val).isdigit():
+                        first_service_port = int(p_val)
+                        break
+
             if tunnel_type == 'http':
-                config_content += f"vhostHTTPPort: {bind_port}\n"
+                hp = spec.get('vhost_http_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 80 else 80))
+                config_content += f"vhostHTTPPort: {hp}\n"
             elif tunnel_type == 'https':
-                config_content += f"vhostHTTPSPort: {bind_port}\n"
+                hp = spec.get('vhost_https_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
+                config_content += f"vhostHTTPSPort: {hp}\n"
 
             config_content += f"""transport:
   maxPoolCount: 8
@@ -1889,12 +1902,23 @@ class FrpAdapter:
             use_encryption = spec.get('use_encryption', True)
             use_compression = spec.get('use_compression', True)
             
-            # Bandwidth limit per proxy
+            # Bandwidth limit per proxy (clean format: e.g. 10MB, 500KB)
             bandwidth_limit = spec.get('bandwidth_limit')
             rate_limit_mbps = spec.get('rate_limit_mbps')
             if not bandwidth_limit and rate_limit_mbps and float(rate_limit_mbps) > 0:
                 bandwidth_limit = f"{int(float(rate_limit_mbps))}MB"
+            if bandwidth_limit:
+                clean_bw = str(bandwidth_limit).strip().upper().replace(" ", "")
+                if clean_bw.isdigit():
+                    clean_bw = f"{clean_bw}MB"
+                import re
+                if re.match(r'^\d+(KB|MB|GB|B)$', clean_bw):
+                    bandwidth_limit = clean_bw
+                else:
+                    bandwidth_limit = None
             bandwidth_limit_mode = spec.get('bandwidth_limit_mode', 'client')
+            if bandwidth_limit_mode not in ['client', 'server']:
+                bandwidth_limit_mode = 'client'
 
             # Proxy protocol version (v1, v2)
             proxy_protocol_version = spec.get('proxy_protocol_version')
@@ -1906,7 +1930,10 @@ class FrpAdapter:
             health_check_interval = int(spec.get('health_check_interval_s') or 10)
             health_check_timeout = int(spec.get('health_check_timeout_s') or 3)
             health_check_max_failed = int(spec.get('health_check_max_failed') or 3)
-            health_check_path = spec.get('health_check_path', '/')
+            health_check_path = str(spec.get('health_check_path', '/')).strip()
+            if not health_check_path.startswith('/'):
+                health_check_path = f"/{health_check_path}"
+            health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
 
             # Custom domains for HTTP/HTTPS
             custom_domains = spec.get('custom_domains') or []

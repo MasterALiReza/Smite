@@ -679,25 +679,80 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
 
 def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Generate server (Iran) and client (Foreign) specs for FRP core with WSS, QUIC, Strict Auth, Health Checks, Bandwidth Limits, and VHost routing"""
+    import re
     spec = tunnel.spec.copy() if tunnel.spec else {}
     server_spec = spec.copy()
     server_spec["mode"] = "server"
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
-    # 1. Control / Bind Port allocation
+    # 1. Service / Proxy Type (tcp, udp, tcp+udp, http, https)
+    tunnel_type = (
+        getattr(tunnel, "type", None)
+        or getattr(tunnel, "tunnel_type", None)
+        or server_spec.get("tunnel_type")
+        or server_spec.get("type")
+        or "tcp"
+    ).lower()
+    if tunnel_type not in ["tcp", "udp", "tcp+udp", "http", "https"]:
+        tunnel_type = "tcp"
+
+    # 2. Ports and Proxy List parsing (extract first so control port avoids collision)
+    raw_ports = server_spec.get("ports")
+    if raw_ports and isinstance(raw_ports, list) and len(raw_ports) > 0:
+        ports = raw_ports
+    else:
+        ports = parse_ports_list(server_spec)
+        if not ports:
+            local_port = server_spec.get("local_port")
+            remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
+            if remote_port and local_port:
+                ports = [int(local_port)]
+            elif remote_port:
+                ports = [int(remote_port)]
+            elif local_port:
+                ports = [int(local_port)]
+            else:
+                ports = [80] if tunnel_type == "http" else ([443] if tunnel_type == "https" else [8080])
+
+    service_port_ints = set()
+    first_service_port = None
+    for p in ports:
+        if isinstance(p, int):
+            service_port_ints.add(p)
+            if first_service_port is None:
+                first_service_port = p
+        elif isinstance(p, str) and p.isdigit():
+            service_port_ints.add(int(p))
+            if first_service_port is None:
+                first_service_port = int(p)
+        elif isinstance(p, dict):
+            for k in ("remote", "remote_port", "local", "local_port", "port"):
+                v = p.get(k)
+                if v and str(v).isdigit():
+                    service_port_ints.add(int(v))
+                    if first_service_port is None:
+                        first_service_port = int(v)
+
+    # 3. Control / Bind Port allocation (Strictly distinct from service ports)
     port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
     raw_bind = server_spec.get("bind_port") or server_spec.get("control_port")
     try:
         bind_p = int(raw_bind) if raw_bind else 0
     except (ValueError, TypeError):
         bind_p = 0
-    if bind_p < 1024 or bind_p > 65535:
+    if bind_p < 1024 or bind_p > 65535 or bind_p in service_port_ints:
         bind_port = 7000 + (port_hash % 1000)
+        while bind_port in service_port_ints:
+            bind_port += 1
     else:
         bind_port = bind_p
 
-    # 2. Authentication (Token & Stricter Scopes)
+    # VHost external port allocation for HTTP / HTTPS (must not collide with bind_port)
+    vhost_http_port = server_spec.get("vhost_http_port") or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 80 else 80))
+    vhost_https_port = server_spec.get("vhost_https_port") or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
+
+    # 4. Authentication (Token & Stricter Scopes)
     token = server_spec.get("token") or server_spec.get("auth_token")
     if not token:
         token = generate_token() if generate_token else "default-token"
@@ -710,7 +765,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         server_spec["auth_additional_scopes"] = scopes
         client_spec["auth_additional_scopes"] = scopes
 
-    # 3. Transport Protocol Resolution (tcp, kcp, quic, websocket, wss)
+    # 5. Transport Protocol Resolution (tcp, kcp, quic, websocket, wss)
     raw_transport = (
         getattr(tunnel, "transport_type", None)
         or server_spec.get("transport_type")
@@ -788,35 +843,6 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 tunnel.spec["tls_cert_pem"] = tls_cert_pem
                 tunnel.spec["tls_key_pem"] = tls_key_pem
 
-    # 4. Service / Proxy Type (tcp, udp, tcp+udp, http, https)
-    tunnel_type = (
-        getattr(tunnel, "type", None)
-        or getattr(tunnel, "tunnel_type", None)
-        or server_spec.get("tunnel_type")
-        or server_spec.get("type")
-        or "tcp"
-    ).lower()
-    if tunnel_type not in ["tcp", "udp", "tcp+udp", "http", "https"]:
-        tunnel_type = "tcp"
-
-    # 5. Ports and Proxy List parsing
-    raw_ports = server_spec.get("ports")
-    if raw_ports and isinstance(raw_ports, list) and len(raw_ports) > 0:
-        ports = raw_ports
-    else:
-        ports = parse_ports_list(server_spec)
-        if not ports:
-            local_port = server_spec.get("local_port")
-            remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-            if remote_port and local_port:
-                ports = [int(local_port)]
-            elif remote_port:
-                ports = [int(remote_port)]
-            elif local_port:
-                ports = [int(local_port)]
-            else:
-                ports = [bind_port]
-
     # 6. Reliability, Health Checks & Bandwidth Shaping
     use_encryption = bool(server_spec.get("use_encryption", True))
     use_compression = bool(server_spec.get("use_compression", True))
@@ -831,13 +857,27 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     health_check_interval = int(server_spec.get("health_check_interval_s") or 10)
     health_check_timeout = int(server_spec.get("health_check_timeout_s") or 3)
     health_check_max_failed = int(server_spec.get("health_check_max_failed") or 3)
+    health_check_path = str(server_spec.get("health_check_path") or "/").strip()
+    if not health_check_path.startswith("/"):
+        health_check_path = f"/{health_check_path}"
+    health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
 
-    # Bandwidth limit per proxy
+    # Bandwidth limit per proxy (normalized and validated format: e.g. 10MB, 500KB)
     rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or server_spec.get("rate_limit_mbps")
-    bandwidth_limit = server_spec.get("bandwidth_limit")
-    if not bandwidth_limit and rate_limit_mbps and float(rate_limit_mbps) > 0:
-        bandwidth_limit = f"{int(float(rate_limit_mbps))}MB"
+    raw_bw = server_spec.get("bandwidth_limit")
+    if not raw_bw and rate_limit_mbps and float(rate_limit_mbps) > 0:
+        raw_bw = f"{int(float(rate_limit_mbps))}MB"
+    
+    bandwidth_limit = None
+    if raw_bw:
+        clean_bw = str(raw_bw).strip().upper().replace(" ", "")
+        if clean_bw.isdigit():
+            clean_bw = f"{clean_bw}MB"
+        if re.match(r'^\d+(KB|MB|GB|B)$', clean_bw):
+            bandwidth_limit = clean_bw
     bandwidth_limit_mode = server_spec.get("bandwidth_limit_mode", "client")
+    if bandwidth_limit_mode not in ["client", "server"]:
+        bandwidth_limit_mode = "client"
 
     # Proxy protocol version (v1, v2, none)
     proxy_protocol_version = server_spec.get("proxy_protocol_version") or getattr(tunnel, "proxy_protocol_version", None)
@@ -854,6 +894,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     # 7. Assembling Server & Client Specs
     server_spec["bind_port"] = bind_port
     server_spec["control_port"] = bind_port
+    server_spec["vhost_http_port"] = vhost_http_port
+    server_spec["vhost_https_port"] = vhost_https_port
     server_spec["token"] = token
     server_spec["transport_type"] = transport_proto
     server_spec["transport"] = transport_proto
@@ -886,6 +928,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         client_spec["health_check_interval_s"] = health_check_interval
         client_spec["health_check_timeout_s"] = health_check_timeout
         client_spec["health_check_max_failed"] = health_check_max_failed
+        if health_check_type == "http":
+            client_spec["health_check_path"] = health_check_path
 
     if bandwidth_limit:
         client_spec["bandwidth_limit"] = bandwidth_limit
@@ -903,6 +947,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         tunnel.spec["token"] = token
         tunnel.spec["bind_port"] = bind_port
         tunnel.spec["control_port"] = bind_port
+        tunnel.spec["vhost_http_port"] = vhost_http_port
+        tunnel.spec["vhost_https_port"] = vhost_https_port
         tunnel.spec["transport_type"] = transport_proto
         tunnel.spec["transport"] = transport_proto
         tunnel.spec["security_type"] = security_type
@@ -916,6 +962,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             tunnel.spec["custom_sni"] = custom_sni
         if health_check_type:
             tunnel.spec["health_check_type"] = health_check_type
+            if health_check_type == "http":
+                tunnel.spec["health_check_path"] = health_check_path
         if bandwidth_limit:
             tunnel.spec["bandwidth_limit"] = bandwidth_limit
         if proxy_protocol_version:

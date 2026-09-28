@@ -1966,7 +1966,18 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         name: formData.name,
         category: formData.category ? formData.category.trim() : null,
         spec: updatedSpec,
-        transport_type: tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : formData.transport_type),
+        transport_type: tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type)),
+        ...(tunnel.core === 'frp' && {
+          security_type: formData.frp_security || 'tls',
+          custom_sni: formData.frp_sni || null,
+          is_reverse: true,
+        }),
+        ...(tunnel.core === 'chisel' && {
+          security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
+          custom_sni: formData.chisel_custom_sni || null,
+          custom_host: formData.chisel_custom_host || null,
+          is_reverse: true,
+        }),
         ...(tunnel.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
@@ -4092,6 +4103,27 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
             ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
             : null,
           port_ranges: port_ranges.length > 0 ? port_ranges : null
+        }),
+        ...(formData.core === 'frp' && {
+          transport_type: formData.frp_transport || 'tcp',
+          security_type: formData.frp_security || 'tls',
+          custom_sni: formData.frp_sni || null,
+          is_reverse: true,
+        }),
+        ...(formData.core === 'chisel' && {
+          transport_type: formData.chisel_transport || 'ws',
+          security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
+          custom_sni: formData.chisel_custom_sni || null,
+          custom_host: formData.chisel_custom_host || null,
+          is_reverse: true,
+        }),
+        ...(formData.core === 'rathole' && {
+          transport_type: formData.rathole_transport || 'tcp',
+          is_reverse: true,
+        }),
+        ...(formData.core === 'backhaul' && {
+          transport_type: backhaulState.transport || 'tcpmux',
+          is_reverse: true,
         }),
         node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
         foreign_node_id: formData.foreign_node_id || null,
