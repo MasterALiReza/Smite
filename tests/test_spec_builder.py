@@ -474,6 +474,95 @@ def test_spec_builder_chisel_control_port_bounds():
     assert s_inv["control_port"] != 8080
 
 
+def test_spec_builder_frp_wss_mode():
+    """Verify FRP WSS mode generates in-memory server TLS certs and enables client TLS"""
+    tunnel = DummyTunnel(
+        id="t-frp-wss",
+        core="frp",
+        type="tcp",
+        spec={
+            "ports": [8443],
+            "transport_type": "wss",
+            "custom_sni": "cdn.example.com",
+            "token": "secret-wss-token"
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["mode"] == "server"
+    assert c["mode"] == "client"
+    assert s["transport_type"] == "wss"
+    assert c["transport"] == "wss"
+    assert c["tls_enable"] is True
+    assert c["custom_sni"] == "cdn.example.com"
+    assert "tls_cert_pem" in s and "BEGIN CERTIFICATE" in s["tls_cert_pem"]
+    assert "tls_key_pem" in s and "BEGIN RSA PRIVATE KEY" in s["tls_key_pem"]
+
+
+def test_spec_builder_frp_quic_and_kcp():
+    """Verify FRP QUIC and KCP transports are properly recognized and configured"""
+    tunnel_quic = DummyTunnel(
+        id="t-frp-quic",
+        core="frp",
+        type="tcp",
+        spec={"ports": [8080], "transport": "quic"}
+    )
+    s_q, c_q = build_tunnel_node_specs(tunnel_quic, "1.1.1.1", "2.2.2.2")
+    assert s_q["transport"] == "quic"
+    assert c_q["transport"] == "quic"
+    assert c_q["tls_enable"] is True
+
+    tunnel_kcp = DummyTunnel(
+        id="t-frp-kcp",
+        core="frp",
+        type="tcp",
+        spec={"ports": [8080], "transport": "kcp", "security_type": "none"}
+    )
+    s_k, c_k = build_tunnel_node_specs(tunnel_kcp, "1.1.1.1", "2.2.2.2")
+    assert s_k["transport"] == "kcp"
+    assert c_k["transport"] == "kcp"
+    assert c_k["tls_enable"] is False
+
+
+def test_spec_builder_frp_reliability_and_limits():
+    """Verify health checks, rate limiting, and proxy protocol are propagated"""
+    tunnel = DummyTunnel(
+        id="t-frp-limits",
+        core="frp",
+        type="tcp",
+        rate_limit_mbps=25,
+        proxy_protocol_version="v2",
+        spec={
+            "ports": [8080],
+            "enable_health_check": True,
+            "health_check_type": "tcp",
+            "health_check_interval_s": 5,
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert c["health_check_type"] == "tcp"
+    assert c["health_check_interval_s"] == 5
+    assert c["bandwidth_limit"] == "25MB"
+    assert c["proxy_protocol_version"] == "v2"
+
+
+def test_spec_builder_frp_vhost_http():
+    """Verify HTTP/HTTPS vhost custom domains routing"""
+    tunnel = DummyTunnel(
+        id="t-frp-vhost",
+        core="frp",
+        type="http",
+        spec={
+            "ports": [80],
+            "custom_domains": ["api.example.com", "app.example.com"]
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["type"] == "http"
+    assert c["type"] == "http"
+    assert s["custom_domains"] == ["api.example.com", "app.example.com"]
+    assert c["custom_domains"] == ["api.example.com", "app.example.com"]
+
+
 
 if __name__ == "__main__":
     import inspect

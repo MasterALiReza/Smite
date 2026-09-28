@@ -1715,6 +1715,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     frp_sni: tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
     frp_encryption: tunnel.spec?.use_encryption !== false,
     frp_compression: tunnel.spec?.use_compression !== false,
+    frp_health_check: tunnel.spec?.enable_health_check !== false && tunnel.spec?.health_check_type !== null,
+    frp_bandwidth_limit: tunnel.spec?.bandwidth_limit || '',
+    frp_proxy_protocol: tunnel.spec?.proxy_protocol_version || 'none',
+    frp_custom_domains: Array.isArray(tunnel.spec?.custom_domains) ? tunnel.spec.custom_domains.join(', ') : (tunnel.spec?.custom_domains || ''),
     node_ipv6: tunnel.spec?.node_ipv6 || '',
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
@@ -1758,6 +1762,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         rathole_remote_addr: formData.rathole_remote_addr,
         frp_token: formData.frp_token,
         frp_transport: formData.frp_transport,
+        frp_security: formData.frp_security,
+        frp_health_check: formData.frp_health_check,
+        frp_bandwidth_limit: formData.frp_bandwidth_limit,
+        frp_proxy_protocol: formData.frp_proxy_protocol,
         chisel_transport: formData.chisel_transport,
         chisel_backend_url: formData.chisel_backend_url,
         transport: tunnel.core === 'backhaul' ? backhaulState.transport : (tunnel.core === 'rathole' ? formData.rathole_transport : (tunnel.core === 'chisel' ? formData.chisel_transport : (tunnel.core === 'frp' ? formData.frp_transport : formData.transport_type))),
@@ -1917,12 +1925,30 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         }
         updatedSpec.local_ip = formData.frp_local_ip || '127.0.0.1'
         updatedSpec.local_port = ports[0]  // Keep for backward compatibility
-        updatedSpec.type = tunnel.type === 'udp' ? 'udp' : 'tcp'
+        updatedSpec.type = (tunnel.type === 'udp' || tunnel.type === 'tcp+udp' || tunnel.type === 'http' || tunnel.type === 'https') ? tunnel.type : 'tcp'
         updatedSpec.transport_type = formData.frp_transport || 'tcp'
+        updatedSpec.transport = formData.frp_transport || 'tcp'
         updatedSpec.security_type = formData.frp_security || 'tls'
         updatedSpec.custom_sni = formData.frp_sni || ''
         updatedSpec.use_encryption = formData.frp_encryption
         updatedSpec.use_compression = formData.frp_compression
+        updatedSpec.enable_health_check = formData.frp_health_check !== false
+        updatedSpec.health_check_type = formData.frp_health_check !== false ? (tunnel.type === 'http' ? 'http' : 'tcp') : null
+        if (formData.frp_bandwidth_limit) {
+          updatedSpec.bandwidth_limit = formData.frp_bandwidth_limit
+        } else {
+          delete updatedSpec.bandwidth_limit
+        }
+        if (formData.frp_proxy_protocol && formData.frp_proxy_protocol !== 'none') {
+          updatedSpec.proxy_protocol_version = formData.frp_proxy_protocol
+        } else {
+          delete updatedSpec.proxy_protocol_version
+        }
+        if (formData.frp_custom_domains) {
+          updatedSpec.custom_domains = formData.frp_custom_domains.split(',').map((d: string) => d.trim()).filter(Boolean)
+        } else {
+          delete updatedSpec.custom_domains
+        }
       } else if (tunnel.core === 'backhaul') {
         updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, tunnel.type as BackhaulTransport)
         if ((!updatedSpec.ports || updatedSpec.ports.length === 0) && ports.length > 0) {
@@ -3016,6 +3042,89 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   Shared secret token verifying client-server authorization.
                 </p>
               </div>
+
+              {/* Reliability & Shaping */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                  <div className="pr-2">
+                    <div className="flex items-center gap-1.5">
+                      <Activity size={15} className="text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-xs font-bold text-gray-900 dark:text-white">Native Health Check</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                      Auto-detect dead links & reconnect fast
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={formData.frp_health_check}
+                    onChange={(e) => setFormData({ ...formData, frp_health_check: e.target.checked })}
+                  />
+                  <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 shrink-0 relative"></div>
+                </label>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Network size={14} className="text-blue-500" />
+                      Proxy Protocol Version
+                    </label>
+                  </div>
+                  <select
+                    value={formData.frp_proxy_protocol || 'none'}
+                    onChange={(e) => setFormData({ ...formData, frp_proxy_protocol: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
+                  >
+                    <option value="none">Disabled (Direct)</option>
+                    <option value="v1">v1 (ASCII Text)</option>
+                    <option value="v2">v2 (Binary Fast)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Bandwidth Limit & Custom Domains */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Gauge size={14} className="text-amber-500" />
+                      Bandwidth Rate Limit
+                    </label>
+                    <span className="text-[11px] text-gray-400">Optional</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.frp_bandwidth_limit}
+                    onChange={(e) => setFormData({ ...formData, frp_bandwidth_limit: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all font-mono"
+                    placeholder="e.g. 10MB or 500KB"
+                  />
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Per-proxy bandwidth limit cap (e.g. 20MB).
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Globe size={14} className="text-cyan-500" />
+                      VHost Domains (Optional)
+                    </label>
+                    <span className="text-[11px] text-gray-400">HTTP/HTTPS</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.frp_custom_domains}
+                    onChange={(e) => setFormData({ ...formData, frp_custom_domains: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all font-mono"
+                    placeholder="e.g. app.domain.com"
+                  />
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Custom domain routing for HTTP/HTTPS tunnels.
+                  </p>
+                </div>
+              </div>
             </div>
           )}
           
@@ -3659,6 +3768,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     frp_sni: '',
     frp_encryption: true,
     frp_compression: true,
+    frp_health_check: true,
+    frp_bandwidth_limit: '',
+    frp_proxy_protocol: 'none',
+    frp_custom_domains: '',
     use_ipv6: false,
     node_ipv6: '',  // Optional IPv6 address for node (Rathole/Chisel)
     spec: {} as Record<string, any>,
@@ -3703,6 +3816,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         rathole_remote_addr: formData.rathole_remote_addr,
         frp_token: formData.frp_token,
         frp_transport: formData.frp_transport,
+        frp_security: formData.frp_security,
+        frp_health_check: formData.frp_health_check,
+        frp_bandwidth_limit: formData.frp_bandwidth_limit,
+        frp_proxy_protocol: formData.frp_proxy_protocol,
         chisel_transport: formData.chisel_transport,
         chisel_backend_url: formData.chisel_backend_url,
         transport: formData.core === 'backhaul' ? backhaulState.transport : (formData.core === 'rathole' ? formData.rathole_transport : (formData.core === 'chisel' ? formData.chisel_transport : (formData.core === 'frp' ? formData.frp_transport : formData.transport_type))),
@@ -3910,7 +4027,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
       }
       
       if (formData.core === 'frp') {
-        if (!formData.node_id) {
+        if (!formData.node_id && !formData.iran_node_id) {
           showToast('warning', 'Node Required', 'FRP tunnels require an Iran node')
           return
         }
@@ -3924,13 +4041,25 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         }
         spec.local_ip = formData.frp_local_ip || '127.0.0.1'
         spec.local_port = ports[0]
-        spec.type = formData.type === 'udp' ? 'udp' : 'tcp'
-        tunnelType = formData.type === 'udp' ? 'udp' : 'tcp'
+        spec.type = (formData.type === 'udp' || formData.type === 'tcp+udp' || formData.type === 'http' || formData.type === 'https') ? formData.type : 'tcp'
+        tunnelType = spec.type
         spec.transport_type = formData.frp_transport || 'tcp'
+        spec.transport = formData.frp_transport || 'tcp'
         spec.security_type = formData.frp_security || 'tls'
         spec.custom_sni = formData.frp_sni || ''
         spec.use_encryption = formData.frp_encryption
         spec.use_compression = formData.frp_compression
+        spec.enable_health_check = formData.frp_health_check !== false
+        spec.health_check_type = formData.frp_health_check !== false ? (formData.type === 'http' ? 'http' : 'tcp') : null
+        if (formData.frp_bandwidth_limit) {
+          spec.bandwidth_limit = formData.frp_bandwidth_limit
+        }
+        if (formData.frp_proxy_protocol && formData.frp_proxy_protocol !== 'none') {
+          spec.proxy_protocol_version = formData.frp_proxy_protocol
+        }
+        if (formData.frp_custom_domains) {
+          spec.custom_domains = formData.frp_custom_domains.split(',').map((d: string) => d.trim()).filter(Boolean)
+        }
       }
       
       if (formData.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
@@ -5130,6 +5259,89 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                   Shared secret token verifying client-server authorization.
                 </p>
+              </div>
+
+              {/* Reliability & Shaping */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                  <div className="pr-2">
+                    <div className="flex items-center gap-1.5">
+                      <Activity size={15} className="text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-xs font-bold text-gray-900 dark:text-white">Native Health Check</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                      Auto-detect dead links & reconnect fast
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={formData.frp_health_check}
+                    onChange={(e) => setFormData({ ...formData, frp_health_check: e.target.checked })}
+                  />
+                  <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 shrink-0 relative"></div>
+                </label>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Network size={14} className="text-blue-500" />
+                      Proxy Protocol Version
+                    </label>
+                  </div>
+                  <select
+                    value={formData.frp_proxy_protocol || 'none'}
+                    onChange={(e) => setFormData({ ...formData, frp_proxy_protocol: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
+                  >
+                    <option value="none">Disabled (Direct)</option>
+                    <option value="v1">v1 (ASCII Text)</option>
+                    <option value="v2">v2 (Binary Fast)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Bandwidth Limit & Custom Domains */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Gauge size={14} className="text-amber-500" />
+                      Bandwidth Rate Limit
+                    </label>
+                    <span className="text-[11px] text-gray-400">Optional</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.frp_bandwidth_limit}
+                    onChange={(e) => setFormData({ ...formData, frp_bandwidth_limit: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all font-mono"
+                    placeholder="e.g. 10MB or 500KB"
+                  />
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Per-proxy bandwidth limit cap (e.g. 20MB).
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Globe size={14} className="text-cyan-500" />
+                      VHost Domains (Optional)
+                    </label>
+                    <span className="text-[11px] text-gray-400">HTTP/HTTPS</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.frp_custom_domains}
+                    onChange={(e) => setFormData({ ...formData, frp_custom_domains: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all font-mono"
+                    placeholder="e.g. app.domain.com"
+                  />
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Custom domain routing for HTTP/HTTPS tunnels.
+                  </p>
+                </div>
               </div>
             </div>
           )}

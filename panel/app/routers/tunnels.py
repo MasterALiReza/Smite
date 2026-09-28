@@ -2082,11 +2082,27 @@ async def test_tunnel_config(
                 "detail": f"Rathole {rathole_transport.upper()} mode verified"
             })
     elif core == "frp":
+        frp_proto = (payload.get("frp_transport") or payload.get("transport") or spec.get("transport") or "tcp").lower()
+        use_tls = frp_proto in ["wss", "quic"] or payload.get("frp_security") == "tls" or spec.get("security_type") == "tls" or bool(payload.get("tls_enable", True))
+        has_hc = bool(payload.get("frp_health_check", True) or spec.get("health_check_type"))
+        bw_limit = payload.get("frp_bandwidth_limit") or spec.get("bandwidth_limit")
+        p_proto = payload.get("frp_proxy_protocol") or spec.get("proxy_protocol_version")
+
+        detail_parts = [f"FRP {frp_proto.upper()}"]
+        if use_tls:
+            detail_parts.append("TLS Encrypted")
+        if has_hc:
+            detail_parts.append("Native HealthCheck")
+        if bw_limit:
+            detail_parts.append(f"Cap {bw_limit}")
+        if p_proto and p_proto != "none":
+            detail_parts.append(f"ProxyProto {str(p_proto).upper()}")
+
         checks.append({
             "name": "protocol",
             "title": "FRP Protocol Spec",
             "status": "passed",
-            "detail": f"FRP {transport.upper()} mode verified"
+            "detail": " + ".join(detail_parts) + " verified"
         })
     elif core == "chisel":
         chisel_transport = payload.get("chisel_transport") or payload.get("transport") or "ws"

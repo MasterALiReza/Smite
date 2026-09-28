@@ -678,13 +678,14 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
 
 
 def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Generate server (Iran) and client (Foreign) specs for FRP core"""
+    """Generate server (Iran) and client (Foreign) specs for FRP core with WSS, QUIC, Strict Auth, Health Checks, Bandwidth Limits, and VHost routing"""
     spec = tunnel.spec.copy() if tunnel.spec else {}
     server_spec = spec.copy()
     server_spec["mode"] = "server"
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
+    # 1. Control / Bind Port allocation
     port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
     raw_bind = server_spec.get("bind_port") or server_spec.get("control_port")
     try:
@@ -696,67 +697,231 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     else:
         bind_port = bind_p
 
-    token = server_spec.get("token")
+    # 2. Authentication (Token & Stricter Scopes)
+    token = server_spec.get("token") or server_spec.get("auth_token")
     if not token:
         token = generate_token() if generate_token else "default-token"
-        server_spec["token"] = token
-        if tunnel.spec is not None:
-            tunnel.spec["token"] = token
+    server_spec["token"] = token
+    client_spec["token"] = token
 
-    transport_type = (
+    strict_auth = server_spec.get("strict_auth", True)
+    if strict_auth:
+        scopes = server_spec.get("auth_additional_scopes") or ["HeartBeats", "NewWorkConns"]
+        server_spec["auth_additional_scopes"] = scopes
+        client_spec["auth_additional_scopes"] = scopes
+
+    # 3. Transport Protocol Resolution (tcp, kcp, quic, websocket, wss)
+    raw_transport = (
         getattr(tunnel, "transport_type", None)
         or server_spec.get("transport_type")
         or server_spec.get("transport")
+        or server_spec.get("protocol")
         or "tcp"
-    )
-    security_type = getattr(tunnel, "security_type", None) or server_spec.get("security_type") or "tls"
+    ).lower()
+
+    if raw_transport in ["websocket", "ws"]:
+        transport_proto = "websocket"
+    elif raw_transport in ["wss", "https"]:
+        transport_proto = "wss"
+    elif raw_transport == "quic":
+        transport_proto = "quic"
+    elif raw_transport == "kcp":
+        transport_proto = "kcp"
+    else:
+        transport_proto = "tcp"
+
+    security_type = (getattr(tunnel, "security_type", None) or server_spec.get("security_type") or ("tls" if transport_proto in ["wss", "quic"] else "none")).lower()
+    use_tls = (transport_proto in ["wss", "quic"]) or (security_type in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", False))
+
     custom_sni = (
         getattr(tunnel, "custom_sni", None)
         or getattr(tunnel, "stealth_domain", None)
         or server_spec.get("custom_sni")
         or server_spec.get("stealth_domain")
     )
-    use_encryption = server_spec.get("use_encryption", True)
-    use_compression = server_spec.get("use_compression", True)
 
+    # In-memory self-signed TLS certificates for WSS / TLS server
+    if use_tls:
+        tls_cert_pem = server_spec.get("tls_cert_pem")
+        tls_key_pem = server_spec.get("tls_key_pem")
+        if not (tls_cert_pem and tls_key_pem):
+            try:
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+                import datetime
+
+                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                subject = issuer = x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, custom_sni or iran_node_ip or "frp-tunnel"),
+                ])
+                cert = x509.CertificateBuilder().subject_name(
+                    subject
+                ).issuer_name(
+                    issuer
+                ).public_key(
+                    key.public_key()
+                ).serial_number(
+                    x509.random_serial_number()
+                ).not_valid_before(
+                    datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                ).not_valid_after(
+                    datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+                ).sign(key, hashes.SHA256())
+
+                tls_key_pem = key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode('utf-8')
+                tls_cert_pem = cert.public_bytes(
+                    encoding=serialization.Encoding.PEM
+                ).decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Could not generate in-memory cert for FRP: {e}")
+
+        if tls_cert_pem and tls_key_pem:
+            server_spec["tls_cert_pem"] = tls_cert_pem
+            server_spec["tls_key_pem"] = tls_key_pem
+            if tunnel.spec is not None:
+                tunnel.spec["tls_cert_pem"] = tls_cert_pem
+                tunnel.spec["tls_key_pem"] = tls_key_pem
+
+    # 4. Service / Proxy Type (tcp, udp, tcp+udp, http, https)
+    tunnel_type = (
+        getattr(tunnel, "type", None)
+        or getattr(tunnel, "tunnel_type", None)
+        or server_spec.get("tunnel_type")
+        or server_spec.get("type")
+        or "tcp"
+    ).lower()
+    if tunnel_type not in ["tcp", "udp", "tcp+udp", "http", "https"]:
+        tunnel_type = "tcp"
+
+    # 5. Ports and Proxy List parsing
+    raw_ports = server_spec.get("ports")
+    if raw_ports and isinstance(raw_ports, list) and len(raw_ports) > 0:
+        ports = raw_ports
+    else:
+        ports = parse_ports_list(server_spec)
+        if not ports:
+            local_port = server_spec.get("local_port")
+            remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
+            if remote_port and local_port:
+                ports = [int(local_port)]
+            elif remote_port:
+                ports = [int(remote_port)]
+            elif local_port:
+                ports = [int(local_port)]
+            else:
+                ports = [bind_port]
+
+    # 6. Reliability, Health Checks & Bandwidth Shaping
+    use_encryption = bool(server_spec.get("use_encryption", True))
+    use_compression = bool(server_spec.get("use_compression", True))
+    
+    # Internal health check configuration
+    enable_health_check = bool(
+        server_spec.get("enable_health_check", True)
+        or server_spec.get("health_check_type")
+        or getattr(tunnel, "gaming_mode", False)
+    )
+    health_check_type = server_spec.get("health_check_type") or ("tcp" if enable_health_check else None)
+    health_check_interval = int(server_spec.get("health_check_interval_s") or 10)
+    health_check_timeout = int(server_spec.get("health_check_timeout_s") or 3)
+    health_check_max_failed = int(server_spec.get("health_check_max_failed") or 3)
+
+    # Bandwidth limit per proxy
+    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or server_spec.get("rate_limit_mbps")
+    bandwidth_limit = server_spec.get("bandwidth_limit")
+    if not bandwidth_limit and rate_limit_mbps and float(rate_limit_mbps) > 0:
+        bandwidth_limit = f"{int(float(rate_limit_mbps))}MB"
+    bandwidth_limit_mode = server_spec.get("bandwidth_limit_mode", "client")
+
+    # Proxy protocol version (v1, v2, none)
+    proxy_protocol_version = server_spec.get("proxy_protocol_version") or getattr(tunnel, "proxy_protocol_version", None)
+    if proxy_protocol_version not in ["v1", "v2"]:
+        proxy_protocol_version = None
+
+    # Custom domains for HTTP/HTTPS vhost routing
+    custom_domains = server_spec.get("custom_domains") or []
+    if isinstance(custom_domains, str):
+        custom_domains = [d.strip() for d in custom_domains.replace(",", "\n").split("\n") if d.strip()]
+    if not custom_domains and (getattr(tunnel, "custom_host", None) or server_spec.get("custom_host")):
+        custom_domains = [getattr(tunnel, "custom_host", None) or server_spec.get("custom_host")]
+
+    # 7. Assembling Server & Client Specs
     server_spec["bind_port"] = bind_port
+    server_spec["control_port"] = bind_port
     server_spec["token"] = token
-    server_spec["transport_type"] = transport_type
+    server_spec["transport_type"] = transport_proto
+    server_spec["transport"] = transport_proto
     server_spec["security_type"] = security_type
+    server_spec["tls_enable"] = use_tls
+    server_spec["tunnel_type"] = tunnel_type
+    server_spec["type"] = tunnel_type
+    server_spec["ports"] = ports
 
     client_spec["server_addr"] = iran_node_ip
     client_spec["server_port"] = bind_port
+    client_spec["control_port"] = bind_port
     client_spec["token"] = token
-    client_spec["transport_type"] = transport_type
+    client_spec["transport_type"] = transport_proto
+    client_spec["transport"] = transport_proto
     client_spec["security_type"] = security_type
-    client_spec["custom_sni"] = custom_sni
+    client_spec["tls_enable"] = use_tls
+    if custom_sni:
+        client_spec["custom_sni"] = custom_sni
+        server_spec["custom_sni"] = custom_sni
     client_spec["use_encryption"] = use_encryption
     client_spec["use_compression"] = use_compression
-
-    tunnel_type = (getattr(tunnel, "type", None) or getattr(tunnel, "tunnel_type", None) or server_spec.get("tunnel_type") or server_spec.get("type") or "tcp").lower()
-    if tunnel_type not in ["tcp", "udp", "tcp+udp"]:
-        tunnel_type = "tcp"
-    server_spec["tunnel_type"] = tunnel_type
-    server_spec["type"] = tunnel_type
     client_spec["tunnel_type"] = tunnel_type
     client_spec["type"] = tunnel_type
-    local_ip = server_spec.get("local_ip") or "127.0.0.1"
-    client_spec["local_ip"] = local_ip
+    client_spec["local_ip"] = server_spec.get("local_ip", "127.0.0.1")
+    client_spec["ports"] = ports
 
-    ports = server_spec.get("ports", [])
-    if not ports:
-        local_port = server_spec.get("local_port")
-        remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
-        if remote_port and local_port:
-            client_spec["ports"] = [{"local": int(local_port), "remote": int(remote_port)}]
-        elif remote_port:
-            client_spec["ports"] = [{"local": int(remote_port), "remote": int(remote_port)}]
-        elif local_port:
-            client_spec["ports"] = [{"local": int(local_port), "remote": int(local_port)}]
-        else:
-            client_spec["ports"] = [{"local": int(bind_port), "remote": int(bind_port)}]
-    else:
-        client_spec["ports"] = ports
+    if health_check_type:
+        client_spec["health_check_type"] = health_check_type
+        client_spec["health_check_interval_s"] = health_check_interval
+        client_spec["health_check_timeout_s"] = health_check_timeout
+        client_spec["health_check_max_failed"] = health_check_max_failed
+
+    if bandwidth_limit:
+        client_spec["bandwidth_limit"] = bandwidth_limit
+        client_spec["bandwidth_limit_mode"] = bandwidth_limit_mode
+
+    if proxy_protocol_version:
+        client_spec["proxy_protocol_version"] = proxy_protocol_version
+
+    if custom_domains:
+        client_spec["custom_domains"] = custom_domains
+        server_spec["custom_domains"] = custom_domains
+
+    # 8. Sync state back into tunnel.spec for persistent DB storage
+    if tunnel.spec is not None:
+        tunnel.spec["token"] = token
+        tunnel.spec["bind_port"] = bind_port
+        tunnel.spec["control_port"] = bind_port
+        tunnel.spec["transport_type"] = transport_proto
+        tunnel.spec["transport"] = transport_proto
+        tunnel.spec["security_type"] = security_type
+        tunnel.spec["tls_enable"] = use_tls
+        tunnel.spec["tunnel_type"] = tunnel_type
+        tunnel.spec["type"] = tunnel_type
+        tunnel.spec["ports"] = ports
+        tunnel.spec["use_encryption"] = use_encryption
+        tunnel.spec["use_compression"] = use_compression
+        if custom_sni:
+            tunnel.spec["custom_sni"] = custom_sni
+        if health_check_type:
+            tunnel.spec["health_check_type"] = health_check_type
+        if bandwidth_limit:
+            tunnel.spec["bandwidth_limit"] = bandwidth_limit
+        if proxy_protocol_version:
+            tunnel.spec["proxy_protocol_version"] = proxy_protocol_version
+        if custom_domains:
+            tunnel.spec["custom_domains"] = custom_domains
 
     return server_spec, client_spec
 

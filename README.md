@@ -1,4 +1,4 @@
-﻿# Smite - Tunneling Control Panel
+# Smite - Tunneling Control Panel
 
 <div align="center">
   <picture>
@@ -150,7 +150,7 @@ smite-node uninstall [N]     # Safely uninstall a specific node instance with vo
 | **Backhaul** | TCP, UDP, WS, WSMux, TCPMux | ✅ | Sniffer, Keepalive | UDP-over-TCP, low overhead, port-forwarding |
 | **Rathole** | TCP, WS, WSS, Noise | ✅ | Noise Protocol (`Noise_KK_25519_ChaChaPoly_BLAKE2s`) | Auto-isolated core ports, high throughput |
 | **Chisel** | HTTP, WS, WSS | ✅ | SSH / TLS | High-performance TCP reverse tunneling |
-| **FRP** | TCP, UDP, KCP, QUIC, WS | ✅ | TLS, Token Auth | Multi-port mapping, IPv6 over IPv4 |
+| **FRP** | TCP, UDP, KCP, QUIC, WS, WSS, HTTP/HTTPS | ✅ | TLS 1.3, Token Auth + HeartBeat/NewWorkConns Scopes, Payload AES/ChaCha, Snappy | Multi-port mapping, 0-RTT QUIC, KCP Anti-Loss, Native Health Checks, Bandwidth Limiting, Proxy Protocol v1/v2, VHost Domains, IPv6 over IPv4 |
 
 ---
 

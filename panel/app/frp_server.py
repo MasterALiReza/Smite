@@ -84,7 +84,13 @@ class FrpServerManager:
     force: {'true' if force_tls else 'false'}
 """
             if token:
-                config_content += f"auth:\n  method: token\n  token: \"{token}\"\n"
+                config_content += f"""auth:
+  method: token
+  token: "{token}"
+  additionalScopes:
+    - HeartBeats
+    - NewWorkConns
+"""
                 
             def write_config():
                 with open(config_file, 'w') as f:
@@ -174,7 +180,7 @@ class FrpServerManager:
                     pass
             del self.server_configs[tunnel_id]
         
-        for fname in [f"frps_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml"]:
+        for fname in [f"frps_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"{tunnel_id}_cert.pem", f"{tunnel_id}_key.pem"]:
             cfg = self.config_dir / fname
             if cfg.exists():
                 try:

@@ -1736,9 +1736,42 @@ class FrpAdapter:
 
             token = spec.get('token')
             clean_token = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if token else None
-            force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls'])
-            transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
             
+            transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
+            if transport_proto in ['websocket', 'ws']:
+                transport_proto = 'websocket'
+            elif transport_proto == 'wss':
+                transport_proto = 'wss'
+            elif transport_proto == 'quic':
+                transport_proto = 'quic'
+            elif transport_proto == 'kcp':
+                transport_proto = 'kcp'
+            else:
+                transport_proto = 'tcp'
+
+            force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls']) or bool(spec.get('tls_enable'))
+            if transport_proto in ['wss', 'quic']:
+                force_tls = True
+
+            tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
+
+            # Handle server TLS certificates if provided
+            tls_cert_pem = spec.get('tls_cert_pem')
+            tls_key_pem = spec.get('tls_key_pem')
+            cert_file = None
+            key_file = None
+            if tls_cert_pem and tls_key_pem:
+                cert_file = self.config_dir / f"{tunnel_id}_cert.pem"
+                key_file = self.config_dir / f"{tunnel_id}_key.pem"
+                with open(cert_file, 'w', encoding='utf-8') as cf:
+                    cf.write(tls_cert_pem)
+                with open(key_file, 'w', encoding='utf-8') as kf:
+                    kf.write(tls_key_pem)
+                try:
+                    os.chmod(key_file, 0o600)
+                except Exception:
+                    pass
+
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"""bindPort: {bind_port}
 """
@@ -1749,6 +1782,11 @@ class FrpAdapter:
             else:
                 config_content += "kcpBindPort: 0\nquicBindPort: 0\n"
 
+            if tunnel_type == 'http':
+                config_content += f"vhostHTTPPort: {bind_port}\n"
+            elif tunnel_type == 'https':
+                config_content += f"vhostHTTPSPort: {bind_port}\n"
+
             config_content += f"""transport:
   maxPoolCount: 8
   heartbeatTimeout: 90
@@ -1757,16 +1795,24 @@ class FrpAdapter:
   tls:
     force: {'true' if force_tls else 'false'}
 """
+            if cert_file and key_file:
+                config_content += f"""    certFile: "{cert_file.resolve()}"
+    keyFile: "{key_file.resolve()}"
+"""
+
             if clean_token:
                 config_content += f"""auth:
   method: token
   token: "{clean_token}"
+  additionalScopes:
+    - HeartBeats
+    - NewWorkConns
 """
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
-            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, token={'set' if clean_token else 'none'}")
+            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, proto={transport_proto}, tls={'force' if force_tls else 'off'}, token={'set' if clean_token else 'none'}")
             
             env_path = os.environ.get("FRPS_BINARY")
             if env_path:
@@ -1843,6 +1889,30 @@ class FrpAdapter:
             use_encryption = spec.get('use_encryption', True)
             use_compression = spec.get('use_compression', True)
             
+            # Bandwidth limit per proxy
+            bandwidth_limit = spec.get('bandwidth_limit')
+            rate_limit_mbps = spec.get('rate_limit_mbps')
+            if not bandwidth_limit and rate_limit_mbps and float(rate_limit_mbps) > 0:
+                bandwidth_limit = f"{int(float(rate_limit_mbps))}MB"
+            bandwidth_limit_mode = spec.get('bandwidth_limit_mode', 'client')
+
+            # Proxy protocol version (v1, v2)
+            proxy_protocol_version = spec.get('proxy_protocol_version')
+            if proxy_protocol_version not in ['v1', 'v2']:
+                proxy_protocol_version = None
+
+            # Health check configuration
+            health_check_type = spec.get('health_check_type')
+            health_check_interval = int(spec.get('health_check_interval_s') or 10)
+            health_check_timeout = int(spec.get('health_check_timeout_s') or 3)
+            health_check_max_failed = int(spec.get('health_check_max_failed') or 3)
+            health_check_path = spec.get('health_check_path', '/')
+
+            # Custom domains for HTTP/HTTPS
+            custom_domains = spec.get('custom_domains') or []
+            if isinstance(custom_domains, str):
+                custom_domains = [d.strip() for d in custom_domains.replace(",", "\n").split("\n") if d.strip()]
+
             ports = spec.get('ports') or []
             if not ports:
                 local_port = spec.get('local_port')
@@ -1872,8 +1942,8 @@ class FrpAdapter:
                 raise ValueError("FRP client requires 'server_addr' (foreign server address) in spec")
             if not ports:
                 raise ValueError("FRP client requires 'ports' array or 'remote_port'/'listen_port' in spec")
-            if tunnel_type not in ['tcp', 'udp', 'tcp+udp']:
-                raise ValueError(f"FRP only supports 'tcp', 'udp', and 'tcp+udp' types, got '{tunnel_type}'")
+            if tunnel_type not in ['tcp', 'udp', 'tcp+udp', 'http', 'https']:
+                raise ValueError(f"FRP only supports 'tcp', 'udp', 'tcp+udp', 'http', and 'https' types, got '{tunnel_type}'")
             
             if server_addr.startswith('[') and server_addr.endswith(']'):
                 server_addr = server_addr[1:-1]
@@ -1909,8 +1979,51 @@ transport:
                 config_content += f"""auth:
   method: token
   token: "{clean_token}"
+  additionalScopes:
+    - HeartBeats
+    - NewWorkConns
 """
             
+            def _build_proxy_block(p_name: str, p_type: str, l_port: int, r_port: Optional[int]) -> str:
+                block = f"""  - name: {p_name}
+    type: {p_type}
+    localIP: {local_ip}
+    localPort: {l_port}
+"""
+                if p_type in ['tcp', 'udp'] and r_port is not None:
+                    block += f"    remotePort: {r_port}\n"
+                elif p_type in ['http', 'https']:
+                    domains = custom_domains if custom_domains else [clean_server_addr]
+                    block += "    customDomains:\n"
+                    for d in domains:
+                        clean_d = str(d).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        block += f'      - "{clean_d}"\n'
+
+                block += f"""    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if use_compression else 'false'}
+"""
+                if bandwidth_limit:
+                    block += f"""      bandwidthLimit: "{bandwidth_limit}"
+      bandwidthLimitMode: "{bandwidth_limit_mode}"
+"""
+                if proxy_protocol_version:
+                    block += f"""      proxyProtocolVersion: "{proxy_protocol_version}"
+"""
+                if health_check_type:
+                    hc_type = "http" if (p_type == 'http' and health_check_type == 'http') else "tcp"
+                    block += f"""    healthCheck:
+      type: {hc_type}
+"""
+                    if hc_type == 'http':
+                        clean_path = str(health_check_path).replace('"', '\\"')
+                        block += f'      path: "{clean_path}"\n'
+                    block += f"""      timeoutSeconds: {health_check_timeout}
+      maxFailed: {health_check_max_failed}
+      intervalSeconds: {health_check_interval}
+"""
+                return block
+
             config_content += "\nproxies:\n"
             for i, port_config in enumerate(ports):
                 if isinstance(port_config, dict):
@@ -1921,33 +2034,10 @@ transport:
                 
                 proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
                 if tunnel_type == 'tcp+udp':
-                    config_content += f"""  - name: {proxy_name}_tcp
-    type: tcp
-    localIP: {local_ip}
-    localPort: {local_port}
-    remotePort: {remote_port}
-    transport:
-      useEncryption: {'true' if use_encryption else 'false'}
-      useCompression: {'true' if use_compression else 'false'}
-  - name: {proxy_name}_udp
-    type: udp
-    localIP: {local_ip}
-    localPort: {local_port}
-    remotePort: {remote_port}
-    transport:
-      useEncryption: {'true' if use_encryption else 'false'}
-      useCompression: {'true' if use_compression else 'false'}
-"""
+                    config_content += _build_proxy_block(f"{proxy_name}_tcp", "tcp", local_port, remote_port)
+                    config_content += _build_proxy_block(f"{proxy_name}_udp", "udp", local_port, remote_port)
                 else:
-                    config_content += f"""  - name: {proxy_name}
-    type: {tunnel_type}
-    localIP: {local_ip}
-    localPort: {local_port}
-    remotePort: {remote_port}
-    transport:
-      useEncryption: {'true' if use_encryption else 'false'}
-      useCompression: {'true' if use_compression else 'false'}
-"""
+                    config_content += _build_proxy_block(proxy_name, tunnel_type, local_port, remote_port)
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
@@ -2014,7 +2104,7 @@ transport:
         )
         _remove_tunnel_pid(tunnel_id)
 
-        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"]:
+        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml", f"{tunnel_id}_cert.pem", f"{tunnel_id}_key.pem"]:
             cfg_path = self.config_dir / cfg_name
             if cfg_path.exists():
                 try:
