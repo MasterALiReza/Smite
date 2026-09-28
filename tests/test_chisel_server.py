@@ -24,22 +24,25 @@ def test_chisel_server_manager_command_assembly():
             mock_proc = MagicMock()
             mock_proc.pid = 12345
             mock_proc.returncode = None
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_proc.poll = MagicMock(return_value=0)
             return mock_proc
 
         with patch("app.chisel_server.start_async_process" if "app.chisel_server" in sys.modules else "panel.app.chisel_server.start_async_process", side_effect=fake_start_process):
             with patch("app.chisel_server.wait_for_port" if "app.chisel_server" in sys.modules else "panel.app.chisel_server.wait_for_port", return_value=True):
                 with patch("shutil.which", return_value="/usr/local/bin/chisel"):
                     with patch("os.path.exists", return_value=True):
-                        asyncio.run(manager.start_server(
-                            tunnel_id="test-chisel-srv",
-                            server_port=18080,
-                            auth="user:pass",
-                            backend_url="https://speedtest.net",
-                            socks5=True,
-                            keepalive="15s",
-                            tls_cert_pem="-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----",
-                            tls_key_pem="-----BEGIN RSA PRIVATE KEY-----\nMOCK\n-----END RSA PRIVATE KEY-----"
-                        ))
+                        with patch("subprocess.run"):
+                            asyncio.run(manager.start_server(
+                                tunnel_id="test-chisel-srv",
+                                server_port=18080,
+                                auth="user:pass",
+                                backend_url="https://speedtest.net",
+                                socks5=True,
+                                keepalive="15s",
+                                tls_cert_pem="-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----",
+                                tls_key_pem="-----BEGIN RSA PRIVATE KEY-----\nMOCK\n-----END RSA PRIVATE KEY-----"
+                            ))
 
         assert len(captured_cmds) == 1
         cmd = captured_cmds[0]
