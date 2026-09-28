@@ -1341,16 +1341,19 @@ class ChiselAdapter:
         )
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
-        """Apply Chisel tunnel - supports both server and client modes"""
+        """Apply Chisel tunnel - supports both server and client modes with TLS, UDP, Camouflage and Persistent Keys"""
         if tunnel_id in self.processes:
             logger.info(f"Chisel tunnel {tunnel_id} already exists, removing it first")
             await self.remove(tunnel_id)
         
         mode = spec.get('mode', 'client')
+        binary_path = self._resolve_binary_path()
+        transport = (spec.get('transport_type') or spec.get('transport') or 'ws').lower()
+        use_tls = (transport in ['wss', 'https', 'tls']) or bool(spec.get('websocket_tls', False) or spec.get('tls', False))
+        tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
         
         if mode == 'server':
             control_port = spec.get('control_port') or spec.get('server_port') or spec.get('listen_port') or 8080
-            await free_port(control_port)
             # Free all service reverse ports and control port that server will bind
             ports_to_free = [int(control_port)]
             for p in spec.get('ports') or []:
@@ -1366,14 +1369,90 @@ class ChiselAdapter:
             key = spec.get('key')
             reverse_only = spec.get('reverse_only', True)
             
-            binary_path = self._resolve_binary_path()
             cmd = [str(binary_path), "server", "--port", str(control_port)]
             if auth_token:
                 cmd.extend(["--auth", auth_token])
-            if key:
+            
+            # Persistent SSH key to preserve host fingerprint across restarts
+            ssh_key_pem = spec.get('ssh_key_pem') or spec.get('keyfile_content')
+            keyfile_path = self.config_dir / f"{tunnel_id}_ssh.key"
+            if ssh_key_pem:
+                with open(keyfile_path, "w") as kf:
+                    kf.write(ssh_key_pem)
+                try:
+                    os.chmod(keyfile_path, 0o600)
+                except Exception:
+                    pass
+                cmd.extend(["--keyfile", str(keyfile_path)])
+            elif spec.get('keyfile'):
+                cmd.extend(["--keyfile", str(spec.get('keyfile'))])
+            elif key:
                 cmd.extend(["--key", key])
+            else:
+                if not keyfile_path.exists():
+                    try:
+                        subprocess.run(
+                            [str(binary_path), "server", "--keygen", str(keyfile_path)],
+                            check=True,
+                            timeout=5,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        os.chmod(keyfile_path, 0o600)
+                    except Exception as e:
+                        logger.warning(f"Could not auto-generate persistent SSH key for chisel: {e}")
+                if keyfile_path.exists():
+                    cmd.extend(["--keyfile", str(keyfile_path)])
+            
+            # TLS / WSS Configuration
+            if use_tls:
+                tls_cert_pem = spec.get('tls_cert_pem') or spec.get('tls_cert')
+                tls_key_pem = spec.get('tls_key_pem') or spec.get('tls_key')
+                cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
+                key_path = self.config_dir / f"{tunnel_id}_key.pem"
+                
+                if tls_cert_pem and tls_key_pem:
+                    with open(cert_path, "w") as cf:
+                        cf.write(tls_cert_pem)
+                    with open(key_path, "w") as kf:
+                        kf.write(tls_key_pem)
+                    try:
+                        os.chmod(key_path, 0o600)
+                    except Exception:
+                        pass
+                elif not cert_path.exists() or not key_path.exists():
+                    try:
+                        subprocess.run(
+                            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                             "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
+                             "-subj", "/CN=chisel-tunnel"],
+                            check=True,
+                            timeout=5,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        os.chmod(key_path, 0o600)
+                    except Exception as e:
+                        logger.warning(f"Could not auto-generate self-signed cert for chisel: {e}")
+                
+                if cert_path.exists() and key_path.exists():
+                    cmd.extend(["--tls-cert", str(cert_path), "--tls-key", str(key_path)])
+
+            # Active Probing Camouflage / Decoy Backend
+            backend_url = spec.get('backend_url') or spec.get('backend') or spec.get('decoy_url')
+            if backend_url:
+                cmd.extend(["--backend", str(backend_url).strip()])
+            
+            # SOCKS5 dynamic proxy support
+            if tunnel_proto == 'socks5' or spec.get('socks5'):
+                cmd.append("--socks5")
+
             if reverse_only:
                 cmd.append("--reverse")
+            
+            keepalive = spec.get('keepalive')
+            if keepalive:
+                cmd.extend(["--keepalive", str(keepalive)])
             
             log_file = self.config_dir / f"{tunnel_id}.log"
             log_f = open(log_file, 'w', buffering=1)
@@ -1394,19 +1473,35 @@ class ChiselAdapter:
             if not server_url:
                 raise ValueError("Chisel client requires 'server_url' or 'remote_addr' in spec")
             
-            if not server_url.startswith("http://") and not server_url.startswith("https://"):
-                server_url = f"http://{server_url}"
+            # Ensure correct protocol prefix
+            if use_tls:
+                if server_url.startswith("http://"):
+                    server_url = "https://" + server_url[7:]
+                elif server_url.startswith("ws://"):
+                    server_url = "wss://" + server_url[5:]
+                elif not server_url.startswith("https://") and not server_url.startswith("wss://"):
+                    server_url = f"https://{server_url}"
+            else:
+                if server_url.startswith("https://"):
+                    server_url = "http://" + server_url[8:]
+                elif server_url.startswith("wss://"):
+                    server_url = "ws://" + server_url[6:]
+                elif not server_url.startswith("http://") and not server_url.startswith("ws://"):
+                    server_url = f"http://{server_url}"
             
             auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             fingerprint = spec.get('fingerprint')
-            keepalive = spec.get('keepalive', '25s')
+            keepalive = spec.get('keepalive', '10s')
             max_retry_count = spec.get('max_retry_count')
-            max_retry_interval = spec.get('max_retry_interval') or '15s'
+            max_retry_interval = spec.get('max_retry_interval') or '10s'
             
-            tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
             reverse_specs = []
             ports = spec.get('ports') or []
-            if not ports:
+            
+            if tunnel_proto == 'socks5':
+                socks_port = spec.get('local_port') or (ports[0] if ports else 1080)
+                reverse_specs.append(f"R:{socks_port}:socks")
+            elif not ports:
                 local_port = spec.get('local_port') or spec.get('port')
                 remote_port = spec.get('remote_port')
                 if local_port and remote_port:
@@ -1452,18 +1547,55 @@ class ChiselAdapter:
             if not reverse_specs:
                 raise ValueError("Chisel client requires at least one port mapping (R:remote:local)")
             
-            binary_path = self._resolve_binary_path()
             cmd = [str(binary_path), "client"]
             if auth_token:
                 cmd.extend(["--auth", auth_token])
             if fingerprint:
-                cmd.extend(["--fingerprint", fingerprint])
+                cmd.extend(["--fingerprint", fingerprint.strip()])
             if keepalive:
-                cmd.extend(["--keepalive", keepalive])
+                cmd.extend(["--keepalive", str(keepalive)])
             if max_retry_count is not None:
                 cmd.extend(["--max-retry-count", str(max_retry_count)])
             if max_retry_interval:
-                cmd.extend(["--max-retry-interval", max_retry_interval])
+                cmd.extend(["--max-retry-interval", str(max_retry_interval)])
+            
+            # Anti-DPI & TLS options
+            if use_tls:
+                tls_skip_verify = spec.get('tls_skip_verify', True)
+                if tls_skip_verify:
+                    cmd.append("--tls-skip-verify")
+                
+                tls_ca_pem = spec.get('tls_ca_cert_pem') or spec.get('tls_ca')
+                if tls_ca_pem:
+                    ca_path = self.config_dir / f"{tunnel_id}_ca.pem"
+                    with open(ca_path, "w") as cf:
+                        cf.write(tls_ca_pem)
+                    cmd.extend(["--tls-ca", str(ca_path)])
+                
+                custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('sni')
+                if custom_sni:
+                    cmd.extend(["--sni", str(custom_sni).strip()])
+            
+            custom_host = spec.get('custom_host') or spec.get('hostname')
+            if custom_host:
+                cmd.extend(["--hostname", str(custom_host).strip()])
+            
+            user_agent = spec.get('user_agent')
+            if user_agent:
+                cmd.extend(["--header", f"User-Agent: {user_agent.strip()}"])
+            
+            custom_headers = spec.get('custom_headers')
+            if isinstance(custom_headers, list):
+                for h in custom_headers:
+                    if h and ":" in str(h):
+                        cmd.extend(["--header", str(h).strip()])
+            elif isinstance(custom_headers, dict):
+                for hk, hv in custom_headers.items():
+                    cmd.extend(["--header", f"{hk}: {hv}"])
+            
+            proxy = spec.get('proxy') or spec.get('upstream_proxy')
+            if proxy:
+                cmd.extend(["--proxy", str(proxy).strip()])
             
             cmd.append(server_url)
             cmd.extend(reverse_specs)
@@ -1502,7 +1634,7 @@ class ChiselAdapter:
             raise RuntimeError(f"chisel failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str):
-        """Remove Chisel tunnel"""
+        """Remove Chisel tunnel and clean up associated key/cert files"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -1514,6 +1646,15 @@ class ChiselAdapter:
 
         await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.log"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
+
+        # Clean up temporary certificate/key files
+        for suffix in ["_cert.pem", "_key.pem", "_ca.pem", "_ssh.key"]:
+            fpath = self.config_dir / f"{tunnel_id}{suffix}"
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                except Exception:
+                    pass
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""

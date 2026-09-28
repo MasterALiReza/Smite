@@ -206,6 +206,77 @@ def test_spec_builder_chisel():
     assert client_spec["token"] == "user:pass"
 
 
+def test_spec_builder_chisel_wss_mode():
+    """Verify Chisel in WSS mode uses https://, enables TLS, and provisions certificates."""
+    tunnel = DummyTunnel(
+        id="t-chisel-wss-1",
+        core="chisel",
+        type="tcp",
+        spec={"ports": [4430], "transport": "wss", "auth": "admin:secret"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+
+    assert server_spec["transport"] == "wss"
+    assert client_spec["transport"] == "wss"
+    assert server_spec["websocket_tls"] is True
+    assert client_spec["websocket_tls"] is True
+    assert client_spec["server_url"].startswith("https://1.1.1.1:")
+    assert client_spec["tls_skip_verify"] is True
+    assert "BEGIN CERTIFICATE" in server_spec["tls_cert_pem"]
+    assert "BEGIN " in server_spec["tls_key_pem"]
+
+
+def test_spec_builder_chisel_udp_gaming_and_socks5():
+    """Verify Chisel preserves UDP gaming and SOCKS5 dynamic proxy types."""
+    tunnel_udp = DummyTunnel(
+        id="t-chisel-udp",
+        core="chisel",
+        type="udp",
+        spec={"ports": [27015], "transport": "ws"}
+    )
+    s_udp, c_udp = build_tunnel_node_specs(tunnel_udp, "1.1.1.1", "2.2.2.2")
+    assert s_udp["type"] == "udp"
+    assert c_udp["type"] == "udp"
+
+    tunnel_socks = DummyTunnel(
+        id="t-chisel-socks",
+        core="chisel",
+        type="socks5",
+        spec={"ports": [1080], "transport": "ws"}
+    )
+    s_socks, c_socks = build_tunnel_node_specs(tunnel_socks, "1.1.1.1", "2.2.2.2")
+    assert s_socks["type"] == "socks5"
+    assert c_socks["type"] == "socks5"
+
+
+def test_spec_builder_chisel_anti_dpi_camouflage():
+    """Verify Chisel propagates Anti-DPI camouflage, SNI, Host, Decoy Backend, and Keepalive."""
+    tunnel = DummyTunnel(
+        id="t-chisel-stealth",
+        core="chisel",
+        type="tcp",
+        spec={
+            "ports": [8080],
+            "transport": "wss",
+            "custom_sni": "speedtest.net",
+            "custom_host": "cdn.speedtest.net",
+            "backend_url": "https://speedtest.net",
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "keepalive": "5s",
+            "max_retry_interval": "5s"
+        }
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+
+    assert server_spec["backend_url"] == "https://speedtest.net"
+    assert client_spec["custom_sni"] == "speedtest.net"
+    assert client_spec["custom_host"] == "cdn.speedtest.net"
+    assert client_spec["user_agent"] == "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    assert client_spec["keepalive"] == "5s"
+    assert client_spec["max_retry_interval"] == "5s"
+    assert server_spec["keepalive"] == "5s"
+
+
 def test_spec_builder_frp():
     tunnel = DummyTunnel(
         id="t-frp-1",

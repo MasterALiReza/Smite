@@ -473,18 +473,54 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
 
 
 def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Generate server (Iran) and client (Foreign) specs for Chisel core"""
+    """Generate server (Iran) and client (Foreign) specs for Chisel core with WSS, UDP, and Anti-DPI Camouflage"""
     spec = tunnel.spec.copy() if tunnel.spec else {}
     server_spec = spec.copy()
     server_spec["mode"] = "server"
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
+    # 1. Transport & TLS Resolution
+    transport = (
+        getattr(tunnel, "transport_type", None)
+        or server_spec.get("transport")
+        or server_spec.get("transport_type")
+        or "ws"
+    ).lower()
+    use_tls = (transport in ("wss", "https", "tls")) or bool(
+        server_spec.get("websocket_tls") or server_spec.get("tls")
+    )
+    
+    server_spec["transport"] = "wss" if use_tls else "ws"
+    server_spec["transport_type"] = "wss" if use_tls else "ws"
+    client_spec["transport"] = "wss" if use_tls else "ws"
+    client_spec["transport_type"] = "wss" if use_tls else "ws"
+    server_spec["websocket_tls"] = use_tls
+    client_spec["websocket_tls"] = use_tls
+
+    # 2. Tunnel Type (tcp, udp, tcp+udp, socks5)
+    tunnel_type = (
+        getattr(tunnel, "type", None)
+        or getattr(tunnel, "tunnel_type", None)
+        or server_spec.get("type")
+        or server_spec.get("tunnel_type")
+        or "tcp"
+    ).lower()
+    if tunnel_type not in ["tcp", "udp", "tcp+udp", "socks5"]:
+        tunnel_type = "tcp"
+    server_spec["type"] = tunnel_type
+    server_spec["tunnel_type"] = tunnel_type
+    client_spec["type"] = tunnel_type
+    client_spec["tunnel_type"] = tunnel_type
+
+    # 3. Port parsing and Control Port allocation
     ports = parse_ports_list(spec)
     if not ports:
         listen_port = server_spec.get("listen_port") or server_spec.get("remote_port")
         if listen_port and str(listen_port).isdigit():
             ports = [int(listen_port)]
+        else:
+            ports = [8080]
 
     port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
     first_port = ports[0] if ports else 8080
@@ -503,19 +539,111 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     server_spec["control_port"] = server_control_port
     server_spec["reverse_port"] = first_port
     server_spec["ports"] = ports
+    client_spec["server_port"] = server_control_port
+    client_spec["control_port"] = server_control_port
+    client_spec["reverse_port"] = first_port
+    client_spec["ports"] = ports
 
+    # 4. Authentication (Token)
     auth = server_spec.get("auth") or server_spec.get("token") or server_spec.get("auth_token")
     if not auth:
         auth = generate_token() if generate_token else "default-auth"
     server_spec["auth"] = auth
     server_spec["auth_token"] = auth
     server_spec["token"] = auth
-    if tunnel.spec is not None:
-        tunnel.spec["auth"] = auth
-        tunnel.spec["auth_token"] = auth
-        tunnel.spec["token"] = auth
-        tunnel.spec["control_port"] = server_control_port
-        tunnel.spec["ports"] = ports
+    client_spec["auth"] = auth
+    client_spec["auth_token"] = auth
+    client_spec["token"] = auth
+
+    # 5. Anti-DPI & Stealth (Custom SNI, Host Header, Decoy Backend)
+    custom_sni = (
+        getattr(tunnel, "custom_sni", None)
+        or getattr(tunnel, "stealth_domain", None)
+        or server_spec.get("custom_sni")
+        or server_spec.get("stealth_domain")
+    )
+    custom_host = (
+        getattr(tunnel, "custom_host", None)
+        or server_spec.get("custom_host")
+        or server_spec.get("hostname")
+    )
+    backend_url = (
+        getattr(tunnel, "backend_url", None)
+        or server_spec.get("backend_url")
+        or server_spec.get("backend")
+        or server_spec.get("decoy_url")
+    )
+    user_agent = getattr(tunnel, "user_agent", None) or server_spec.get("user_agent")
+
+    if custom_sni:
+        server_spec["custom_sni"] = custom_sni
+        client_spec["custom_sni"] = custom_sni
+    if custom_host:
+        server_spec["custom_host"] = custom_host
+        client_spec["custom_host"] = custom_host
+    if backend_url:
+        server_spec["backend_url"] = backend_url
+    if user_agent:
+        client_spec["user_agent"] = user_agent
+
+    # 6. Stability Tuning (Keepalive, Max Retry Interval, Proxy)
+    keepalive = getattr(tunnel, "keepalive", None) or server_spec.get("keepalive") or "10s"
+    max_retry_interval = server_spec.get("max_retry_interval") or "10s"
+    server_spec["keepalive"] = keepalive
+    client_spec["keepalive"] = keepalive
+    client_spec["max_retry_interval"] = max_retry_interval
+    if "proxy" in server_spec:
+        client_spec["proxy"] = server_spec["proxy"]
+
+    # 7. TLS Certificate generation and propagation
+    if use_tls:
+        tls_cert_pem = server_spec.get("tls_cert_pem")
+        tls_key_pem = server_spec.get("tls_key_pem")
+        if not (tls_cert_pem and tls_key_pem):
+            try:
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+                import datetime
+
+                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                subject = issuer = x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, custom_sni or iran_node_ip or "chisel-tunnel"),
+                ])
+                cert = x509.CertificateBuilder().subject_name(
+                    subject
+                ).issuer_name(
+                    issuer
+                ).public_key(
+                    key.public_key()
+                ).serial_number(
+                    x509.random_serial_number()
+                ).not_valid_before(
+                    datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                ).not_valid_after(
+                    datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+                ).sign(key, hashes.SHA256())
+
+                tls_key_pem = key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode('utf-8')
+                tls_cert_pem = cert.public_bytes(
+                    encoding=serialization.Encoding.PEM
+                ).decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Could not generate in-memory cert for chisel: {e}")
+
+        if tls_cert_pem and tls_key_pem:
+            server_spec["tls_cert_pem"] = tls_cert_pem
+            server_spec["tls_key_pem"] = tls_key_pem
+            if tunnel.spec is not None:
+                tunnel.spec["tls_cert_pem"] = tls_cert_pem
+                tunnel.spec["tls_key_pem"] = tls_key_pem
+
+        client_spec["tls_skip_verify"] = server_spec.get("tls_skip_verify", True)
 
     fingerprint = server_spec.get("fingerprint")
     if fingerprint:
@@ -523,14 +651,28 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         client_spec["fingerprint"] = fingerprint
 
     host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
-    client_spec["server_url"] = f"http://{host_part}:{server_control_port}"
-    client_spec["server_port"] = server_control_port
-    client_spec["control_port"] = server_control_port
-    client_spec["reverse_port"] = first_port
-    client_spec["ports"] = ports
-    client_spec["auth"] = auth
-    client_spec["auth_token"] = auth
-    client_spec["token"] = auth
+    proto = "https://" if use_tls else "http://"
+    client_spec["server_url"] = f"{proto}{host_part}:{server_control_port}"
+
+    # 8. Sync state back to tunnel.spec for persistent DB storage
+    if tunnel.spec is not None:
+        tunnel.spec["auth"] = auth
+        tunnel.spec["auth_token"] = auth
+        tunnel.spec["token"] = auth
+        tunnel.spec["control_port"] = server_control_port
+        tunnel.spec["ports"] = ports
+        tunnel.spec["transport"] = "wss" if use_tls else "ws"
+        tunnel.spec["transport_type"] = "wss" if use_tls else "ws"
+        tunnel.spec["type"] = tunnel_type
+        tunnel.spec["tunnel_type"] = tunnel_type
+        if custom_sni:
+            tunnel.spec["custom_sni"] = custom_sni
+        if custom_host:
+            tunnel.spec["custom_host"] = custom_host
+        if backend_url:
+            tunnel.spec["backend_url"] = backend_url
+        if keepalive:
+            tunnel.spec["keepalive"] = keepalive
 
     return server_spec, client_spec
 

@@ -1702,6 +1702,11 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     rathole_token: tunnel.spec?.token || tunnel.spec?.rathole_token || '',
     rathole_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
     chisel_control_port: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : '',
+    chisel_transport: tunnel.spec?.transport || tunnel.spec?.transport_type || 'ws',
+    chisel_backend_url: tunnel.spec?.backend_url || '',
+    chisel_custom_sni: tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
+    chisel_custom_host: tunnel.spec?.custom_host || '',
+    chisel_keepalive: tunnel.spec?.keepalive || '10s',
     frp_bind_port: tunnel.spec?.bind_port ? tunnel.spec.bind_port.toString() : '7000',
     frp_token: tunnel.spec?.token || '',
     frp_local_ip: tunnel.spec?.local_ip || '127.0.0.1',
@@ -1871,6 +1876,28 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           ? parseInt(formData.chisel_control_port.toString())
           : firstPort + 10000
         updatedSpec.control_port = controlPort
+        updatedSpec.transport = formData.chisel_transport || 'ws'
+        updatedSpec.transport_type = formData.chisel_transport || 'ws'
+        if (formData.chisel_backend_url) {
+          updatedSpec.backend_url = formData.chisel_backend_url
+        } else {
+          delete updatedSpec.backend_url
+        }
+        if (formData.chisel_custom_sni) {
+          updatedSpec.custom_sni = formData.chisel_custom_sni
+          updatedSpec.stealth_domain = formData.chisel_custom_sni
+        } else {
+          delete updatedSpec.custom_sni
+          delete updatedSpec.stealth_domain
+        }
+        if (formData.chisel_custom_host) {
+          updatedSpec.custom_host = formData.chisel_custom_host
+        } else {
+          delete updatedSpec.custom_host
+        }
+        if (formData.chisel_keepalive) {
+          updatedSpec.keepalive = formData.chisel_keepalive
+        }
         if (formData.node_ipv6) {
           updatedSpec.node_ipv6 = formData.node_ipv6
         }
@@ -2420,16 +2447,102 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   </span>
                   <div>
                     <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
-                      Chisel Settings
+                      Chisel Advanced Settings
                     </h4>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Fast TCP/UDP Tunnel over HTTP/2 with Built-in SSH Security
+                      High-Speed WebSocket Tunnel with SSH Multiplexing, WSS TLS & Anti-DPI Camouflage
                     </p>
                   </div>
                 </div>
                 <span className="self-start sm:self-auto text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-teal-100/80 text-teal-700 dark:bg-teal-900/60 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
                   Chisel Core
                 </span>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-teal-500" />
+                  Quick Optimization Presets
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        chisel_transport: 'wss',
+                        chisel_backend_url: 'https://speedtest.net',
+                        chisel_custom_sni: 'speedtest.net',
+                        chisel_keepalive: '10s'
+                      }));
+                      showToast('info', 'Preset Applied', 'Anti-DPI Stealth Preset (WSS + Camouflage + SNI) configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.chisel_transport === 'wss' && formData.chisel_backend_url
+                        ? 'bg-teal-100/80 dark:bg-teal-900/50 border-teal-400 dark:border-teal-500 ring-2 ring-teal-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-teal-50 dark:hover:bg-teal-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Shield size={15} className="text-teal-600 dark:text-teal-400" />
+                      <span className="text-xs font-bold text-teal-800 dark:text-teal-200">Anti-DPI Stealth</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      WSS TLS + speedtest.net decoy camouflage against active probers.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        chisel_keepalive: '5s'
+                      }));
+                      showToast('info', 'Preset Applied', 'Ultra-Low Ping Gaming (5s Keepalive) configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.chisel_keepalive === '5s'
+                        ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Zap size={15} className="text-amber-500 dark:text-amber-400" />
+                      <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      Aggressive 5s Keepalive to prevent NAT firewall table drops.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        chisel_transport: 'ws',
+                        chisel_custom_host: 'cdn.cloudflare.com',
+                        chisel_keepalive: '15s'
+                      }));
+                      showToast('info', 'Preset Applied', 'CDN-Friendly WebSocket Preset configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.chisel_transport === 'ws' && formData.chisel_custom_host === 'cdn.cloudflare.com'
+                        ? 'bg-blue-100/80 dark:bg-blue-900/50 border-blue-400 dark:border-blue-500 ring-2 ring-blue-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Globe size={15} className="text-blue-500 dark:text-blue-400" />
+                      <span className="text-xs font-bold text-blue-700 dark:text-blue-300">CDN Friendly</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      HTTP/WS with Host spoofing compatible with reverse proxies.
+                    </p>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
@@ -2482,6 +2595,118 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     Server control port (defaults to first port + 10000 if empty).
                   </p>
+                </div>
+              </div>
+
+              {/* Transport Protocol & Keepalive */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start pt-1">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Shield size={14} className="text-teal-500" />
+                      Transport Protocol & Encryption
+                    </label>
+                    <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                      {formData.chisel_transport}
+                    </span>
+                  </div>
+                  <select
+                    value={formData.chisel_transport}
+                    onChange={(e) => setFormData({ ...formData, chisel_transport: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
+                  >
+                    <option value="ws">WS - Plain WebSocket (HTTP, Low Overhead)</option>
+                    <option value="wss">WSS - Encrypted WebSocket over TLS (HTTPS)</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    {formData.chisel_transport === 'wss'
+                      ? 'Outer TLS encryption layer + Inner SSH stream encryption (Double Layer Security).'
+                      : 'Standard WebSocket with built-in inner SSH encryption layer.'}
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Zap size={14} className="text-amber-500" />
+                      Keepalive Heartbeat
+                    </label>
+                    <span className="text-[11px] font-mono text-gray-400 dark:text-gray-500">
+                      {formData.chisel_keepalive}
+                    </span>
+                  </div>
+                  <select
+                    value={formData.chisel_keepalive}
+                    onChange={(e) => setFormData({ ...formData, chisel_keepalive: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
+                  >
+                    <option value="5s">5s (Ultra-Aggressive / Competitive Gaming)</option>
+                    <option value="10s">10s (Recommended - High Stability)</option>
+                    <option value="15s">15s (Balanced)</option>
+                    <option value="25s">25s (Default / Low Overhead)</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Prevents firewall NAT translation state dropouts across Iranian ISPs.
+                  </p>
+                </div>
+              </div>
+
+              {/* Anti-Probing Camouflage & Decoy Website */}
+              <div className="p-3.5 rounded-xl bg-teal-50/70 dark:bg-teal-950/20 border border-teal-200/70 dark:border-teal-900/40 space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-teal-900 dark:text-teal-200 flex items-center gap-1.5">
+                      <Shield size={14} className="text-teal-600 dark:text-teal-400" />
+                      Decoy Camouflage Backend (--backend)
+                    </label>
+                    <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-teal-200/60 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300">
+                      Anti-Active Probing
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-teal-800/80 dark:text-teal-300/80 mb-2">
+                    When censors or scanning bots probe your control port via standard HTTP/HTTPS, Chisel proxies the request to this legitimate website with HTTP 200 OK:
+                  </p>
+                  <input
+                    type="text"
+                    value={formData.chisel_backend_url}
+                    onChange={(e) => setFormData({ ...formData, chisel_backend_url: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-teal-300 dark:border-teal-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                    placeholder="https://speedtest.net or https://example.com"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
+                      Custom SNI (--sni)
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.chisel_custom_sni}
+                      onChange={(e) => setFormData({ ...formData, chisel_custom_sni: e.target.value })}
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                      placeholder="speedtest.net or domain.com"
+                    />
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                      Overrides TLS ClientHello Server Name Indication.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
+                      Custom Host Header (--hostname)
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.chisel_custom_host}
+                      onChange={(e) => setFormData({ ...formData, chisel_custom_host: e.target.value })}
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                      placeholder="cdn.speedtest.net"
+                    />
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                      Sets HTTP Host header for reverse proxies / CDN fronting.
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -3418,6 +3643,11 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     rathole_token: '',
     rathole_transport: 'tcp',
     chisel_control_port: generateRandomControlPort(),
+    chisel_transport: 'ws',
+    chisel_backend_url: 'https://speedtest.net',
+    chisel_custom_sni: '',
+    chisel_custom_host: '',
+    chisel_keepalive: '10s',
     frp_bind_port: generateRandomControlPort(),
     frp_token: '',
     frp_local_ip: '127.0.0.1',
@@ -3599,6 +3829,21 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           ? parseInt(formData.chisel_control_port.toString())
           : firstPort + 10000
         spec.control_port = controlPort
+        spec.transport = formData.chisel_transport || 'ws'
+        spec.transport_type = formData.chisel_transport || 'ws'
+        if (formData.chisel_backend_url) {
+          spec.backend_url = formData.chisel_backend_url
+        }
+        if (formData.chisel_custom_sni) {
+          spec.custom_sni = formData.chisel_custom_sni
+          spec.stealth_domain = formData.chisel_custom_sni
+        }
+        if (formData.chisel_custom_host) {
+          spec.custom_host = formData.chisel_custom_host
+        }
+        if (formData.chisel_keepalive) {
+          spec.keepalive = formData.chisel_keepalive
+        }
         const panelHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
         spec.panel_host = panelHost
       }
@@ -3954,10 +4199,14 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   }
                 }}
                 className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
-                disabled={formData.core === 'chisel'}
               >
                 {formData.core === 'chisel' ? (
-                  <option value={formData.core}>{formData.core.charAt(0).toUpperCase() + formData.core.slice(1)}</option>
+                  <>
+                    <option value="tcp">TCP (Standard)</option>
+                    <option value="udp">UDP (Gaming / Anti-Lag)</option>
+                    <option value="tcp+udp">TCP + UDP (Dual Forward)</option>
+                    <option value="socks5">SOCKS5 (Dynamic Proxy)</option>
+                  </>
                 ) : formData.core === 'rathole' ? (
                   <>
                     <option value="tcp">TCP</option>
@@ -4318,6 +4567,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           )}
           
           {/* Chisel Core Settings */}
+          {/* Chisel Core Settings */}
           {formData.core === 'chisel' && (
             <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-teal-50/60 via-gray-50 to-emerald-50/40 dark:from-teal-950/20 dark:via-gray-800/60 dark:to-emerald-950/20 border border-teal-200/70 dark:border-teal-900/40 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-gray-200/70 dark:border-gray-700/70">
@@ -4327,16 +4577,103 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   </span>
                   <div>
                     <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
-                      Chisel Settings
+                      Chisel Advanced Settings
                     </h4>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Fast TCP/UDP Tunnel over HTTP/2 with Built-in SSH Security
+                      High-Speed WebSocket Tunnel with SSH Multiplexing, WSS TLS & Anti-DPI Camouflage
                     </p>
                   </div>
                 </div>
                 <span className="self-start sm:self-auto text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-teal-100/80 text-teal-700 dark:bg-teal-900/60 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
                   Chisel Core
                 </span>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-teal-500" />
+                  Quick Optimization Presets
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        chisel_transport: 'wss',
+                        chisel_backend_url: 'https://speedtest.net',
+                        chisel_custom_sni: 'speedtest.net',
+                        chisel_keepalive: '10s'
+                      }));
+                      showToast('info', 'Preset Applied', 'Anti-DPI Stealth Preset (WSS + Camouflage + SNI) configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.chisel_transport === 'wss' && formData.chisel_backend_url
+                        ? 'bg-teal-100/80 dark:bg-teal-900/50 border-teal-400 dark:border-teal-500 ring-2 ring-teal-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-teal-50 dark:hover:bg-teal-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Shield size={15} className="text-teal-600 dark:text-teal-400" />
+                      <span className="text-xs font-bold text-teal-800 dark:text-teal-200">Anti-DPI Stealth</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      WSS TLS + speedtest.net decoy camouflage against active probers.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        type: 'udp',
+                        chisel_keepalive: '5s'
+                      }));
+                      showToast('info', 'Preset Applied', 'Ultra-Low Ping Gaming (UDP + 5s Keepalive) configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.type === 'udp' && formData.chisel_keepalive === '5s'
+                        ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Zap size={15} className="text-amber-500 dark:text-amber-400" />
+                      <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      UDP Gaming mode + aggressive 5s Keepalive against packet drops.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        chisel_transport: 'ws',
+                        chisel_custom_host: 'cdn.cloudflare.com',
+                        chisel_keepalive: '15s'
+                      }));
+                      showToast('info', 'Preset Applied', 'CDN-Friendly WebSocket Preset configured');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.chisel_transport === 'ws' && formData.chisel_custom_host === 'cdn.cloudflare.com'
+                        ? 'bg-blue-100/80 dark:bg-blue-900/50 border-blue-400 dark:border-blue-500 ring-2 ring-blue-400/20'
+                        : 'bg-white/80 dark:bg-gray-800/80 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Globe size={15} className="text-blue-500 dark:text-blue-400" />
+                      <span className="text-xs font-bold text-blue-700 dark:text-blue-300">CDN Friendly</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
+                      HTTP/WS with Host spoofing compatible with reverse proxies.
+                    </p>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
@@ -4389,6 +4726,118 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     Chisel server control port (leave empty for auto: first port + 10000).
                   </p>
+                </div>
+              </div>
+
+              {/* Transport Protocol & Keepalive */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start pt-1">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Shield size={14} className="text-teal-500" />
+                      Transport Protocol & Encryption
+                    </label>
+                    <span className="text-[11px] font-mono uppercase text-gray-400 dark:text-gray-500">
+                      {formData.chisel_transport}
+                    </span>
+                  </div>
+                  <select
+                    value={formData.chisel_transport}
+                    onChange={(e) => setFormData({ ...formData, chisel_transport: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
+                  >
+                    <option value="ws">WS - Plain WebSocket (HTTP, Low Overhead)</option>
+                    <option value="wss">WSS - Encrypted WebSocket over TLS (HTTPS)</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    {formData.chisel_transport === 'wss'
+                      ? 'Outer TLS encryption layer + Inner SSH stream encryption (Double Layer Security).'
+                      : 'Standard WebSocket with built-in inner SSH encryption layer.'}
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Zap size={14} className="text-amber-500" />
+                      Keepalive Heartbeat
+                    </label>
+                    <span className="text-[11px] font-mono text-gray-400 dark:text-gray-500">
+                      {formData.chisel_keepalive}
+                    </span>
+                  </div>
+                  <select
+                    value={formData.chisel_keepalive}
+                    onChange={(e) => setFormData({ ...formData, chisel_keepalive: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
+                  >
+                    <option value="5s">5s (Ultra-Aggressive / Competitive Gaming)</option>
+                    <option value="10s">10s (Recommended - High Stability)</option>
+                    <option value="15s">15s (Balanced)</option>
+                    <option value="25s">25s (Default / Low Overhead)</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Prevents firewall NAT translation state dropouts across Iranian ISPs.
+                  </p>
+                </div>
+              </div>
+
+              {/* Anti-Probing Camouflage & Decoy Website */}
+              <div className="p-3.5 rounded-xl bg-teal-50/70 dark:bg-teal-950/20 border border-teal-200/70 dark:border-teal-900/40 space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-teal-900 dark:text-teal-200 flex items-center gap-1.5">
+                      <Shield size={14} className="text-teal-600 dark:text-teal-400" />
+                      Decoy Camouflage Backend (--backend)
+                    </label>
+                    <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-teal-200/60 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300">
+                      Anti-Active Probing
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-teal-800/80 dark:text-teal-300/80 mb-2">
+                    When censors or scanning bots probe your control port via standard HTTP/HTTPS, Chisel proxies the request to this legitimate website with HTTP 200 OK:
+                  </p>
+                  <input
+                    type="text"
+                    value={formData.chisel_backend_url}
+                    onChange={(e) => setFormData({ ...formData, chisel_backend_url: e.target.value })}
+                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-teal-300 dark:border-teal-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                    placeholder="https://speedtest.net or https://example.com"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
+                      Custom SNI (--sni)
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.chisel_custom_sni}
+                      onChange={(e) => setFormData({ ...formData, chisel_custom_sni: e.target.value })}
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                      placeholder="speedtest.net or domain.com"
+                    />
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                      Overrides TLS ClientHello Server Name Indication.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
+                      Custom Host Header (--hostname)
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.chisel_custom_host}
+                      onChange={(e) => setFormData({ ...formData, chisel_custom_host: e.target.value })}
+                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono"
+                      placeholder="cdn.speedtest.net"
+                    />
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                      Sets HTTP Host header for reverse proxies / CDN fronting.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
