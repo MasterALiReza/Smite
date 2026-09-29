@@ -610,6 +610,27 @@ def test_spec_builder_frp_bandwidth_normalization():
     assert "bandwidth_limit" not in c_inv
 
 
+def test_spec_builder_frp_udp_disables_health_check_and_compression():
+    """Verify FRP UDP tunnels disable health checks, compression, and proxy protocol to prevent dropped proxies"""
+    tunnel_udp = DummyTunnel(
+        id="t-frp-udp-wg",
+        core="frp",
+        type="udp",
+        spec={
+            "ports": [51820],
+            "enable_health_check": True,
+            "health_check_type": "tcp",
+            "proxy_protocol_version": "v2"
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel_udp, "1.1.1.1", "2.2.2.2")
+    assert s["type"] == "udp"
+    assert c["type"] == "udp"
+    assert "health_check_type" not in c
+    assert "proxy_protocol_version" not in c
+    assert c["use_compression"] is False
+    assert s["use_compression"] is False
+
 
 if __name__ == "__main__":
     import inspect

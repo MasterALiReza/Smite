@@ -844,16 +844,26 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 tunnel.spec["tls_key_pem"] = tls_key_pem
 
     # 6. Reliability, Health Checks & Bandwidth Shaping
+    # UDP datagrams have high entropy/pre-encryption (e.g. WireGuard/gaming),
+    # so compression wastes CPU and increases packet jitter.
+    default_compression = False if (tunnel_type in ["udp", "tcp+udp"] or getattr(tunnel, "gaming_mode", False)) else True
     use_encryption = bool(server_spec.get("use_encryption", True))
-    use_compression = bool(server_spec.get("use_compression", True))
+    use_compression = bool(server_spec.get("use_compression", default_compression))
     
     # Internal health check configuration
-    enable_health_check = bool(
-        server_spec.get("enable_health_check", True)
-        or server_spec.get("health_check_type")
-        or getattr(tunnel, "gaming_mode", False)
-    )
-    health_check_type = server_spec.get("health_check_type") or ("tcp" if enable_health_check else None)
+    # Note: FRP ONLY supports 'tcp' and 'http' health checks. It has NO UDP health check.
+    # Attaching a TCP health check to a pure UDP service causes continuous health check failure
+    # (TCP connection refused) which immediately kills/unregisters the UDP proxy!
+    if tunnel_type == "udp":
+        enable_health_check = False
+        health_check_type = None
+    else:
+        enable_health_check = bool(
+            server_spec.get("enable_health_check", True)
+            or server_spec.get("health_check_type")
+            or getattr(tunnel, "gaming_mode", False)
+        )
+        health_check_type = server_spec.get("health_check_type") or ("tcp" if enable_health_check else None)
     health_check_interval = int(server_spec.get("health_check_interval_s") or 10)
     health_check_timeout = int(server_spec.get("health_check_timeout_s") or 3)
     health_check_max_failed = int(server_spec.get("health_check_max_failed") or 3)
@@ -930,6 +940,12 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         client_spec["health_check_max_failed"] = health_check_max_failed
         if health_check_type == "http":
             client_spec["health_check_path"] = health_check_path
+    else:
+        client_spec.pop("health_check_type", None)
+        client_spec.pop("health_check_interval_s", None)
+        client_spec.pop("health_check_timeout_s", None)
+        client_spec.pop("health_check_max_failed", None)
+        client_spec.pop("health_check_path", None)
 
     if bandwidth_limit:
         client_spec["bandwidth_limit"] = bandwidth_limit
@@ -938,7 +954,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         client_spec.pop("bandwidth_limit", None)
         client_spec.pop("bandwidth_limit_mode", None)
 
-    if proxy_protocol_version:
+    if proxy_protocol_version and tunnel_type in ["tcp", "http", "https"]:
         client_spec["proxy_protocol_version"] = proxy_protocol_version
     else:
         client_spec.pop("proxy_protocol_version", None)
@@ -969,11 +985,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             tunnel.spec["health_check_type"] = health_check_type
             if health_check_type == "http":
                 tunnel.spec["health_check_path"] = health_check_path
+        else:
+            tunnel.spec.pop("health_check_type", None)
+            tunnel.spec.pop("health_check_path", None)
         if bandwidth_limit:
             tunnel.spec["bandwidth_limit"] = bandwidth_limit
         else:
             tunnel.spec.pop("bandwidth_limit", None)
-        if proxy_protocol_version:
+        if proxy_protocol_version and tunnel_type in ["tcp", "http", "https"]:
             tunnel.spec["proxy_protocol_version"] = proxy_protocol_version
         else:
             tunnel.spec.pop("proxy_protocol_version", None)

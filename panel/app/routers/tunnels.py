@@ -2085,8 +2085,8 @@ async def test_tunnel_config(
             })
     elif core == "frp":
         frp_proto = (payload.get("frp_transport") or payload.get("transport") or spec.get("transport") or "tcp").lower()
-        use_tls = frp_proto in ["wss", "quic"] or payload.get("frp_security") == "tls" or spec.get("security_type") == "tls" or bool(payload.get("tls_enable", True))
-        has_hc = bool(payload.get("frp_health_check", True) or spec.get("health_check_type"))
+        t_type = (payload.get("type") or payload.get("tunnel_type") or spec.get("type") or "tcp").lower()
+        has_hc = (t_type != "udp") and bool(payload.get("frp_health_check", True) or spec.get("health_check_type"))
         bw_limit = payload.get("frp_bandwidth_limit") or spec.get("bandwidth_limit")
         p_proto = payload.get("frp_proxy_protocol") or spec.get("proxy_protocol_version")
 

@@ -1993,6 +1993,7 @@ transport:
   tcpMux: true
   tcpMuxKeepaliveInterval: 25
   dialServerTimeout: 15
+  poolCount: 5
 """
             if tls_enable:
                 config_content += """  tls:
@@ -2026,18 +2027,19 @@ transport:
                         clean_d = str(d).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
                         block += f'      - "{clean_d}"\n'
 
+                effective_compression = False if (p_type == 'udp' or spec.get('gaming_mode')) else bool(use_compression)
                 block += f"""    transport:
       useEncryption: {'true' if use_encryption else 'false'}
-      useCompression: {'true' if use_compression else 'false'}
+      useCompression: {'true' if effective_compression else 'false'}
 """
                 if bandwidth_limit:
                     block += f"""      bandwidthLimit: "{bandwidth_limit}"
       bandwidthLimitMode: "{bandwidth_limit_mode}"
 """
-                if proxy_protocol_version:
+                if proxy_protocol_version and p_type in ['tcp', 'http', 'https']:
                     block += f"""      proxyProtocolVersion: "{proxy_protocol_version}"
 """
-                if health_check_type:
+                if health_check_type and p_type in ['tcp', 'http', 'https']:
                     hc_type = "http" if (p_type == 'http' and health_check_type == 'http') else "tcp"
                     block += f"""    healthCheck:
       type: {hc_type}
