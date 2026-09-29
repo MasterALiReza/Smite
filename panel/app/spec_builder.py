@@ -620,9 +620,9 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
                 ).serial_number(
                     x509.random_serial_number()
                 ).not_valid_before(
-                    datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
                 ).not_valid_after(
-                    datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+                    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
                 ).sign(key, hashes.SHA256())
 
                 tls_key_pem = key.private_bytes(
@@ -820,9 +820,9 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 ).serial_number(
                     x509.random_serial_number()
                 ).not_valid_before(
-                    datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
                 ).not_valid_after(
-                    datetime.datetime.utcnow() + datetime.timedelta(days=3650)
+                    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
                 ).sign(key, hashes.SHA256())
 
                 tls_key_pem = key.private_bytes(

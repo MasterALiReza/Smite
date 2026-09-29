@@ -1,10 +1,16 @@
 """Application configuration"""
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
+
     panel_port: int = 8000
     panel_host: str = "0.0.0.0"
     panel_domain: str = ""
@@ -46,10 +52,6 @@ class Settings(BaseSettings):
     
     secret_key: str = "changeme-secret-key-change-in-production"
     access_token_expire_minutes: int = 1440  # 24 hours default, configurable via ACCESS_TOKEN_EXPIRE_MINUTES
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 settings = Settings()

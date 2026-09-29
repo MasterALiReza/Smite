@@ -2303,7 +2303,7 @@ class GostAdapter:
                             "openssl", "req", "-new", "-newkey", "rsa:2048", "-days", "3650",
                             "-nodes", "-x509", "-subj", "/O=Smite/CN=smite.node",
                             "-keyout", str(key_path), "-out", str(cert_path)
-                        ], check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        ], check=True, timeout=5, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                     except Exception as e:
                         logger.error(f"Failed to generate self-signed cert: {e}")
                 
