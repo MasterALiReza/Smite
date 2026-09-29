@@ -1058,10 +1058,21 @@ def build_gost_node_specs(
     port_ranges = getattr(tunnel, "port_ranges", None)
     allowed_ips = getattr(tunnel, "allowed_ips", None)
 
+    tunnel_type = (
+        getattr(tunnel, "type", None)
+        or getattr(tunnel, "tunnel_type", None)
+        or spec.get("type")
+        or spec.get("tunnel_type")
+        or "tcp"
+    ).lower()
+    if tunnel_type not in ["tcp", "udp", "tcp+udp"]:
+        tunnel_type = "tcp"
+
     base_spec = {
         "control_port": control_port,
         "auth_token": auth_token,
-        "type": getattr(tunnel, "type", "tcp") or "tcp",
+        "type": tunnel_type,
+        "tunnel_type": tunnel_type,
         "transport": transport_type,
         "transport_type": transport_type,
         "security_type": security_type,
@@ -1086,6 +1097,16 @@ def build_gost_node_specs(
         "selector_strategy": getattr(tunnel, "selector_strategy", None) or spec.get("selector_strategy") or "fifo",
         "keepalive_interval": getattr(tunnel, "keepalive_interval", None) or spec.get("keepalive_interval") or 15,
     }
+
+    target_host = spec.get("target_host") or getattr(tunnel, "target_host", None)
+    if target_host:
+        base_spec["target_host"] = target_host
+
+    # For UDP datagram tunneling over streaming transports, ensure multiplexing is default
+    if tunnel_type in ["udp", "tcp+udp"] and transport_type.lower() not in ["mws", "mwss", "udp", "rudp"]:
+        base_spec["multiplex"] = True
+        if not base_spec.get("mux_type"):
+            base_spec["mux_type"] = "yamux"
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout"]:

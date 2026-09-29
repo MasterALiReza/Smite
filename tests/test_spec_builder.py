@@ -631,6 +631,29 @@ def test_spec_builder_frp_udp_disables_health_check_and_compression():
     assert c["use_compression"] is False
     assert s["use_compression"] is False
 
+def test_spec_builder_gost_udp_multiplexing_and_target_host():
+    """Verify GOST UDP tunnels automatically enable yamux multiplexing over streaming transports and propagate target_host"""
+    tunnel_udp = DummyTunnel(
+        id="t-gost-udp",
+        core="gost",
+        type="udp",
+        transport_type="grpc",
+        spec={
+            "ports": [51820],
+            "target_host": "127.0.0.1",
+            "is_reverse": True
+        }
+    )
+    s, c = build_tunnel_node_specs(tunnel_udp, "1.1.1.1", "2.2.2.2")
+    assert s["type"] == "udp"
+    assert c["type"] == "udp"
+    assert s["multiplex"] is True
+    assert c["multiplex"] is True
+    assert s["mux_type"] == "yamux"
+    assert c["mux_type"] == "yamux"
+    assert s["target_host"] == "127.0.0.1"
+    assert c["target_host"] == "127.0.0.1"
+
 
 if __name__ == "__main__":
     import inspect

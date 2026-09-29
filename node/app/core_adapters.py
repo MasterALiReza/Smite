@@ -2238,6 +2238,13 @@ class GostAdapter:
         elif transport_type == "tcp" and security_type in ["tls", "utls"]:
             gost_type = "tls"
         
+        tunnel_proto = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
+        if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
+            tunnel_proto = "tcp"
+        is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
+        mux_type = spec.get("mux_type") or "yamux"
+        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp"]
+
         config = {
             "services": [],
             "chains": []
@@ -2261,14 +2268,18 @@ class GostAdapter:
             }]
         
         if mode == 'server':
-            # 1. Server Configuration (Foreign Node)
+            # 1. Server Configuration (Foreign Node in direct mode, Iran Node in reverse mode)
             if control_port:
                 await free_port(control_port)
+            if is_reverse and spec.get("ports"):
+                for p in spec.get("ports"):
+                    p_num = p.get('local_port') or p.get('local') or p.get('port') if isinstance(p, dict) else p
+                    if isinstance(p_num, (int, str)) and str(p_num).isdigit():
+                        await free_port(int(p_num))
             bind_addr = f"[::]:{control_port}" if use_ipv6 else f"0.0.0.0:{control_port}"
             
             # Handler & Protocol Selection
             handler_type = spec.get("handler_type") or "relay"
-            mux_type = spec.get("mux_type") or "yamux"
             
             keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
             listener_metadata = {
@@ -2282,7 +2293,7 @@ class GostAdapter:
                 listener_metadata["path"] = spec.get("ws_path")
             if is_reverse:
                 listener_metadata["bind"] = True
-            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
+            if enable_mux:
                 listener_metadata["mux.type"] = mux_type
                 listener_metadata["nodelay"] = True
             if gost_type == "kcp":
@@ -2331,7 +2342,7 @@ class GostAdapter:
             }
             if is_reverse:
                 handler_metadata["bind"] = True
-            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
+            if enable_mux:
                 handler_metadata["mux.type"] = mux_type
                 handler_metadata["nodelay"] = True
                 
@@ -2493,8 +2504,7 @@ class GostAdapter:
                 dialer_metadata["resend"] = 2
                 dialer_metadata["nc"] = 1
             
-            mux_type = spec.get("mux_type") or "yamux"
-            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
+            if enable_mux:
                 dialer_metadata["mux.type"] = mux_type
                 dialer_metadata["nodelay"] = True
             
@@ -2510,7 +2520,7 @@ class GostAdapter:
             hop_nodes = []
             
             connector_metadata = {}
-            if (spec.get("gaming_mode") or spec.get("multiplex")) and gost_type not in ["mws", "mwss"]:
+            if enable_mux:
                 connector_metadata["mux.type"] = mux_type
                 connector_metadata["nodelay"] = True
                 connector_metadata["keepAlive"] = True
@@ -2616,14 +2626,24 @@ class GostAdapter:
                 tunnel_proto = "tcp"
 
             # Create Local Listeners
-            default_target_address = '127.0.0.1'
+            default_target_address = spec.get("target_host") or '127.0.0.1'
             for port in ports:
                 if isinstance(port, dict):
-                    local_port = port.get('local_port') or port.get('local')
-                    target_address = port.get('target_address', default_target_address)
+                    local_port = port.get('local_port') or port.get('local') or port.get('port')
+                    target_address = port.get('target_address') or port.get('target_host') or default_target_address
                     target_port = port.get('target_port') or port.get('remote') or local_port
                     port_num = int(local_port) if isinstance(local_port, (int, str)) and str(local_port).isdigit() else local_port
                     target_port_num = int(target_port) if isinstance(target_port, (int, str)) and str(target_port).isdigit() else target_port
+                elif isinstance(port, str) and "=" in port:
+                    parts = port.split("=", 1)
+                    port_num = int(parts[0].strip()) if parts[0].strip().isdigit() else parts[0].strip()
+                    rhs = parts[1].strip()
+                    if ":" in rhs:
+                        target_address, tp = rhs.rsplit(":", 1)
+                        target_port_num = int(tp) if tp.isdigit() else port_num
+                    else:
+                        target_address = default_target_address
+                        target_port_num = int(rhs) if rhs.isdigit() else port_num
                 else:
                     port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                     target_address = default_target_address
@@ -2664,17 +2684,28 @@ class GostAdapter:
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
                     listener_type = "rudp" if is_reverse else "udp"
-                    listener_udp = {"type": listener_type}
+                    listener_udp = {
+                        "type": listener_type,
+                        "metadata": {
+                            "readTimeout": "30s"
+                        }
+                    }
                     
+                    udp_handler_metadata = {
+                        "ttl": "60s",
+                        "readTimeout": "30s"
+                    }
                     if is_reverse:
                         listener_udp["chain"] = f"chain-{tunnel_id}"
                         handler_udp = {
-                            "type": "rudp"
+                            "type": "rudp",
+                            "metadata": udp_handler_metadata
                         }
                     else:
                         handler_udp = {
                             "type": "udp",
-                            "chain": f"chain-{tunnel_id}"
+                            "chain": f"chain-{tunnel_id}",
+                            "metadata": udp_handler_metadata
                         }
                     
                     service_udp = {
