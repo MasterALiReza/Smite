@@ -89,8 +89,38 @@ interface SettingsData {
   tunnel?: TunnelSettings
 }
 
+export type SettingsTab = 'ssl' | 'frp' | 'telegram' | 'tunnel' | 'all'
+
 const Settings = () => {
   const { t, isRTL } = useLanguage()
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const hash = window.location.hash.replace('#', '') as SettingsTab
+      if (['ssl', 'frp', 'telegram', 'tunnel', 'all'].includes(hash)) {
+        return hash
+      }
+    }
+    return 'ssl'
+  })
+
+  const handleTabChange = (tab: SettingsTab) => {
+    setActiveTab(tab)
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `#${tab}`)
+    }
+  }
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace('#', '') as SettingsTab
+      if (['ssl', 'frp', 'telegram', 'tunnel', 'all'].includes(hash)) {
+        setActiveTab(hash)
+      }
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   const [settings, setSettings] = useState<SettingsData>({
     frp: { enabled: false, port: 7000 },
     telegram: { enabled: false, admin_ids: [] },
@@ -331,6 +361,73 @@ const Settings = () => {
     )
   }
 
+  const tabs: {
+    id: SettingsTab
+    label: string
+    icon: any
+    badge?: React.ReactNode
+  }[] = [
+    {
+      id: 'ssl',
+      label: t.settings.tabSsl || 'SSL & Domain',
+      icon: ShieldCheck,
+      badge: sslData?.enabled && sslData?.cert_info?.valid ? (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          HTTPS
+        </span>
+      ) : (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-mono text-slate-400 dark:text-slate-500 bg-slate-200/60 dark:bg-slate-800">
+          HTTP
+        </span>
+      )
+    },
+    {
+      id: 'frp',
+      label: t.settings.tabFrp || 'FRP Communication',
+      icon: Radio,
+      badge: settings.frp.enabled ? (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          ON
+        </span>
+      ) : (
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+      )
+    },
+    {
+      id: 'telegram',
+      label: t.settings.tabTelegram || 'Telegram Bot',
+      icon: Send,
+      badge: settings.telegram.enabled ? (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          ON
+        </span>
+      ) : (
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+      )
+    },
+    {
+      id: 'tunnel',
+      label: t.settings.tabTunnel || 'Tunnel Automation',
+      icon: RefreshCw,
+      badge: settings.tunnel?.auto_reapply_enabled ? (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          ON
+        </span>
+      ) : (
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+      )
+    },
+    {
+      id: 'all',
+      label: t.settings.tabAll || 'All Settings',
+      icon: Sliders
+    }
+  ]
+
   return (
     <div className="w-full max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-fade-in" dir={isRTL ? 'rtl' : 'ltr'}>
       {/* Header */}
@@ -382,9 +479,36 @@ const Settings = () => {
         </div>
       )}
 
+      {/* Sub-menu / Navigation Tabs */}
+      <div className="flex items-center gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-slate-100/90 dark:bg-[#12161f]/90 border border-slate-200/80 dark:border-white/[0.08] backdrop-blur-md overflow-x-auto no-scrollbar shadow-xs" role="tablist">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id
+          const Icon = tab.icon
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => handleTabChange(tab.id)}
+              className={`group relative flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 shrink-0 select-none ${
+                isActive
+                  ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/60 dark:border-white/[0.08]'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-white/[0.04]'
+              }`}
+            >
+              <Icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`} />
+              <span>{tab.label}</span>
+              {tab.badge && <div className="shrink-0">{tab.badge}</div>}
+            </button>
+          )
+        })}
+      </div>
+
       <div className="space-y-6">
         {/* 0. SSL & Domain Management Card */}
-        <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group transition-all duration-300">
+        {(activeTab === 'ssl' || activeTab === 'all') && (
+          <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group transition-all duration-300 animate-fade-in">
           {/* Card Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/[0.05]">
             <div className="flex items-start gap-3">
@@ -852,6 +976,7 @@ const Settings = () => {
             )}
           </div>
         </div>
+      )}
 
         {/* Confirmation Modal for Removing SSL */}
         {showRemoveConfirm && (
@@ -892,7 +1017,8 @@ const Settings = () => {
         )}
 
         {/* 1. FRP Communication Settings */}
-        <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group">
+        {(activeTab === 'frp' || activeTab === 'all') && (
+          <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group animate-fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/[0.05]">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-500 shrink-0 mt-0.5">
@@ -982,6 +1108,7 @@ const Settings = () => {
             </div>
           )}
         </div>
+        )}
 
         {/* 2. Telegram Bot Settings */}
         <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group">

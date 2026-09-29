@@ -186,6 +186,11 @@ interface Translations {
       sslRemovedSuccess?: string
       days?: string
       fingerprint?: string
+      tabAll?: string
+      tabSsl?: string
+      tabFrp?: string
+      tabTelegram?: string
+      tabTunnel?: string
     }
   common: {
     loading: string
@@ -377,6 +382,11 @@ const translations: Record<Language, Translations> = {
       sslRemovedSuccess: 'SSL disabled. Panel reverted to HTTP.',
       days: 'days',
       fingerprint: 'Fingerprint (SHA-256)',
+      tabAll: 'All Settings',
+      tabSsl: 'SSL & Domain',
+      tabFrp: 'FRP Communication',
+      tabTelegram: 'Telegram Bot',
+      tabTunnel: 'Tunnel Automation',
     },
     common: {
       loading: 'Loading...',
@@ -566,6 +576,11 @@ const translations: Record<Language, Translations> = {
       sslRemovedSuccess: 'گواهی SSL غیرفعال شد و پنل به حالت HTTP برگشت.',
       days: 'روز',
       fingerprint: 'اثر انگشت (SHA-256)',
+      tabAll: 'همه تنظیمات',
+      tabSsl: 'دامنه و SSL',
+      tabFrp: 'ارتباط FRP',
+      tabTelegram: 'ربات تلگرام',
+      tabTunnel: 'مدیریت خودکار تانل',
     },
     common: {
       loading: 'در حال بارگذاری...',
