@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
@@ -302,31 +302,6 @@ const Tunnels = () => {
   // ─── Search State ───────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
 
-  // ─── Scroll & Sticky Toolbar Dynamics ────────────────────────
-  const pageContainerRef = useRef<HTMLDivElement>(null)
-  const [isScrolled, setIsScrolled] = useState(false)
-
-  useEffect(() => {
-    const el = pageContainerRef.current
-    if (!el) return
-
-    // Smite layout uses a scrollable div (.overflow-y-auto) or window
-    const scrollParent = el.closest('.overflow-y-auto') || el.parentElement || window
-
-    const handleScroll = () => {
-      const top = scrollParent === window 
-        ? window.scrollY 
-        : (scrollParent as HTMLElement).scrollTop
-      setIsScrolled(top > 80)
-    }
-
-    scrollParent.addEventListener('scroll', handleScroll, { passive: true })
-    handleScroll()
-
-    return () => {
-      scrollParent.removeEventListener('scroll', handleScroll)
-    }
-  }, [])
 
   useEffect(() => {
     fetchData()
@@ -760,7 +735,7 @@ const Tunnels = () => {
   }
 
   return (
-    <div ref={pageContainerRef} className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in">
+    <div className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in">
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200/60 dark:border-white/[0.06]">
         <div>
@@ -780,7 +755,7 @@ const Tunnels = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Live Ping Toggle */}
           <button
             type="button"
@@ -799,25 +774,6 @@ const Tunnels = () => {
               <span className={`relative inline-flex rounded-full h-2 w-2 ${livePingEnabled ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
             </span>
             <span className="font-mono">Live Ping: {livePingEnabled ? '2s' : 'OFF'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleReapplyAll}
-            disabled={!!reapplyAllProgress && !reapplyAllDone}
-            className="flex-1 sm:flex-none px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl transition-all font-semibold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          >
-            <RotateCw size={16} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-            <span>{t.tunnels.reapplyAll}</span>
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => setShowAddModal(true)}
-            className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl transition-all font-semibold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 cursor-pointer"
-          >
-            <Plus size={18} />
-            <span>{t.tunnels.createTunnel}</span>
           </button>
         </div>
       </div>
@@ -991,22 +947,20 @@ const Tunnels = () => {
                   <X size={14} />
                 </button>
 
-                {/* If scrolled down, also show Create Tunnel button */}
-                {isScrolled && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAddModal(true)}
-                    aria-label={t.tunnels.createTunnel}
-                    className="h-9 px-2.5 sm:px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1 text-xs active:scale-95 cursor-pointer whitespace-nowrap animate-fade-in"
-                    title={t.tunnels.createTunnel}
-                  >
-                    <Plus size={14} />
-                    <span className="hidden sm:inline">{t.tunnels.createTunnel}</span>
-                  </button>
-                )}
+                {/* Create Tunnel button */}
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  aria-label={t.tunnels.createTunnel}
+                  className="h-9 px-2.5 sm:px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.createTunnel}
+                >
+                  <Plus size={14} />
+                  <span className="hidden sm:inline">{t.tunnels.createTunnel}</span>
+                </button>
               </div>
             ) : (
-              /* When NO items selected: Show Select All, plus Quick Actions ONLY when scrolled */
+              /* When NO items selected: Show Select All, plus Primary Actions */
               <div className="flex items-center gap-1.5 shrink-0">
                 {/* Select All Toggle Button */}
                 {filteredTunnels.length > 0 && (
@@ -1033,33 +987,29 @@ const Tunnels = () => {
                   </button>
                 )}
 
-                {/* Scrolled Actions: Reapply All + Create Tunnel appear ONLY when user scrolled past header */}
-                {isScrolled && (
-                  <div className="flex items-center gap-1.5 animate-fade-in">
-                    <button
-                      type="button"
-                      onClick={handleReapplyAll}
-                      disabled={!!reapplyAllProgress && !reapplyAllDone}
-                      aria-label={t.tunnels.reapplyAll}
-                      className="h-9 px-2.5 sm:px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
-                      title={t.tunnels.reapplyAll}
-                    >
-                      <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-                      <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
-                    </button>
+                {/* Primary Actions: Reapply All + Create Tunnel always present in sticky toolbar */}
+                <button
+                  type="button"
+                  onClick={handleReapplyAll}
+                  disabled={!!reapplyAllProgress && !reapplyAllDone}
+                  aria-label={t.tunnels.reapplyAll}
+                  className="h-9 px-2.5 sm:px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.reapplyAll}
+                >
+                  <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                  <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
+                </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setShowAddModal(true)}
-                      aria-label={t.tunnels.createTunnel}
-                      className="h-9 px-2.5 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
-                      title={t.tunnels.createTunnel}
-                    >
-                      <Plus size={14} />
-                      <span className="hidden sm:inline">{t.tunnels.createTunnel}</span>
-                    </button>
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  aria-label={t.tunnels.createTunnel}
+                  className="h-9 px-2.5 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.createTunnel}
+                >
+                  <Plus size={14} />
+                  <span className="hidden sm:inline">{t.tunnels.createTunnel}</span>
+                </button>
               </div>
             )}
           </div>
