@@ -11,6 +11,9 @@ services:
       - ./panel/main.py:/app/main.py
       - ./panel/data:/app/data
       - ./panel/certs:/app/certs
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/html:/var/www/html
+      - /var/www/certbot:/var/www/certbot
       - ./.env:/app/config/.env:ro
       - ./docker-compose.yml:/app/config/docker-compose.yml:ro
     env_file:

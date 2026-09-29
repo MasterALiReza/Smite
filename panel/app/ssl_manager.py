@@ -564,9 +564,19 @@ async def issue_letsencrypt_cert(domain: str, email: Optional[str] = None) -> Di
     else:
         cmd.append("--register-unsafely-without-email")
 
-    # Check if webroot directory /var/www/certbot exists (Nginx active)
-    webroot_path = Path("/var/www/certbot")
-    if webroot_path.exists() and webroot_path.is_dir():
+    # Check candidate webroot directories (Nginx active on host or container)
+    candidate_webroots = [
+        Path("/var/www/html"),
+        Path("/var/www/certbot"),
+        Path("/var/www"),
+    ]
+    webroot_path = None
+    for cand in candidate_webroots:
+        if cand.exists() and cand.is_dir():
+            webroot_path = cand
+            break
+
+    if webroot_path:
         cmd.extend(["--webroot", "-w", str(webroot_path)])
     else:
         cmd.append("--standalone")
