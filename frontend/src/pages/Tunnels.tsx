@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
@@ -299,24 +299,8 @@ const Tunnels = () => {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newCategoryColor, setNewCategoryColor] = useState('blue')
 
-  // ─── Search & Sticky Scroll States ───────────────────────────
+  // ─── Search State ───────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
-  const [isScrolled, setIsScrolled] = useState(false)
-  const headerSentinelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const sentinel = headerSentinelRef.current
-    if (!sentinel) return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setIsScrolled(!entry.isIntersecting)
-      },
-      { threshold: 0 }
-    )
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [])
 
   useEffect(() => {
     fetchData()
@@ -810,16 +794,9 @@ const Tunnels = () => {
         </div>
       </div>
 
-      {/* ── Sentinel for detecting scroll past header ── */}
-      <div ref={headerSentinelRef} className="h-px w-full pointer-events-none -mt-3 mb-1" />
-
       {/* ── Category Filter & Action Bar ───────────────────────────────── */}
       <div
-        className={`sticky top-2 z-20 transition-all duration-300 rounded-2xl border p-2 sm:p-2.5 backdrop-blur-xl ${
-          isScrolled
-            ? 'bg-white/95 dark:bg-[#0c101d]/95 border-indigo-500/20 dark:border-indigo-400/20 shadow-lg shadow-indigo-500/5 ring-1 ring-black/5 dark:ring-white/5'
-            : 'bg-slate-100/70 dark:bg-[#12161f]/80 border-slate-200/80 dark:border-white/[0.07] shadow-2xs'
-        }`}
+        className="sticky top-2 z-20 transition-all duration-200 rounded-2xl border p-2 sm:p-2.5 backdrop-blur-xl bg-white/95 dark:bg-[#0c101d]/95 border-slate-200/80 dark:border-white/[0.08] shadow-md ring-1 ring-black/5 dark:ring-white/5"
       >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
           {/* Left/Center: Search Bar + Categories */}
@@ -1024,33 +1001,31 @@ const Tunnels = () => {
                 </button>
               </div>
             ) : (
-              /* When NO items are selected and user is scrolled down: Show persistent Reapply All + Create Tunnel */
-              isScrolled && (
-                <div className="flex items-center gap-1.5 shrink-0 animate-fade-in">
-                  <button
-                    type="button"
-                    onClick={handleReapplyAll}
-                    disabled={!!reapplyAllProgress && !reapplyAllDone}
-                    aria-label={t.tunnels.reapplyAll}
-                    className="h-9 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
-                    title={t.tunnels.reapplyAll}
-                  >
-                    <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-                    <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
-                  </button>
+              /* Persistent Actions: Reapply All + Create Tunnel always accessible */
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleReapplyAll}
+                  disabled={!!reapplyAllProgress && !reapplyAllDone}
+                  aria-label={t.tunnels.reapplyAll}
+                  className="h-9 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.reapplyAll}
+                >
+                  <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                  <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setShowAddModal(true)}
-                    aria-label={t.tunnels.createTunnel}
-                    className="h-9 px-3 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
-                    title={t.tunnels.createTunnel}
-                  >
-                    <Plus size={14} />
-                    <span>{t.tunnels.createTunnel}</span>
-                  </button>
-                </div>
-              )
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  aria-label={t.tunnels.createTunnel}
+                  className="h-9 px-3 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.createTunnel}
+                >
+                  <Plus size={14} />
+                  <span>{t.tunnels.createTunnel}</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
