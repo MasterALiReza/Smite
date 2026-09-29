@@ -914,6 +914,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     server_spec["tunnel_type"] = tunnel_type
     server_spec["type"] = tunnel_type
     server_spec["ports"] = ports
+    server_spec["use_encryption"] = use_encryption
+    server_spec["use_compression"] = use_compression
 
     client_spec["server_addr"] = iran_node_ip
     client_spec["server_port"] = bind_port
