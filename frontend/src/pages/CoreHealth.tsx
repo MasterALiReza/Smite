@@ -31,7 +31,7 @@ interface ResetConfig {
 }
 
 const CoreHealth = () => {
-  const { t } = useLanguage()
+  const { t, isRTL } = useLanguage()
   const { showToast, showConfirm } = useToast()
   
   // Instant SWR: Load from cache immediately to eliminate perceived loading latency
@@ -364,16 +364,31 @@ const CoreHealth = () => {
                     </div>
                   )}
 
-                  <label className="relative inline-flex items-center cursor-pointer min-h-[44px] min-w-[44px] justify-end">
-                    <input
-                      type="checkbox"
-                      checked={config?.enabled || false}
-                      onChange={(e) => handleConfigUpdate(coreHealth.core, { enabled: e.target.checked })}
+                  <div className="flex items-center min-h-[44px]">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config?.enabled || false}
+                      onClick={() => handleConfigUpdate(coreHealth.core, { enabled: !(config?.enabled || false) })}
                       disabled={updating === coreHealth.core}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[12px] after:right-[22px] peer-checked:after:right-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
+                      aria-label={`Toggle auto reset schedule for ${coreHealth.core}`}
+                      title={config?.enabled ? 'Disable Auto Reset' : 'Enable Auto Reset'}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed ${
+                        config?.enabled
+                          ? 'bg-blue-600 dark:bg-sky-500'
+                          : 'bg-slate-300 dark:bg-slate-700'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none absolute top-0.5 start-0.5 inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ease-in-out ${
+                          config?.enabled
+                            ? isRTL ? '-translate-x-5' : 'translate-x-5'
+                            : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

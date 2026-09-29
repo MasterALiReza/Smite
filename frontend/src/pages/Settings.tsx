@@ -1272,16 +1272,29 @@ const Settings = () => {
                     </h3>
                   </div>
 
-                  <label className="relative inline-flex items-center cursor-pointer min-h-[44px]">
-                    <input
-                      type="checkbox"
+                  <div className="flex items-center min-h-[44px]">
+                    <button
+                      type="button"
                       id="backup-enabled"
-                      checked={settings.telegram.backup_enabled || false}
-                      onChange={(e) => updateTelegram({ backup_enabled: e.target.checked })}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[12px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                  </label>
+                      role="switch"
+                      aria-checked={settings.telegram.backup_enabled || false}
+                      onClick={() => updateTelegram({ backup_enabled: !settings.telegram.backup_enabled })}
+                      aria-label={t.settings.automaticBackup}
+                      title={settings.telegram.backup_enabled ? 'Disable Automatic Backup' : 'Enable Automatic Backup'}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${
+                        settings.telegram.backup_enabled ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-800'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none absolute top-0.5 start-0.5 inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ease-in-out ${
+                          settings.telegram.backup_enabled
+                            ? isRTL ? '-translate-x-5' : 'translate-x-5'
+                            : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
 
                 {settings.telegram.backup_enabled && (
