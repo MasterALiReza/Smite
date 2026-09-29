@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search, LayoutGrid, List, ArrowRight } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search, LayoutGrid, List, ArrowRight, ChevronDown, Check } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -293,11 +293,34 @@ const Tunnels = () => {
   // ─── Category & Multi-Selection States ───────────────────────
   const [categories, setCategories] = useState<TunnelCategory[]>([])
   const [activeCategoryTab, setActiveCategoryTab] = useState<string>('all')
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
+  const categoryDropdownRef = useRef<HTMLDivElement>(null)
   const [selectedTunnelIds, setSelectedTunnelIds] = useState<Set<string>>(new Set())
   const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false)
   const [showAssignCategoryModal, setShowAssignCategoryModal] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newCategoryColor, setNewCategoryColor] = useState('blue')
+
+  // Close category dropdown on outside click or Escape key
+  useEffect(() => {
+    if (!showCategoryDropdown) return
+    const handleClickOutside = (event: MouseEvent) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(event.target as Node)) {
+        setShowCategoryDropdown(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowCategoryDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [showCategoryDropdown])
 
   // ─── Search State ───────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
@@ -884,130 +907,206 @@ const Tunnels = () => {
           </div>
         ) : (
           /* ── Normal Browsing Mode ── */
-          <div className="grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between gap-2">
-            {/* Port & Name Search Input */}
-            <div className="col-start-1 row-start-1 relative w-full md:w-56 lg:w-64 shrink-0">
-              <Search size={14} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t.tunnels.searchPlaceholder || 'Search name or port...'}
-                aria-label={t.tunnels.searchPlaceholder || 'Search name or port'}
-                className="w-full h-9 ps-9 pe-8 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  aria-label={t.tunnels.clearSearch || 'Clear search'}
-                  className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-md transition-colors cursor-pointer"
-                  title={t.tunnels.clearSearch || 'Clear search'}
-                >
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-
-            {/* Category Tabs */}
-            <div className="col-span-2 row-start-2 md:order-2 md:flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto py-0.5 px-0.5 scrollbar-none">
-              {/* All Tunnels Tab */}
-              <button
-                type="button"
-                onClick={() => setActiveCategoryTab('all')}
-                className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 select-none cursor-pointer ${
-                  activeCategoryTab === 'all'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'bg-white dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.06] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
-                }`}
-              >
-                <Layers size={13} className="shrink-0 opacity-80" />
-                <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
-                <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-                  activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-                }`}>
-                  {tunnels.length}
-                </span>
-              </button>
-
-              {/* Category Tabs */}
-              {categories.map((cat) => {
-                const count = tunnels.filter(t => t.category === cat.name).length
-                const colorStyle = getCategoryColorClasses(cat.color)
-                const isActive = activeCategoryTab === cat.name
-                return (
-                  <div
-                    key={cat.id}
-                    onClick={() => setActiveCategoryTab(cat.name)}
-                    className={`group/cat h-9 pl-2.5 pr-1.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer ${
-                      isActive
-                        ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-indigo-500/25`
-                        : `bg-white dark:bg-[#161c28] ${colorStyle.border} ${colorStyle.text} hover:bg-slate-50/80 dark:hover:bg-white/[0.04]`
-                    }`}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* Left Controls: Search + Category Dropdown + View Mode Toggle */}
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-1 min-w-0">
+              {/* Port & Name Search Input */}
+              <div className="relative w-full sm:w-52 md:w-60 lg:w-64 shrink-0">
+                <Search size={14} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t.tunnels.searchPlaceholder || 'Search name or port...'}
+                  aria-label={t.tunnels.searchPlaceholder || 'Search name or port'}
+                  className="w-full h-9 ps-9 pe-8 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label={t.tunnels.clearSearch || 'Clear search'}
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-md transition-colors cursor-pointer"
+                    title={t.tunnels.clearSearch || 'Clear search'}
                   >
-                    <Tag size={12} className="shrink-0 opacity-80" />
-                    <span className="truncate max-w-[120px]">{cat.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-                      isActive ? 'bg-white/25 text-white' : `${colorStyle.bg} ${colorStyle.text}`
-                    }`}>
-                      {count}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteCategory(cat.name)
-                      }}
-                      className={`p-1 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
-                        isActive
-                          ? 'text-white/70 hover:text-white hover:bg-white/20'
-                          : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
-                      }`}
-                      title={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
-                      aria-label={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
-                    >
-                      <X size={12} strokeWidth={2.5} />
-                    </button>
-                  </div>
-                )
-              })}
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
 
-              {/* Uncategorized Tab */}
-              {tunnels.some(t => !t.category) && (
-                <button
-                  type="button"
-                  onClick={() => setActiveCategoryTab('uncategorized')}
-                  className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer ${
-                    activeCategoryTab === 'uncategorized'
-                      ? 'bg-slate-800 dark:bg-slate-700 border-slate-700 text-white shadow-xs'
-                      : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
-                  }`}
-                >
-                  <FolderMinus size={13} className="shrink-0 opacity-70" />
-                  <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-                    activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-                  }`}>
-                    {tunnels.filter(t => !t.category).length}
-                  </span>
-                </button>
-              )}
+              {/* Category Dropdown */}
+              <div ref={categoryDropdownRef} className="relative shrink-0">
+                {(() => {
+                  const currentCategory = categories.find(c => c.name === activeCategoryTab)
+                  const categoryCount = activeCategoryTab === 'all'
+                    ? tunnels.length
+                    : activeCategoryTab === 'uncategorized'
+                    ? tunnels.filter(t => !t.category).length
+                    : tunnels.filter(t => t.category === activeCategoryTab).length
 
-              {/* Add Category Button */}
-              <button
-                type="button"
-                onClick={() => setShowCreateCategoryModal(true)}
-                className="h-9 px-2.5 rounded-xl border border-dashed border-slate-300 dark:border-white/20 hover:border-indigo-500 dark:hover:border-indigo-400 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 bg-white/40 dark:bg-[#161c28]/40 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 text-xs font-semibold flex items-center gap-1 transition-all shrink-0 cursor-pointer"
-                title={t.tunnels.newCategory || 'New Category'}
-                aria-label={t.tunnels.newCategory || 'New Category'}
-              >
-                <FolderPlus size={13} />
-                <span className="whitespace-nowrap">{t.tunnels.newCategory || 'New Category'}</span>
-              </button>
-            </div>
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowCategoryDropdown(prev => !prev)}
+                        aria-expanded={showCategoryDropdown}
+                        aria-haspopup="true"
+                        className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 border select-none cursor-pointer ${
+                          showCategoryDropdown || activeCategoryTab !== 'all'
+                            ? 'bg-white dark:bg-[#161c28] border-indigo-500/60 dark:border-indigo-400/60 text-slate-900 dark:text-white shadow-2xs ring-2 ring-indigo-500/15'
+                            : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.08] text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/20'
+                        }`}
+                        title={t.tunnels.categories || 'Categories'}
+                      >
+                        {activeCategoryTab === 'all' ? (
+                          <Layers size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        ) : activeCategoryTab === 'uncategorized' ? (
+                          <FolderMinus size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                        ) : (
+                          <Tag size={13} className={`shrink-0 ${getCategoryColorClasses(currentCategory?.color || 'blue').text}`} />
+                        )}
 
-            {/* Right Action Controls: on mobile col-start-2 row-start-1, on desktop md:order-3 */}
-            <div className="col-start-2 row-start-1 md:order-3 flex items-center gap-1.5 shrink-0 justify-end">
+                        <span className="truncate max-w-[120px] sm:max-w-[140px]">
+                          {activeCategoryTab === 'all'
+                            ? (t.tunnels.allTunnels || 'All Tunnels')
+                            : activeCategoryTab === 'uncategorized'
+                            ? (t.tunnels.uncategorized || 'Uncategorized')
+                            : (currentCategory?.name || activeCategoryTab)}
+                        </span>
+
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300">
+                          {categoryCount}
+                        </span>
+
+                        <ChevronDown size={13} className={`text-slate-400 transition-transform duration-200 shrink-0 ${showCategoryDropdown ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''}`} />
+                      </button>
+
+                      {/* Dropdown Menu Popover */}
+                      {showCategoryDropdown && (
+                        <div className="absolute start-0 top-full mt-1.5 w-64 bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto">
+                          {/* Header */}
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            {t.tunnels.categories || 'Categories'}
+                          </div>
+
+                          {/* Option: All Tunnels */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveCategoryTab('all')
+                              setShowCategoryDropdown(false)
+                            }}
+                            className={`w-full px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                              activeCategoryTab === 'all'
+                                ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
+                                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Layers size={14} className={activeCategoryTab === 'all' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+                              <span className="truncate">{t.tunnels.allTunnels || 'All Tunnels'}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400">
+                                {tunnels.length}
+                              </span>
+                              {activeCategoryTab === 'all' && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
+                            </div>
+                          </button>
+
+                          {/* User Categories */}
+                          {categories.map((cat) => {
+                            const count = tunnels.filter(t => t.category === cat.name).length
+                            const colorStyle = getCategoryColorClasses(cat.color)
+                            const isActive = activeCategoryTab === cat.name
+                            return (
+                              <div
+                                key={cat.id}
+                                className={`group/catitem px-3 py-1.5 flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                  isActive
+                                    ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
+                                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
+                                }`}
+                                onClick={() => {
+                                  setActiveCategoryTab(cat.name)
+                                  setShowCategoryDropdown(false)
+                                }}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${colorStyle.bg} border ${colorStyle.border}`} />
+                                  <span className="text-xs font-semibold truncate">{cat.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400">
+                                    {count}
+                                  </span>
+                                  {isActive && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      deleteCategory(cat.name)
+                                    }}
+                                    className="p-1 rounded-md text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/catitem:opacity-100 transition-opacity cursor-pointer"
+                                    title={`${t.tunnels.deleteCategory || 'Delete'} "${cat.name}"`}
+                                    aria-label={`${t.tunnels.deleteCategory || 'Delete'} "${cat.name}"`}
+                                  >
+                                    <X size={12} strokeWidth={2.5} />
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+
+                          {/* Uncategorized Option (if any) */}
+                          {tunnels.some(t => !t.category) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveCategoryTab('uncategorized')
+                                setShowCategoryDropdown(false)
+                              }}
+                              className={`w-full px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                activeCategoryTab === 'uncategorized'
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
+                                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <FolderMinus size={14} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{t.tunnels.uncategorized || 'Uncategorized'}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400">
+                                  {tunnels.filter(t => !t.category).length}
+                                </span>
+                                {activeCategoryTab === 'uncategorized' && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
+                              </div>
+                            </button>
+                          )}
+
+                          {/* Divider */}
+                          <div className="my-1 border-t border-slate-100 dark:border-white/[0.06]" />
+
+                          {/* Create Category Action */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowCategoryDropdown(false)
+                              setShowCreateCategoryModal(true)
+                            }}
+                            className="w-full px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/30 flex items-center gap-2 transition-colors cursor-pointer"
+                          >
+                            <FolderPlus size={14} />
+                            <span>{t.tunnels.newCategory || 'New Category'}</span>
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
+
               {/* View Mode Toggle (List / Grid) */}
               <div className="flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] shrink-0" role="group" aria-label="View mode">
                 <button
@@ -1039,7 +1138,10 @@ const Tunnels = () => {
                   <LayoutGrid size={15} />
                 </button>
               </div>
+            </div>
 
+            {/* Right Action Controls: Select All + Reapply All + Create Tunnel */}
+            <div className="flex items-center gap-1.5 shrink-0 justify-end ms-auto sm:ms-0">
               {/* Select All Toggle Button */}
               {filteredTunnels.length > 0 && (
                 <button
