@@ -32,6 +32,8 @@ interface Tunnel {
   core: string
   type: string
   node_id: string
+  iran_node_id?: string
+  foreign_node_id?: string
   spec: Record<string, any>
   status: string
   error_message?: string | null
@@ -39,6 +41,7 @@ interface Tunnel {
   category?: string | null
   created_at: string
   updated_at: string
+  [key: string]: any
 }
 
 type BackhaulTransport = 'tcp' | 'udp' | 'ws' | 'wsmux' | 'tcpmux' | 'wss' | 'wssmux'
@@ -640,32 +643,45 @@ const Tunnels = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4"></div>
-          <p className="text-gray-500 dark:text-gray-400">{t.tunnels.loadingTunnels}</p>
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-slate-500 dark:text-slate-400">
+        <div className="relative">
+          <div className="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
         </div>
+        <span className="text-xs font-mono uppercase tracking-wider">{t.tunnels.loadingTunnels}</span>
       </div>
     )
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-5 sm:space-y-6">
+    <div className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in">
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200/60 dark:border-white/[0.06]">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white tracking-tight">{t.tunnels.title}</h1>
-          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t.tunnels.subtitle}</p>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex items-center justify-center p-1.5 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+              <Network className="w-4 h-4" />
+            </span>
+            <span className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+              Network Infrastructure
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            {t.tunnels.title}
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            {t.tunnels.subtitle}
+          </p>
         </div>
+
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           {/* Live Ping Toggle */}
           <button
             type="button"
             onClick={() => setLivePingEnabled(prev => !prev)}
-            className={`px-3 py-2 rounded-xl border transition-all font-semibold text-xs flex items-center gap-2 shadow-2xs min-h-[44px] active:scale-95 ${
+            className={`px-3.5 py-2.5 rounded-2xl border transition-all font-semibold text-xs flex items-center gap-2 shadow-xs min-h-[44px] active:scale-95 ${
               livePingEnabled
-                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
-                : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                : 'bg-white dark:bg-[#12161f] border-slate-200 dark:border-white/[0.07] text-slate-500 dark:text-slate-400'
             }`}
             title={livePingEnabled ? 'Live ping auto-refreshing every 2s (Click to pause)' : 'Live ping paused (Click to enable)'}
           >
@@ -673,15 +689,15 @@ const Tunnels = () => {
               {livePingEnabled && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${livePingEnabled ? 'bg-emerald-500' : 'bg-gray-400'}`}></span>
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${livePingEnabled ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
             </span>
-            <span>Live Ping: {livePingEnabled ? '2s' : 'OFF'}</span>
+            <span className="font-mono">Live Ping: {livePingEnabled ? '2s' : 'OFF'}</span>
           </button>
 
           <button
             onClick={handleReapplyAll}
             disabled={!!reapplyAllProgress && !reapplyAllDone}
-            className="flex-1 sm:flex-none px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl transition-all font-semibold shadow-xs hover:shadow-md flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 sm:flex-none px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl transition-all font-semibold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RotateCw size={16} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
             <span>{t.tunnels.reapplyAll}</span>
@@ -689,7 +705,7 @@ const Tunnels = () => {
           
           <button
             onClick={() => setShowAddModal(true)}
-            className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl transition-all font-semibold shadow-xs hover:shadow-md flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95"
+            className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl transition-all font-semibold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95"
           >
             <Plus size={18} />
             <span>{t.tunnels.createTunnel}</span>
@@ -698,22 +714,22 @@ const Tunnels = () => {
       </div>
 
       {/* ── Category Filter & Action Bar ───────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-1.5 bg-gray-100/70 dark:bg-gray-800/50 rounded-2xl border border-gray-200/80 dark:border-gray-700/60">
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-2 bg-slate-100/70 dark:bg-[#12161f]/80 rounded-2xl border border-slate-200/80 dark:border-white/[0.07] backdrop-blur-md">
+        <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
           {/* All Tunnels Tab */}
           <button
             type="button"
             onClick={() => setActiveCategoryTab('all')}
-            className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+            className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 select-none cursor-pointer ${
               activeCategoryTab === 'all'
-                ? 'bg-blue-600 border-blue-600 text-white shadow-xs ring-2 ring-blue-500/25'
-                : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-white dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.06] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
             }`}
           >
             <Layers size={14} className="shrink-0 opacity-80" />
             <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
-              activeCategoryTab === 'all' ? 'bg-white/25 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
+              activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
             }`}>
               {tunnels.length}
             </span>
@@ -728,15 +744,15 @@ const Tunnels = () => {
               <div
                 key={cat.id}
                 onClick={() => setActiveCategoryTab(cat.name)}
-                className={`group/cat h-9 pl-3 pr-2 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+                className={`group/cat h-9 pl-3 pr-2 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
                   isActive
-                    ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-blue-500/25`
-                    : `bg-white dark:bg-gray-800 ${colorStyle.border} ${colorStyle.text} hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50/80 dark:hover:bg-gray-750`
+                    ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-indigo-500/25`
+                    : `bg-white dark:bg-[#161c28] ${colorStyle.border} ${colorStyle.text} hover:bg-slate-50/80 dark:hover:bg-white/[0.04]`
                 }`}
               >
                 <Tag size={13} className="shrink-0 opacity-80" />
                 <span className="truncate max-w-[130px]">{cat.name}</span>
-                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
                   isActive ? 'bg-white/25 text-white' : `${colorStyle.bg} ${colorStyle.text}`
                 }`}>
                   {count}
@@ -751,7 +767,7 @@ const Tunnels = () => {
                   className={`p-1 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
                     isActive
                       ? 'text-white/70 hover:text-white hover:bg-white/20'
-                      : 'text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
+                      : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
                   }`}
                   title={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
                 >
@@ -766,16 +782,16 @@ const Tunnels = () => {
             <button
               type="button"
               onClick={() => setActiveCategoryTab('uncategorized')}
-              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
                 activeCategoryTab === 'uncategorized'
-                  ? 'bg-slate-700 border-slate-700 text-white shadow-xs ring-2 ring-slate-500/25'
-                  : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750'
+                  ? 'bg-slate-800 dark:bg-slate-700 border-slate-700 text-white shadow-xs'
+                  : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
               }`}
             >
               <FolderMinus size={14} className="shrink-0 opacity-70" />
               <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
-              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${
-                activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+              <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
+                activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
               }`}>
                 {tunnels.filter(t => !t.category).length}
               </span>
@@ -786,7 +802,7 @@ const Tunnels = () => {
           <button
             type="button"
             onClick={() => setShowCreateCategoryModal(true)}
-            className="h-9 px-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-500 dark:hover:border-blue-400 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-white/40 dark:bg-gray-800/40 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer shadow-2xs"
+            className="h-9 px-3 rounded-xl border border-dashed border-slate-300 dark:border-white/20 hover:border-indigo-500 dark:hover:border-indigo-400 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 bg-white/40 dark:bg-[#161c28]/40 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer"
             title={t.tunnels.newCategory || 'New Category'}
           >
             <FolderPlus size={14} />
@@ -800,15 +816,15 @@ const Tunnels = () => {
             <button
               type="button"
               onClick={toggleSelectAllFiltered}
-              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer shadow-2xs ${
+              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
                 filteredTunnels.every(t => selectedTunnelIds.has(t.id))
-                  ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 ring-2 ring-blue-500/20'
-                  : 'bg-white dark:bg-gray-800 border-gray-200/80 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-750 hover:text-gray-900 dark:hover:text-white'
+                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-600 dark:text-indigo-400'
+                  : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
               <CheckSquare
                 size={15}
-                className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'}
+                className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}
               />
               <span>
                 {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
@@ -822,9 +838,9 @@ const Tunnels = () => {
 
       {/* ── Sticky Floating Batch Action Bar ─────────────────────────── */}
       {selectedTunnelIds.size > 0 && (
-        <div className="sticky top-4 z-30 p-3 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-900/90 via-indigo-900/90 to-purple-900/90 backdrop-blur-md text-white shadow-xl border border-white/20 flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-4 duration-200">
+        <div className="sticky top-4 z-30 p-3 sm:p-4 rounded-2xl bg-slate-900/95 dark:bg-[#0c0f17]/95 backdrop-blur-xl text-white shadow-2xl border border-slate-700/60 dark:border-white/10 flex flex-wrap items-center justify-between gap-3 animate-slide-up">
           <div className="flex items-center gap-2.5">
-            <span className="w-7 h-7 rounded-lg bg-blue-500/30 flex items-center justify-center font-bold text-sm text-blue-200 border border-blue-400/30">
+            <span className="w-7 h-7 rounded-lg bg-indigo-500/30 flex items-center justify-center font-mono font-bold text-sm text-indigo-200 border border-indigo-400/30">
               {selectedTunnelIds.size}
             </span>
             <span className="font-semibold text-sm">
@@ -848,7 +864,7 @@ const Tunnels = () => {
             <button
               type="button"
               onClick={() => setShowAssignCategoryModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-white/20 hover:bg-white/30 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all border border-white/30 active:scale-95 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all border border-white/10 active:scale-95 cursor-pointer"
             >
               <Folder size={15} />
               <span>{t.tunnels.moveToCategory || 'Move to Category'}</span>
@@ -858,7 +874,7 @@ const Tunnels = () => {
             <button
               type="button"
               onClick={() => setSelectedTunnelIds(new Set())}
-              className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-xs font-semibold transition-all active:scale-95 cursor-pointer"
+              className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white text-xs font-semibold transition-all active:scale-95 cursor-pointer"
               title={t.tunnels.deselectAll || 'Clear selection'}
             >
               <X size={15} />
@@ -868,7 +884,7 @@ const Tunnels = () => {
       )}
 
       {/* ── Tunnel Cards ────────────────────────────────────── */}
-      <div className="space-y-3.5 sm:space-y-4">
+      <div className="space-y-4">
         {filteredTunnels.length === 0 && (
           <EmptyState
             icon={<Network size={32} />}
@@ -902,13 +918,13 @@ const Tunnels = () => {
 
           const getCoreBadge = () => {
             const coreColors: Record<string, { bg: string; text: string; border: string }> = {
-              rathole: { bg: 'bg-purple-50 dark:bg-purple-950/40', text: 'text-purple-700 dark:text-purple-300', border: 'border-purple-200 dark:border-purple-800' },
-              backhaul: { bg: 'bg-blue-50 dark:bg-blue-950/40', text: 'text-blue-700 dark:text-blue-300', border: 'border-blue-200 dark:border-blue-800' },
-              chisel: { bg: 'bg-orange-50 dark:bg-orange-950/40', text: 'text-orange-700 dark:text-orange-300', border: 'border-orange-200 dark:border-orange-800' },
-              frp: { bg: 'bg-cyan-50 dark:bg-cyan-950/40', text: 'text-cyan-700 dark:text-cyan-300', border: 'border-cyan-200 dark:border-cyan-800' },
-              gost: { bg: 'bg-indigo-50 dark:bg-indigo-950/40', text: 'text-indigo-700 dark:text-indigo-300', border: 'border-indigo-200 dark:border-indigo-800' },
+              rathole: { bg: 'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400', border: 'border-purple-500/20' },
+              backhaul: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/20' },
+              chisel: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
+              frp: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/20' },
+              gost: { bg: 'bg-indigo-500/10', text: 'text-indigo-600 dark:text-indigo-400', border: 'border-indigo-500/20' },
             }
-            return coreColors[tunnel.core] || { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-300', border: 'border-gray-200 dark:border-gray-700' }
+            return coreColors[tunnel.core] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
           }
 
           const coreBadge = getCoreBadge()
@@ -922,72 +938,76 @@ const Tunnels = () => {
           return (
             <div
               key={tunnel.id}
-              className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-xs border transition-all ${
+              className={`relative bg-white dark:bg-[#12161f]/90 rounded-3xl shadow-xs border transition-all duration-200 ${
                 isSelected
-                  ? 'border-blue-500 dark:border-blue-500 ring-2 ring-blue-500/25 bg-blue-50/15 dark:bg-blue-950/20 shadow-md'
+                  ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-500/[0.03] shadow-md'
                   : isDeleting
-                  ? 'border-rose-400 dark:border-rose-600 ring-2 ring-rose-500/30 bg-rose-50/15 dark:bg-rose-950/20 shadow-md opacity-90'
+                  ? 'border-rose-500/60 ring-2 ring-rose-500/20 bg-rose-500/[0.03] shadow-md opacity-80'
                   : isReapplying
-                  ? 'border-emerald-400 dark:border-emerald-600 shadow-emerald-100 dark:shadow-none'
-                  : 'border-gray-200/80 dark:border-gray-700/80 hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600'
+                  ? 'border-emerald-500/60 shadow-emerald-500/10 ring-2 ring-emerald-500/20'
+                  : 'border-slate-200/80 dark:border-white/[0.07] hover:border-slate-300 dark:hover:border-white/[0.12] hover:shadow-md'
               }`}
             >
               {/* ── Per-card loading overlay ── */}
               {isReapplying && (
-                <div className="absolute inset-0 bg-white/70 dark:bg-gray-800/70 rounded-2xl z-10 flex items-center justify-center backdrop-blur-[2px]">
-                  <div className="flex items-center gap-3 px-4 py-2 bg-white dark:bg-gray-900 rounded-xl shadow-lg border border-emerald-200 dark:border-emerald-800">
-                    <Loader2 size={18} className="animate-spin text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Applying...</span>
+                <div className="absolute inset-0 bg-white/80 dark:bg-[#12161f]/80 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-emerald-500/20">
+                    <Loader2 size={18} className="animate-spin text-emerald-500" />
+                    <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">Applying changes...</span>
                   </div>
                 </div>
               )}
 
               {/* ── Per-card deleting overlay ── */}
               {isDeleting && (
-                <div className="absolute inset-0 bg-white/80 dark:bg-gray-800/80 rounded-2xl z-10 flex items-center justify-center backdrop-blur-[2px]">
-                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-rose-200 dark:border-rose-800">
-                    <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
-                    <span className="text-sm font-bold text-rose-700 dark:text-rose-300">Deleting tunnel...</span>
+                <div className="absolute inset-0 bg-white/85 dark:bg-[#12161f]/85 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/20">
+                    <Loader2 size={18} className="animate-spin text-rose-500" />
+                    <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">Deleting tunnel...</span>
                   </div>
                 </div>
               )}
 
-              <div className="p-4 sm:p-5">
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+              <div className="p-5 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
                     {/* Multi-Selection Checkbox */}
                     <button
                       type="button"
                       onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
                       disabled={isReapplying || isDeleting}
-                      className={`mt-1 shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                      className={`mt-1 shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
                         selectedTunnelIds.has(tunnel.id)
-                          ? 'bg-blue-600 border-blue-600 text-white shadow-xs scale-105'
-                          : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 bg-white dark:bg-gray-700/50'
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
+                          : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
                       }`}
                       title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
                     >
                       {selectedTunnelIds.has(tunnel.id) && (
-                        <CheckCircle2 size={15} className="fill-current text-white" />
+                        <CheckCircle2 size={14} className="fill-current text-white" />
                       )}
                     </button>
 
                     {/* Status Badge */}
-                    <div className="flex flex-col gap-1 shrink-0 pt-0.5">
+                    <div className="flex flex-col gap-1.5 shrink-0 pt-0.5">
                       <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center ${
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
                           tunnel.status === 'active'
-                            ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/60'
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                             : tunnel.status === 'error'
-                            ? 'bg-rose-100 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/60'
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-600'
+                            ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                            : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
                         }`}
                       >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                          tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                        }`} />
                         {tunnel.status}
                       </span>
                       {Boolean(tunnel.spec?._pending_reapply) && (
                         <span
-                          className="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-tight bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-center animate-pulse"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
                           title="Configuration modified. Click Reapply to apply changes to live core."
                         >
                           Pending
@@ -995,12 +1015,12 @@ const Tunnels = () => {
                       )}
                     </div>
 
-                    <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex-1 min-w-0 space-y-2.5">
                       {/* Name, Core Badge, Category Badge, Transmission Badge, Ports, Latency */}
                       <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
-                        <h3 className="text-sm sm:text-base font-bold text-gray-900 dark:text-white truncate">{tunnel.name}</h3>
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">{tunnel.name}</h3>
                         <span
-                          className={`px-2.5 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
+                          className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
                         >
                           {tunnel.core}
                         </span>
@@ -1045,34 +1065,34 @@ const Tunnels = () => {
                           
                           const getTransmissionBadge = () => {
                             const typeColors: Record<string, { bg: string; text: string; border: string }> = {
-                              TCP: { bg: 'bg-green-50 dark:bg-green-950/40', text: 'text-green-700 dark:text-green-300', border: 'border-green-200 dark:border-green-800' },
-                              UDP: { bg: 'bg-yellow-50 dark:bg-yellow-950/40', text: 'text-yellow-700 dark:text-yellow-300', border: 'border-yellow-200 dark:border-yellow-800' },
-                              WS: { bg: 'bg-pink-50 dark:bg-pink-950/40', text: 'text-pink-700 dark:text-pink-300', border: 'border-pink-200 dark:border-pink-800' },
-                              WSS: { bg: 'bg-pink-50 dark:bg-pink-950/40', text: 'text-pink-700 dark:text-pink-300', border: 'border-pink-200 dark:border-pink-800' },
-                              GRPC: { bg: 'bg-teal-50 dark:bg-teal-950/40', text: 'text-teal-700 dark:text-teal-300', border: 'border-teal-200 dark:border-teal-800' },
-                              TCPMUX: { bg: 'bg-violet-50 dark:bg-violet-950/40', text: 'text-violet-700 dark:text-violet-300', border: 'border-violet-200 dark:border-violet-800' },
+                              TCP: { bg: 'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20' },
+                              UDP: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
+                              WS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
+                              WSS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
+                              GRPC: { bg: 'bg-teal-500/10', text: 'text-teal-600 dark:text-teal-400', border: 'border-teal-500/20' },
+                              TCPMUX: { bg: 'bg-violet-500/10', text: 'text-violet-600 dark:text-violet-400', border: 'border-violet-500/20' },
                             }
-                            return typeColors[transmissionType] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-800 dark:text-gray-200', border: 'border-gray-300 dark:border-gray-600' }
+                            return typeColors[transmissionType] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
                           }
                           
                           const transmissionBadge = getTransmissionBadge()
                           return (
                             <span
-                              className={`px-2.5 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
+                              className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
                             >
                               {transmissionType}
                             </span>
                           )
                         })()}
-                        <div className="flex items-center gap-1 text-xs">
-                          <span className="text-gray-400 dark:text-gray-500 font-medium">Ports:</span>
-                          <span className="font-mono font-bold text-gray-700 dark:text-gray-300">{ports}</span>
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
+                          <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums">{ports}</span>
                         </div>
                         <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
                       </div>
 
                       {/* Node & Server Route info */}
-                      <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
+                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 flex-wrap">
                         {(() => {
                           let corePort = null
                           if (tunnel.core === 'rathole') {
@@ -1097,29 +1117,29 @@ const Tunnels = () => {
                             corePort = tunnel.spec?.bind_port || '7000'
                           }
                           return corePort ? (
-                            <div className="flex items-center gap-1">
-                              <span className="font-medium text-gray-400">Core Port:</span>
-                              <span className="text-gray-700 dark:text-gray-300 font-mono font-semibold">{corePort}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-slate-400">Core Port:</span>
+                              <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
                             </div>
                           ) : null
                         })()}
                         {iranNode && (
-                          <div className="flex items-center gap-1">
-                            <span className="font-medium text-gray-400">Iran:</span>
-                            <span className="text-gray-700 dark:text-gray-300 font-semibold">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
+                            <span className="text-slate-400 text-[10px] uppercase font-mono">IR:</span>
+                            <span className="text-slate-700 dark:text-slate-300 font-semibold">{iranNode.name || iranNode.id.substring(0, 8)}</span>
                           </div>
                         )}
                         {foreignServer && (
-                          <div className="flex items-center gap-1">
-                            <span className="font-medium text-gray-400">Foreign:</span>
-                            <span className="text-gray-700 dark:text-gray-300 font-semibold">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
+                            <span className="text-slate-400 text-[10px] uppercase font-mono">EXT:</span>
+                            <span className="text-slate-700 dark:text-slate-300 font-semibold">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
                           </div>
                         )}
                       </div>
 
                       {/* Error Message */}
                       {tunnel.status === 'error' && tunnel.error_message && (
-                        <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-2 bg-rose-50 dark:bg-rose-950/30 rounded-lg">
+                        <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl leading-relaxed">
                           {tunnel.error_message}
                         </div>
                       )}
@@ -1132,12 +1152,12 @@ const Tunnels = () => {
                       type="button"
                       onClick={() => handleTestActiveTunnel(tunnel)}
                       disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
-                      className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
+                      className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
                       title="Test Live Connection & Ping"
                       aria-label="Test Live Connection & Ping"
                     >
                       {testingTunnelId === tunnel.id ? (
-                        <Loader2 size={18} className="animate-spin text-amber-600" />
+                        <Loader2 size={18} className="animate-spin text-amber-500" />
                       ) : (
                         <Zap size={18} />
                       )}
@@ -1146,10 +1166,10 @@ const Tunnels = () => {
                       type="button"
                       onClick={() => reapplyTunnel(tunnel)}
                       disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
-                      className={`p-2 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 ${
+                      className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 ${
                         Boolean(tunnel.spec?._pending_reapply)
-                          ? 'text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 ring-2 ring-amber-400 dark:ring-amber-500 shadow-xs hover:bg-amber-200/80'
-                          : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
+                          ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
+                          : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                       }`}
                       title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
                       aria-label="Reapply tunnel"
@@ -1164,7 +1184,7 @@ const Tunnels = () => {
                       type="button"
                       onClick={() => setEditingTunnel(tunnel)}
                       disabled={isReapplying || isDeleting}
-                      className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
+                      className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
                       title="Edit tunnel"
                       aria-label="Edit tunnel"
                     >
@@ -1174,12 +1194,12 @@ const Tunnels = () => {
                       type="button"
                       onClick={() => deleteTunnel(tunnel.id)}
                       disabled={isReapplying || isDeleting}
-                      className="p-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
+                      className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
                       title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
                       aria-label="Delete tunnel"
                     >
                       {isDeleting ? (
-                        <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
+                        <Loader2 size={18} className="animate-spin text-rose-500" />
                       ) : (
                         <Trash2 size={18} />
                       )}
@@ -1188,17 +1208,17 @@ const Tunnels = () => {
                 </div>
 
                 {/* Mobile Action Buttons Bar */}
-                <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-gray-100 dark:border-gray-700/60">
+                <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-white/[0.05]">
                   <button
                     type="button"
                     onClick={() => handleTestActiveTunnel(tunnel)}
                     disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
-                    className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
+                    className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
                     title="Test Live Connection & Ping"
                     aria-label="Test Live Connection & Ping"
                   >
                     {testingTunnelId === tunnel.id ? (
-                      <Loader2 size={18} className="animate-spin text-amber-600" />
+                      <Loader2 size={18} className="animate-spin text-amber-500" />
                     ) : (
                       <Zap size={18} />
                     )}
@@ -1209,8 +1229,8 @@ const Tunnels = () => {
                     disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                     className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 ${
                       Boolean(tunnel.spec?._pending_reapply)
-                        ? 'text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/60 ring-2 ring-amber-400 dark:ring-amber-500 shadow-xs'
-                        : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
+                        ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                     }`}
                     title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
                     aria-label="Reapply tunnel"
@@ -1225,7 +1245,7 @@ const Tunnels = () => {
                     type="button"
                     onClick={() => setEditingTunnel(tunnel)}
                     disabled={isReapplying || isDeleting}
-                    className="p-2.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
+                    className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
                     title="Edit tunnel"
                     aria-label="Edit tunnel"
                   >
@@ -1235,12 +1255,12 @@ const Tunnels = () => {
                     type="button"
                     onClick={() => deleteTunnel(tunnel.id)}
                     disabled={isReapplying || isDeleting}
-                    className="p-2.5 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
+                    className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
                     title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
                     aria-label="Delete tunnel"
                   >
                     {isDeleting ? (
-                      <Loader2 size={18} className="animate-spin text-rose-600 dark:text-rose-400" />
+                      <Loader2 size={18} className="animate-spin text-rose-500" />
                     ) : (
                       <Trash2 size={18} />
                     )}
@@ -1701,6 +1721,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     })() : ''),
     rathole_token: tunnel.spec?.token || tunnel.spec?.rathole_token || '',
     rathole_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
+    rathole_local_port: tunnel.spec?.local_port ? tunnel.spec.local_port.toString() : '8080',
     chisel_control_port: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : '',
     chisel_transport: tunnel.spec?.transport || tunnel.spec?.transport_type || 'ws',
     chisel_backend_url: tunnel.spec?.backend_url || '',
@@ -1990,10 +2011,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           selector_strategy: formData.selector_strategy || 'fifo',
           utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
           keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
-          failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
+          failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map((ip: string) => ip.trim()).filter((ip: string) => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
-            ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
+            ? formData.allowed_ips.split('\n').map((ip: string) => ip.trim()).filter((ip: string) => ip.length > 0)
             : null,
           port_ranges: port_ranges.length > 0 ? port_ranges : null
         }),
@@ -4459,7 +4480,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   setFormData((prev) => ({ ...prev, type: partial.transport as string }))
                 }
                 if (partial.gaming_mode !== undefined) {
-                  setFormData((prev) => ({ ...prev, gaming_mode: partial.gaming_mode }))
+                  setFormData((prev: any) => ({ ...prev, gaming_mode: Boolean(partial.gaming_mode) }))
                   if (partial.gaming_mode) {
                     setBackhaulAdvanced((prev) => ({
                       ...prev,
@@ -6789,9 +6810,9 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
       return
     }
     if (typeof defaultValue === 'boolean') {
-      advanced.server[key as keyof BackhaulAdvancedServerState] = Boolean(value)
+      (advanced.server as any)[key] = Boolean(value)
     } else {
-      advanced.server[key as keyof BackhaulAdvancedServerState] = String(value)
+      (advanced.server as any)[key] = String(value)
     }
   })
 
@@ -6802,9 +6823,9 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
       return
     }
     if (typeof defaultValue === 'boolean') {
-      advanced.client[key as keyof BackhaulAdvancedClientState] = Boolean(value)
+      (advanced.client as any)[key] = Boolean(value)
     } else {
-      advanced.client[key as keyof BackhaulAdvancedClientState] = String(value)
+      (advanced.client as any)[key] = String(value)
     }
   })
 

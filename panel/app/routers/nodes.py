@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import httpx
 import logging
 
@@ -40,6 +40,8 @@ class NodeAutoRegister(BaseModel):
 
 
 class NodeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     fingerprint: str
@@ -47,9 +49,6 @@ class NodeResponse(BaseModel):
     registered_at: datetime
     last_seen: datetime
     metadata: dict
-    
-    class Config:
-        from_attributes = True
 
 
 async def get_country_info(ip: str) -> tuple:

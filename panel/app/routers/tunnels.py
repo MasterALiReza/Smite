@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional, Tuple, Dict, Any, Set
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import logging
 import time
 import asyncio
@@ -155,6 +155,8 @@ class TunnelUpdate(BaseModel):
 
 
 class TunnelResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     core: str
@@ -193,9 +195,6 @@ class TunnelResponse(BaseModel):
     quota_mb: float = 0.0
     created_at: datetime
     updated_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 class CategoryCreate(BaseModel):
@@ -205,15 +204,14 @@ class CategoryCreate(BaseModel):
 
 
 class CategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     color: str = "blue"
     description: str | None = None
     tunnel_count: int = 0
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class BulkCategoryAssign(BaseModel):

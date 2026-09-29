@@ -561,6 +561,12 @@ app.include_router(settings_router.router)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 static_path = Path(static_dir)
 
+# If panel/static does not exist, check if frontend/dist exists (for local development)
+if not (static_path.exists() and (static_path / "index.html").exists()):
+    dev_static = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if dev_static.exists() and (dev_static / "index.html").exists():
+        static_path = dev_static
+
 if static_path.exists() and (static_path / "index.html").exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static-assets")
     
@@ -590,8 +596,7 @@ if static_path.exists() and (static_path / "index.html").exists():
 @app.get("/")
 async def root():
     """Root redirect"""
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    index_path = Path(static_dir) / "index.html"
+    index_path = static_path / "index.html"
     if index_path.exists():
         from fastapi.responses import FileResponse
         return FileResponse(index_path)

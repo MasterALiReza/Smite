@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useState } from 'react'
-import { Edit2, Save, XCircle, Server, Globe } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Edit2, Save, X } from 'lucide-react'
 import api from '../api/client'
 import { useToast } from '../contexts/ToastContext'
 import { getCountryFlag } from '../utils/country'
@@ -62,84 +62,86 @@ export const EditNodeModal: React.FC<EditNodeModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col animate-in fade-in zoom-in duration-200">
-        <div className="flex justify-between items-center mb-5">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-blue-600/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded-xl">
-              <Edit2 size={20} />
+    <div 
+      className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-md shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col overflow-hidden">
+        <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-blue-500/10 dark:bg-sky-500/15 text-blue-600 dark:text-sky-400 rounded-2xl border border-blue-200/50 dark:border-sky-500/20 shadow-glow-sm">
+              <Edit2 size={18} />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900 dark:text-white">
-                Edit Node
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight">
+                Edit Display Name
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Change the display name of this node
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                Change the visible alias for this node
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-lg"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+            aria-label="Close"
           >
-            <XCircle size={22} />
+            <X size={19} />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-100 dark:border-gray-700 space-y-1.5 text-xs">
-            <div className="flex justify-between items-center text-gray-600 dark:text-gray-300">
-              <span className="text-gray-400 dark:text-gray-500">IP Address:</span>
-              <span className="font-mono font-medium">{ipAddress}</span>
+          <div className="p-3.5 bg-slate-50 dark:bg-white/[0.03] rounded-2xl border border-slate-200/70 dark:border-white/[0.06] space-y-2 text-xs">
+            <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+              <span className="text-slate-400 dark:text-slate-500 font-medium">IP Address:</span>
+              <span className="font-mono font-bold text-slate-900 dark:text-white tabular-nums">{ipAddress}</span>
             </div>
             {countryCode && (
-              <div className="flex justify-between items-center text-gray-600 dark:text-gray-300">
-                <span className="text-gray-400 dark:text-gray-500">Location:</span>
-                <span className="flex items-center gap-1.5 font-medium">
+              <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                <span className="text-slate-400 dark:text-slate-500 font-medium">Location:</span>
+                <span className="flex items-center gap-1.5 font-bold font-mono">
                   <span>{flag}</span>
                   <span>{countryCode}</span>
                 </span>
               </div>
             )}
             {node.fingerprint && (
-              <div className="flex justify-between items-center text-gray-600 dark:text-gray-300">
-                <span className="text-gray-400 dark:text-gray-500">Fingerprint:</span>
-                <span className="font-mono text-[11px] text-gray-500">{node.fingerprint}</span>
+              <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                <span className="text-slate-400 dark:text-slate-500 font-medium">Fingerprint:</span>
+                <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[200px]">{node.fingerprint}</span>
               </div>
             )}
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
-              Node Name
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 tracking-tight">
+              Node Display Name
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. DE Node 1, Germany Main, etc."
-                className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
-                autoFocus
-              />
-            </div>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. DE Node 1, Germany Main, etc."
+              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
+              autoFocus
+            />
           </div>
 
-          <div className="flex justify-end gap-2.5 pt-3 border-t border-gray-100 dark:border-gray-700">
+          <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all cursor-pointer min-h-[40px]"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl shadow-sm hover:shadow transition-all flex items-center gap-2 disabled:opacity-50"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-blue-600/25 transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer min-h-[40px] active:scale-95"
             >
-              <Save size={16} />
-              {loading ? 'Saving...' : 'Save Changes'}
+              <Save size={15} />
+              <span>{loading ? 'Saving...' : 'Save Changes'}</span>
             </button>
           </div>
         </form>

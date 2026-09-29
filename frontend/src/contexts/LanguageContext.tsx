@@ -132,6 +132,10 @@ interface Translations {
       failedToLoad: string
       failedToSave: string
       enterAdminId: string
+      tunnelAutoReapply?: string
+      enableTunnelAutoReapply?: string
+      tunnelAutoReapplyDescription?: string
+      tunnelReapplyInterval?: string
     }
   common: {
     loading: string
@@ -424,6 +428,7 @@ interface LanguageContextType {
   setLanguage: (lang: Language) => void
   t: Translations
   dir: 'ltr' | 'rtl'
+  isRTL: boolean
 }
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined)
@@ -461,6 +466,7 @@ export const LanguageProvider = ({ children }: { children: ReactNode }) => {
     setLanguage,
     t: translations[language],
     dir: language === 'fa' ? 'rtl' : 'ltr',
+    isRTL: language === 'fa',
   }
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>

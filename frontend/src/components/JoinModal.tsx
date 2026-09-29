@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useState } from 'react'
-import { Terminal, Copy, CheckCircle, XCircle, Sparkles, Server } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Terminal, Copy, CheckCircle, X, Sparkles } from 'lucide-react'
 import api from '../api/client'
 import { useToast } from '../contexts/ToastContext'
 import { copyTextToClipboard } from '../utils/clipboard'
@@ -11,7 +11,7 @@ interface JoinModalProps {
   onNodeRegistered?: () => void
 }
 
-export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role, onNodeRegistered }) => {
+export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role }) => {
   const { showToast } = useToast()
   const [token, setToken] = useState('')
   const [command, setCommand] = useState('')
@@ -59,85 +59,99 @@ export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role, onN
   const roleTitle = role === 'foreign' ? 'Foreign Server' : 'Iran Node'
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-2xl shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col animate-in fade-in zoom-in duration-200">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-gradient-to-tr from-blue-600 to-indigo-600 text-white rounded-xl shadow-md">
-              <Sparkles size={20} />
+    <div 
+      className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-2xl shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col overflow-hidden">
+        {/* Modal Header */}
+        <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-gradient-to-tr from-blue-600 via-sky-600 to-indigo-600 text-white rounded-2xl shadow-glow-sm">
+              <Sparkles size={18} />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight">
                 One-Click Auto Join ({roleTitle})
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                 Zero-Touch automatic discovery & registration
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-lg"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
+            aria-label="Close"
           >
-            <XCircle size={22} />
+            <X size={19} />
           </button>
         </div>
 
-        <div className="mb-4 p-3.5 bg-blue-50/70 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl">
-          <p className="text-sm text-blue-900 dark:text-blue-200 leading-relaxed">
+        <div className="mb-5 p-3.5 bg-sky-50/80 dark:bg-sky-950/30 border border-sky-200/70 dark:border-sky-800/40 rounded-2xl">
+          <p className="text-xs sm:text-sm text-sky-900 dark:text-sky-200 leading-relaxed font-medium">
             Run the command below in your server terminal. The node will <strong>auto-detect its public IP</strong>, 
             configure an available port, start Docker, and <strong>automatically appear as Connected in this panel</strong>.
           </p>
         </div>
 
         {loading ? (
-          <div className="py-12 flex flex-col items-center justify-center gap-3">
-            <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Generating secure join token...</div>
+          <div className="py-14 flex flex-col items-center justify-center gap-3">
+            <div className="w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-xs font-mono text-slate-500 dark:text-slate-400">Generating secure join token...</div>
           </div>
         ) : (
           <>
-            <div className="relative">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
-                <Terminal size={14} /> One-Line Bash Command
-              </label>
+            {/* Terminal Window Box */}
+            <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-[#090d16] shadow-xl">
+              <div className="flex items-center justify-between px-4 py-2.5 bg-[#0e1422] border-b border-white/[0.06]">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80"></span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80"></span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></span>
+                </div>
+                <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5">
+                  <Terminal size={12} className="text-sky-400" /> bash
+                </span>
+              </div>
               <textarea
                 readOnly
                 value={command}
                 rows={4}
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl font-mono text-sm bg-gray-900 text-green-400 shadow-inner resize-none focus:outline-none select-all"
+                className="w-full px-4 py-3.5 font-mono text-xs sm:text-sm bg-transparent text-emerald-400 resize-none focus:outline-none select-all leading-relaxed"
                 onClick={(e) => (e.target as HTMLTextAreaElement).select()}
               />
             </div>
 
-            <div className="flex justify-between items-center mt-5 pt-3 border-t border-gray-100 dark:border-gray-700">
-              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            {/* Modal Footer */}
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-6 pt-3 border-t border-slate-100 dark:border-white/[0.06]">
+              <div className="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
-                Waiting for node registration...
+                <span>Listening for reverse ping...</span>
               </div>
 
-              <div className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  className={`px-5 py-2.5 rounded-xl font-medium transition-all shadow-sm flex items-center gap-2 text-sm ${
-                    copied
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700'
-                  }`}
-                >
-                  {copied ? <CheckCircle size={16} /> : <Copy size={16} />}
-                  {copied ? 'Command Copied!' : 'Copy Command'}
-                </button>
+              <div className="flex items-center justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+                  className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[40px]"
                 >
                   Close
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className={`px-5 py-2.5 rounded-xl font-semibold transition-all shadow-md flex items-center gap-2 text-xs cursor-pointer min-h-[40px] active:scale-95 ${
+                    copied
+                      ? 'bg-emerald-600 text-white shadow-emerald-600/30'
+                      : 'bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 text-white hover:from-blue-500 hover:to-indigo-500 shadow-blue-600/25'
+                  }`}
+                >
+                  {copied ? <CheckCircle size={15} /> : <Copy size={15} />}
+                  <span>{copied ? 'Command Copied!' : 'Copy Command'}</span>
                 </button>
               </div>
             </div>

@@ -78,14 +78,34 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
     <ToastContext.Provider value={{ showToast, showConfirm }}>
       {children}
       
-      {/* Toasts */}
-      <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 z-[200] space-y-2 flex flex-col items-center sm:items-end pointer-events-none">
+      {/* Floating Dynamic Toasts */}
+      <div className="fixed bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-[200] space-y-2.5 flex flex-col items-center sm:items-end pointer-events-none">
         {toasts.map(toast => {
-          const colors = {
-            success: 'border-green-500 bg-green-50 dark:bg-green-900/40 text-green-800 dark:text-green-200 border shadow-md',
-            error: 'border-red-500 bg-red-50 dark:bg-red-900/40 text-red-800 dark:text-red-200 border shadow-md',
-            warning: 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-200 border shadow-md',
-            info: 'border-blue-500 bg-blue-50 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 border shadow-md'
+          const styleConfig = {
+            success: {
+              border: 'border-emerald-500/30 dark:border-emerald-500/40',
+              bg: 'bg-white/95 dark:bg-[#0c141f]/95',
+              iconBg: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400',
+              accent: 'bg-emerald-500',
+            },
+            error: {
+              border: 'border-rose-500/30 dark:border-rose-500/40',
+              bg: 'bg-white/95 dark:bg-[#1a0f14]/95',
+              iconBg: 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400',
+              accent: 'bg-rose-500',
+            },
+            warning: {
+              border: 'border-amber-500/30 dark:border-amber-500/40',
+              bg: 'bg-white/95 dark:bg-[#1a1409]/95',
+              iconBg: 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400',
+              accent: 'bg-amber-500',
+            },
+            info: {
+              border: 'border-sky-500/30 dark:border-sky-500/40',
+              bg: 'bg-white/95 dark:bg-[#0c1322]/95',
+              iconBg: 'bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400',
+              accent: 'bg-sky-500',
+            },
           };
           const Icons = {
             success: CheckCircle,
@@ -94,24 +114,28 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
             info: Info
           };
           const Icon = Icons[toast.type];
+          const style = styleConfig[toast.type];
 
           return (
             <div 
               key={toast.id}
-              className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg w-full max-w-sm sm:w-80 transform transition-all duration-300 ease-in-out opacity-100 translate-y-0 ${colors[toast.type]}`}
+              className={`pointer-events-auto relative overflow-hidden flex items-start gap-3 p-3.5 rounded-2xl shadow-xl w-full max-w-sm sm:w-84 backdrop-blur-xl border ${style.border} ${style.bg} transform transition-all duration-300 ease-spring opacity-100 translate-y-0`}
             >
-              <Icon className="w-5 h-5 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-semibold truncate">{toast.title}</h4>
-                {toast.message && <p className="text-sm mt-1 opacity-90 break-words">{toast.message}</p>}
+              <div className={`p-2 rounded-xl shrink-0 ${style.iconBg}`}>
+                <Icon className="w-4 h-4" />
+              </div>
+              <div className="flex-1 min-w-0 pt-0.5">
+                <h4 className="text-xs font-bold text-slate-900 dark:text-white tracking-tight truncate">{toast.title}</h4>
+                {toast.message && <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed break-words">{toast.message}</p>}
               </div>
               <button 
                 onClick={() => removeToast(toast.id)} 
-                className="p-1 opacity-70 hover:opacity-100 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors shrink-0"
+                className="p-1 opacity-60 hover:opacity-100 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 text-slate-500 dark:text-slate-400 transition-colors shrink-0 cursor-pointer"
                 aria-label="Dismiss toast"
               >
                 <X className="w-4 h-4" />
               </button>
+              <div className={`absolute bottom-0 left-0 right-0 h-0.5 ${style.accent}`} />
             </div>
           );
         })}
@@ -120,46 +144,46 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
       {/* Confirm Modal */}
       {confirmConfig && (
         <div 
-          className="fixed inset-0 z-[250] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 pointer-events-auto animate-in fade-in duration-150"
+          className="fixed inset-0 z-[250] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 pointer-events-auto transition-all"
           onClick={(e) => {
             if (e.target === e.currentTarget) handleConfirm(false);
           }}
         >
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700/80 animate-in fade-in zoom-in-95 duration-150">
+          <div className="relative bg-white dark:bg-[#0d121f] rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200/90 dark:border-white/[0.1] overflow-hidden">
             <div className="flex items-start gap-3.5 mb-4">
               {confirmConfig.options.variant === 'danger' ? (
-                <div className="p-2.5 rounded-xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 shrink-0 shadow-xs">
+                <div className="p-3 rounded-2xl bg-rose-100/80 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 shrink-0 shadow-xs border border-rose-200/50 dark:border-rose-900/40">
                   <AlertTriangle className="w-5 h-5" />
                 </div>
               ) : (
-                <div className="p-2.5 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 shrink-0 shadow-xs">
+                <div className="p-3 rounded-2xl bg-sky-100/80 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 shrink-0 shadow-xs border border-sky-200/50 dark:border-sky-900/40">
                   <Info className="w-5 h-5" />
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white tracking-tight">
                   {confirmConfig.options.title}
                 </h3>
-                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
+                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
                   {confirmConfig.options.message}
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2.5 mt-6 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+            <div className="flex justify-end gap-2.5 mt-6 pt-3 border-t border-slate-100 dark:border-white/[0.06]">
               <button
                 type="button"
                 onClick={() => handleConfirm(false)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm font-semibold transition-all active:scale-95 cursor-pointer"
+                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-300 text-xs font-semibold transition-all active:scale-95 cursor-pointer min-h-[40px]"
               >
                 {confirmConfig.options.cancelText || 'Cancel'}
               </button>
               <button
                 type="button"
                 onClick={() => handleConfirm(true)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all shadow-md active:scale-95 cursor-pointer ${
+                className={`px-5 py-2.5 rounded-xl text-xs font-semibold text-white transition-all shadow-md active:scale-95 cursor-pointer min-h-[40px] ${
                   confirmConfig.options.variant === 'danger'
-                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
-                    : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30'
+                    : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/30'
                 }`}
               >
                 {confirmConfig.options.confirmText || 'Confirm'}

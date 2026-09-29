@@ -1,7 +1,7 @@
 """Logs API endpoints"""
 from collections import deque
 from fastapi import APIRouter, Depends
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict
 import logging
 
@@ -18,7 +18,7 @@ class MemoryHandler(logging.Handler):
     """Custom handler that stores logs in memory (bounded ring buffer)"""
     def emit(self, record):
         log_buffer.append({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "message": self.format(record)
         })

@@ -28,12 +28,13 @@ def test_chisel_server_manager_command_assembly():
             mock_proc.poll = MagicMock(return_value=0)
             return mock_proc
 
-        with patch("app.chisel_server.start_async_process" if "app.chisel_server" in sys.modules else "panel.app.chisel_server.start_async_process", side_effect=fake_start_process):
-            with patch("app.chisel_server.wait_for_port" if "app.chisel_server" in sys.modules else "panel.app.chisel_server.wait_for_port", return_value=True):
-                with patch("shutil.which", return_value="/usr/local/bin/chisel"):
-                    with patch("os.path.exists", return_value=True):
-                        with patch("subprocess.run"):
-                            asyncio.run(manager.start_server(
+        target_mod = ChiselServerManager.__module__
+        with patch(f"{target_mod}.start_async_process", side_effect=fake_start_process), \
+             patch(f"{target_mod}.wait_for_port", return_value=True), \
+             patch("shutil.which", return_value="/usr/local/bin/chisel"), \
+             patch("os.path.exists", return_value=True), \
+             patch("subprocess.run"):
+            asyncio.run(manager.start_server(
                                 tunnel_id="test-chisel-srv",
                                 server_port=18080,
                                 auth="user:pass",
