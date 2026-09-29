@@ -2,6 +2,7 @@
 Smite Panel - Central Controller
 """
 import os
+import re
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,8 +18,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db
-from app.routers import nodes, tunnels, panel, status, logs, auth, core_health
+from app.routers import nodes, tunnels, panel, status, logs, auth, core_health, ssl as ssl_router
 from app.routers import settings as settings_router
+from app.ssl_manager import ssl_auto_renew_worker
 from app.node_server import NodeServer
 from app.gost_forwarder import gost_forwarder
 from app.rathole_server import rathole_server_manager
@@ -101,8 +103,18 @@ async def lifespan(app: FastAPI):
     reset_task = asyncio.create_task(_auto_reset_scheduler(app))
     app.state.reset_task = reset_task
     
+    ssl_renew_task = asyncio.create_task(ssl_auto_renew_worker(app))
+    app.state.ssl_renew_task = ssl_renew_task
+    
     yield
     
+    if hasattr(app.state, 'ssl_renew_task'):
+        app.state.ssl_renew_task.cancel()
+        try:
+            await app.state.ssl_renew_task
+        except asyncio.CancelledError:
+            pass
+
     if hasattr(app.state, 'reset_task'):
         app.state.reset_task.cancel()
         try:
@@ -557,6 +569,32 @@ app.include_router(status.router, prefix="/api/status", tags=["status"])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 app.include_router(core_health.router, prefix="/api/core-health", tags=["core-health"])
 app.include_router(settings_router.router)
+app.include_router(ssl_router.router)
+
+_ACME_TOKEN_REGEX = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+@app.get("/.well-known/acme-challenge/{token}", include_in_schema=False)
+async def acme_challenge_root(token: str):
+    """Serve Let's Encrypt HTTP-01 challenge directly with strict RFC token and path traversal protection"""
+    if not _ACME_TOKEN_REGEX.match(token):
+        raise HTTPException(status_code=404, detail="Challenge token not found")
+
+    candidate_bases = [
+        Path("/var/www/certbot/.well-known/acme-challenge"),
+        Path("./certs/.well-known/acme-challenge"),
+    ]
+    for base in candidate_bases:
+        try:
+            if not base.exists():
+                continue
+            resolved_base = base.resolve()
+            candidate_file = (base / token).resolve()
+            if os.path.commonpath([str(resolved_base), str(candidate_file)]) == str(resolved_base):
+                if candidate_file.is_file():
+                    return PlainTextResponse(candidate_file.read_text(encoding="utf-8").strip())
+        except Exception:
+            continue
+    raise HTTPException(status_code=404, detail="Challenge token not found")
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 static_path = Path(static_dir)
@@ -575,7 +613,7 @@ if static_path.exists() and (static_path / "index.html").exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         """Serve frontend for all non-API routes with strict path traversal protection"""
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json"):
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json") or full_path.startswith(".well-known/"):
             raise HTTPException(status_code=404)
         
         try:

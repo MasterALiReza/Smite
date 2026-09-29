@@ -249,6 +249,18 @@ class TelegramBot:
             raise
         except Exception as e:
             logger.error(f"Backup loop error: {e}", exc_info=True)
+
+    async def send_admin_alert(self, text: str):
+        """Send urgent or notification message to all configured Telegram admin IDs"""
+        await self.load_settings()
+        if not self.application or not self.application.bot or not self.admin_ids:
+            return
+        for admin_id_str in self.admin_ids:
+            try:
+                admin_id = int(admin_id_str)
+                await self.application.bot.send_message(chat_id=admin_id, text=text)
+            except Exception as e:
+                logger.warning(f"Failed to send Telegram alert to admin {admin_id_str}: {e}")
     
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""

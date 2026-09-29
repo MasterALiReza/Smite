@@ -22,8 +22,8 @@ server {
     http2 on;
     server_name _;
 
-    ssl_certificate /etc/letsencrypt/live/${SMITE_SSL_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${SMITE_SSL_DOMAIN}/privkey.pem;
+    ssl_certificate ${SMITE_CERT_FILE};
+    ssl_certificate_key ${SMITE_KEY_FILE};
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;

@@ -141,6 +141,51 @@ interface Translations {
       enableTunnelAutoReapply?: string
       tunnelAutoReapplyDescription?: string
       tunnelReapplyInterval?: string
+      sslManagement?: string
+      sslDescription?: string
+      sslActive?: string
+      sslInactive?: string
+      letsEncryptTab?: string
+      customSslTab?: string
+      serverPublicIp?: string
+      copyIp?: string
+      ipCopied?: string
+      dnsInstructions?: string
+      domainName?: string
+      domainPlaceholder?: string
+      emailOptional?: string
+      emailPlaceholder?: string
+      testDns?: string
+      testingDns?: string
+      dnsReady?: string
+      dnsMismatch?: string
+      dnsUnresolved?: string
+      cfProxied?: string
+      issueSslButton?: string
+      issuingSsl?: string
+      sslIssuedSuccess?: string
+      certChain?: string
+      certChainPlaceholder?: string
+      privateKey?: string
+      privateKeyPlaceholder?: string
+      installCustomSslButton?: string
+      installingCustomSsl?: string
+      customSslSuccess?: string
+      issuer?: string
+      subject?: string
+      daysRemaining?: string
+      expiresOn?: string
+      autoRenewal?: string
+      autoRenewalDesc?: string
+      renewNow?: string
+      renewing?: string
+      renewSuccess?: string
+      removeSsl?: string
+      removeSslConfirm?: string
+      removingSsl?: string
+      sslRemovedSuccess?: string
+      days?: string
+      fingerprint?: string
     }
   common: {
     loading: string
@@ -287,6 +332,51 @@ const translations: Record<Language, Translations> = {
       failedToLoad: 'Failed to load settings',
       failedToSave: 'Failed to save settings',
       enterAdminId: 'Enter admin user ID:',
+      sslManagement: 'SSL & Domain Management',
+      sslDescription: "Secure your panel web interface with an automated Let's Encrypt certificate or custom SSL.",
+      sslActive: 'SSL Active & Secured',
+      sslInactive: 'SSL Inactive (HTTP)',
+      letsEncryptTab: "Let's Encrypt (Automated)",
+      customSslTab: 'Custom SSL (Cloudflare / Own Cert)',
+      serverPublicIp: 'Server Public IP',
+      copyIp: 'Copy IP',
+      ipCopied: 'Copied!',
+      dnsInstructions: 'Make sure your domain DNS (A-Record) points to this server IP address before issuing.',
+      domainName: 'Domain Name',
+      domainPlaceholder: 'e.g. panel.example.com',
+      emailOptional: 'Admin Email (Optional)',
+      emailPlaceholder: 'e.g. admin@example.com',
+      testDns: 'Test DNS Resolution',
+      testingDns: 'Testing DNS...',
+      dnsReady: 'DNS points to this server! Ready for SSL.',
+      dnsMismatch: 'DNS does not point to this server IP.',
+      dnsUnresolved: 'Domain could not be resolved. Ensure A-record exists and has propagated.',
+      cfProxied: 'Cloudflare Proxy (Orange Cloud) detected. Custom SSL (Origin CA) recommended.',
+      issueSslButton: 'Issue SSL Certificate',
+      issuingSsl: 'Issuing Certificate (takes ~30s)...',
+      sslIssuedSuccess: 'SSL Certificate issued and installed successfully!',
+      certChain: 'Certificate Chain (PEM)',
+      certChainPlaceholder: '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
+      privateKey: 'Private Key (PEM)',
+      privateKeyPlaceholder: '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----',
+      installCustomSslButton: 'Install Custom Certificate',
+      installingCustomSsl: 'Validating & Installing...',
+      customSslSuccess: 'Custom SSL Certificate installed successfully!',
+      issuer: 'Issuer',
+      subject: 'Subject',
+      daysRemaining: 'Days Remaining',
+      expiresOn: 'Expires On',
+      autoRenewal: 'Automatic Renewal',
+      autoRenewalDesc: 'Automatically renews certificate every 12 hours when < 30 days remain',
+      renewNow: 'Renew Now',
+      renewing: 'Renewing...',
+      renewSuccess: 'Certificate renewed successfully!',
+      removeSsl: 'Remove SSL',
+      removeSslConfirm: 'Are you sure you want to disable SSL and revert the panel to HTTP?',
+      removingSsl: 'Removing SSL...',
+      sslRemovedSuccess: 'SSL disabled. Panel reverted to HTTP.',
+      days: 'days',
+      fingerprint: 'Fingerprint (SHA-256)',
     },
     common: {
       loading: 'Loading...',
@@ -431,6 +521,51 @@ const translations: Record<Language, Translations> = {
       failedToLoad: 'بارگذاری تنظیمات ناموفق بود',
       failedToSave: 'ذخیره تنظیمات ناموفق بود',
       enterAdminId: 'شناسه کاربری ادمین را وارد کنید:',
+      sslManagement: 'مدیریت SSL و دامنه',
+      sslDescription: 'امن‌سازی رابط وب پنل با گواهی خودکار Let’s Encrypt یا گواهی سفارشی/کلودفلر.',
+      sslActive: 'گواهی SSL فعال و امن (HTTPS)',
+      sslInactive: 'گواهی غیرفعال (HTTP)',
+      letsEncryptTab: 'گواهی خودکار (Let’s Encrypt)',
+      customSslTab: 'گواهی سفارشی (Cloudflare Origin / دستی)',
+      serverPublicIp: 'آی‌پی عمومی سرور',
+      copyIp: 'کپی آی‌پی',
+      ipCopied: 'کپی شد!',
+      dnsInstructions: 'پیش از صدور گواهی، مطمئن شوید رکورد A دامنه شما به این آی‌پی عمومی سرور متصل شده باشد.',
+      domainName: 'نام دامنه',
+      domainPlaceholder: 'مثلاً panel.example.com',
+      emailOptional: 'ایمیل ادمین (اختیاری)',
+      emailPlaceholder: 'مثلاً admin@example.com',
+      testDns: 'تست اتصال DNS',
+      testingDns: 'در حال بررسی DNS...',
+      dnsReady: 'دامنه به درستی به این سرور متصل است! آماده صدور SSL.',
+      dnsMismatch: 'آی‌پی دامنه با آی‌پی سرور همخوانی ندارد.',
+      dnsUnresolved: 'دامنه یافت نشد. از ایجاد رکورد A و انتشار DNS اطمینان حاصل کنید.',
+      cfProxied: 'پروکسی کلودفلر (ابر نارنجی) شناسایی شد. استفاده از تب «گواهی سفارشی» توصیه می‌شود.',
+      issueSslButton: 'صدور خودکار گواهی SSL',
+      issuingSsl: 'در حال صدور گواهی (حدود ۳۰ ثانیه)...',
+      sslIssuedSuccess: 'گواهی SSL با موفقیت صادر و فعال شد!',
+      certChain: 'زنجیره گواهی (Certificate PEM)',
+      certChainPlaceholder: '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
+      privateKey: 'کلید خصوصی (Private Key PEM)',
+      privateKeyPlaceholder: '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----',
+      installCustomSslButton: 'نصب و فعال‌سازی گواهی سفارشی',
+      installingCustomSsl: 'در حال بررسی و نصب...',
+      customSslSuccess: 'گواهی سفارشی با موفقیت نصب و فعال شد!',
+      issuer: 'صادرکننده',
+      subject: 'دامنه',
+      daysRemaining: 'روز باقی‌مانده',
+      expiresOn: 'تاریخ انقضا',
+      autoRenewal: 'تمدید خودکار',
+      autoRenewalDesc: 'بررسی خودکار هر ۱۲ ساعت و تمدید گواهی در صورت باقی ماندن کمتر از ۳۰ روز',
+      renewNow: 'تمدید دستی',
+      renewing: 'در حال تمدید...',
+      renewSuccess: 'گواهی با موفقیت تمدید شد!',
+      removeSsl: 'حذف SSL (برگشت به HTTP)',
+      removeSslConfirm: 'آیا از حذف SSL و برگشت وب‌پنل به HTTP اطمینان دارید؟ (اتصال نودها به هیچ وجه تغییر نمی‌کند)',
+      removingSsl: 'در حال غیرفعال‌سازی...',
+      sslRemovedSuccess: 'گواهی SSL غیرفعال شد و پنل به حالت HTTP برگشت.',
+      days: 'روز',
+      fingerprint: 'اثر انگشت (SHA-256)',
     },
     common: {
       loading: 'در حال بارگذاری...',

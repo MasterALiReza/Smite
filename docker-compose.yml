@@ -43,6 +43,7 @@ services:
       - ./nginx/entrypoint.sh:/docker-entrypoint.d/10-smitenginx.sh:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
+      - ./panel/certs:/etc/ssl/smite:ro
     env_file:
       - .env
     environment:
