@@ -2071,7 +2071,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                 required
               />
             </div>
@@ -2092,7 +2092,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               <select
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
               >
                 <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
                 {categories.map((c) => (
@@ -2141,7 +2141,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   onChange={(e) =>
                     setFormData({ ...formData, remote_ip: e.target.value || '127.0.0.1' })
                   }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                   placeholder="127.0.0.1 or [2001:db8::1]"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -2160,7 +2160,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   onChange={(e) =>
                     setFormData({ ...formData, ports: e.target.value })
                   }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                   placeholder="8080, 8081, 10000-20000"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -3722,7 +3722,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               type="button"
               onClick={handleTestConfig}
               disabled={isTestingConfig}
-              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer min-h-[44px] disabled:opacity-50"
             >
               {isTestingConfig ? (
                 <Loader2 size={16} className="animate-spin" />
@@ -3737,14 +3737,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer"
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer min-h-[44px]"
               >
                 {t.tunnels.cancel}
               </button>
               <button
                 type="submit"
                 disabled={isTestingConfig}
-                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5 min-h-[44px]"
               >
                 Save Changes
               </button>
@@ -4441,7 +4441,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   onChange={(e) =>
                     setFormData({ ...formData, remote_ip: e.target.value || '127.0.0.1' })
                   }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                   placeholder="127.0.0.1 or [2001:db8::1]"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -4460,7 +4460,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   onChange={(e) =>
                     setFormData({ ...formData, ports: e.target.value })
                   }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                  className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
                   placeholder="8080, 8081, 10000-20000"
                   required
                 />
@@ -5984,7 +5984,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               type="button"
               onClick={handleTestConfig}
               disabled={isTestingConfig}
-              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer min-h-[44px] disabled:opacity-50"
             >
               {isTestingConfig ? (
                 <Loader2 size={16} className="animate-spin" />
@@ -5999,14 +5999,14 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer"
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer min-h-[44px]"
               >
                 {t.tunnels.cancel}
               </button>
               <button
                 type="submit"
                 disabled={isTestingConfig}
-                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5 min-h-[44px]"
               >
                 {t.tunnels.createTunnel}
               </button>

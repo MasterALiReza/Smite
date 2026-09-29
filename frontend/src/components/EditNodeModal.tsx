@@ -66,7 +66,7 @@ export const EditNodeModal: React.FC<EditNodeModalProps> = ({
       className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-md shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col overflow-hidden">
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-md max-h-[92dvh] overflow-y-auto shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col">
         <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-blue-500/10 dark:bg-sky-500/15 text-blue-600 dark:text-sky-400 rounded-2xl border border-blue-200/50 dark:border-sky-500/20 shadow-glow-sm">
@@ -83,7 +83,7 @@ export const EditNodeModal: React.FC<EditNodeModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
           >
             <X size={19} />
@@ -122,7 +122,7 @@ export const EditNodeModal: React.FC<EditNodeModalProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. DE Node 1, Germany Main, etc."
-              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
+              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-base sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
               autoFocus
             />
           </div>
@@ -131,14 +131,14 @@ export const EditNodeModal: React.FC<EditNodeModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all cursor-pointer min-h-[40px]"
+              className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all cursor-pointer min-h-[44px]"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-blue-600/25 transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer min-h-[40px] active:scale-95"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-blue-600/25 transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer min-h-[44px] active:scale-95"
             >
               <Save size={15} />
               <span>{loading ? 'Saving...' : 'Save Changes'}</span>

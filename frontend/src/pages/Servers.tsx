@@ -449,7 +449,7 @@ const Servers = () => {
                     <button
                       type="button"
                       onClick={() => setEditingServer(server)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[38px]"
+                      className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[44px] active:scale-95"
                     >
                       <Edit2 size={13} className="text-sky-500" />
                       <span>Edit</span>
@@ -458,7 +458,7 @@ const Servers = () => {
                       type="button"
                       onClick={() => deleteServer(server.id)}
                       disabled={deletingServerId === server.id}
-                      className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[38px] disabled:opacity-50"
+                      className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[44px] active:scale-95 disabled:opacity-50"
                     >
                       {deletingServerId === server.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
                       <span>Delete</span>
@@ -585,10 +585,10 @@ const AddServerModal = ({ onClose, onSuccess }: AddServerModalProps) => {
       className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-md max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-200/90 dark:border-white/[0.1]">
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-md max-h-[92dvh] overflow-y-auto shadow-2xl border border-slate-200/90 dark:border-white/[0.1]">
         <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
           <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight">Add Foreign Server</h2>
-          <button onClick={onClose} className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer">
+          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center">
             <X size={19} />
           </button>
         </div>
@@ -602,7 +602,7 @@ const AddServerModal = ({ onClose, onSuccess }: AddServerModalProps) => {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
+              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-base sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
               required
               placeholder="e.g. Frankfurt Server 1"
             />
@@ -616,7 +616,7 @@ const AddServerModal = ({ onClose, onSuccess }: AddServerModalProps) => {
               type="text"
               value={ipAddress}
               onChange={(e) => setIpAddress(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-sm font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
+              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-base sm:text-sm font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
               placeholder="e.g., 95.217.x.x"
               required
             />
@@ -630,7 +630,7 @@ const AddServerModal = ({ onClose, onSuccess }: AddServerModalProps) => {
               type="number"
               value={apiPort}
               onChange={(e) => setApiPort(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-sm font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
+              className="w-full px-4 py-2.5 bg-slate-50/50 dark:bg-[#070b14]/70 border border-slate-200 dark:border-white/[0.1] rounded-xl text-base sm:text-sm font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-sky-500/40 focus:border-sky-500 outline-none transition-all min-h-[44px]"
               placeholder="8888"
               min="1"
               max="65535"
@@ -642,14 +642,14 @@ const AddServerModal = ({ onClose, onSuccess }: AddServerModalProps) => {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold cursor-pointer min-h-[40px]"
+              className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold cursor-pointer min-h-[44px]"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-600/25 cursor-pointer min-h-[40px] active:scale-95 disabled:opacity-50"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-600/25 cursor-pointer min-h-[44px] active:scale-95 disabled:opacity-50"
             >
               {loading ? 'Adding...' : 'Add Foreign Server'}
             </button>
@@ -676,12 +676,12 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
       className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-2xl max-h-[90dvh] flex flex-col shadow-2xl border border-slate-200/90 dark:border-white/[0.1]">
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-2xl max-h-[92dvh] flex flex-col shadow-2xl border border-slate-200/90 dark:border-white/[0.1]">
         <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
           <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight">CA Certificate (Foreign Server)</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
           >
             <X size={19} />
@@ -725,7 +725,7 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
                   }
                 }}
                 disabled={loading || !certContent || certContent.trim().length === 0}
-                className={`px-5 py-2.5 rounded-xl transition-all font-semibold flex items-center gap-2 text-xs min-h-[40px] cursor-pointer active:scale-95 ${
+                className={`px-5 py-2.5 rounded-xl transition-all font-semibold flex items-center gap-2 text-xs min-h-[44px] cursor-pointer active:scale-95 ${
                   copied
                     ? 'bg-emerald-600 text-white shadow-emerald-600/30'
                     : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-sky-600 text-white hover:from-indigo-500 hover:to-sky-500 shadow-indigo-600/25 disabled:opacity-50'
@@ -736,7 +736,7 @@ const CertModal = ({ certContent, loading, onClose, onCopy, copied }: CertModalP
               </button>
               <button
                 onClick={onClose}
-                className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold cursor-pointer min-h-[40px]"
+                className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold cursor-pointer min-h-[44px]"
               >
                 Close
               </button>

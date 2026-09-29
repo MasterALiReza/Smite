@@ -33,12 +33,30 @@ interface ResetConfig {
 const CoreHealth = () => {
   const { t } = useLanguage()
   const { showToast, showConfirm } = useToast()
-  const [health, setHealth] = useState<CoreHealth[]>([])
-  const [configs, setConfigs] = useState<ResetConfig[]>([])
-  const [loading, setLoading] = useState(true)
+  
+  // Instant SWR: Load from cache immediately to eliminate perceived loading latency
+  const [health, setHealth] = useState<CoreHealth[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('smite_core_health')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
+  const [configs, setConfigs] = useState<ResetConfig[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('smite_core_configs')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
+  const [loading, setLoading] = useState(() => health.length === 0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [updating, setUpdating] = useState<string | null>(null)
 
-  const fetchData = async () => {
+  const fetchData = async (isManual = false) => {
+    if (isManual) setIsRefreshing(true)
     try {
       const [healthRes, configsRes] = await Promise.all([
         api.get('/core-health/health'),
@@ -46,16 +64,23 @@ const CoreHealth = () => {
       ])
       setHealth(healthRes.data)
       setConfigs(configsRes.data)
+      try {
+        sessionStorage.setItem('smite_core_health', JSON.stringify(healthRes.data))
+        sessionStorage.setItem('smite_core_configs', JSON.stringify(configsRes.data))
+      } catch (e) {
+        // Ignore session storage errors
+      }
     } catch (error) {
       console.error('Failed to fetch core health:', error)
     } finally {
       setLoading(false)
+      setIsRefreshing(false)
     }
   }
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 10000)
+    const interval = setInterval(() => fetchData(false), 10000)
     return () => clearInterval(interval)
   }, [])
 
@@ -72,7 +97,7 @@ const CoreHealth = () => {
     try {
       await api.post(`/core-health/reset/${core}`)
       showToast('success', 'Core Reset', `${core} core was successfully reset`)
-      await fetchData()
+      await fetchData(true)
     } catch (error) {
       console.error(`Failed to reset ${core}:`, error)
       showToast('error', 'Error', `Failed to reset ${core}`)
@@ -86,7 +111,7 @@ const CoreHealth = () => {
     try {
       await api.put(`/core-health/reset-config/${core}`, updates)
       showToast('success', 'Configuration Updated', `Reset schedule for ${core} updated`)
-      await fetchData()
+      await fetchData(true)
     } catch (error) {
       console.error(`Failed to update config for ${core}:`, error)
       showToast('error', 'Error', 'Failed to update reset configuration')
@@ -133,12 +158,38 @@ const CoreHealth = () => {
     }
   }
 
-  if (loading) {
+  if (loading && health.length === 0) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-sky-500 border-t-transparent mb-4"></div>
-          <p className="text-xs font-mono text-slate-500 dark:text-slate-400">Loading core diagnostics...</p>
+      <div className="w-full max-w-7xl mx-auto space-y-6 font-sans">
+        <div className="pb-2 border-b border-slate-200/60 dark:border-white/[0.05] flex items-center justify-between">
+          <div>
+            <div className="h-8 w-48 bg-slate-200 dark:bg-slate-800 rounded-lg animate-pulse mb-2" />
+            <div className="h-4 w-72 bg-slate-100 dark:bg-slate-800/60 rounded-md animate-pulse" />
+          </div>
+        </div>
+
+        <div className="space-y-4 sm:space-y-6">
+          {['backhaul', 'rathole', 'chisel', 'frp', 'gost'].map((c) => (
+            <div
+              key={c}
+              className="bg-white/90 dark:bg-[#0c1220]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.08] p-5 sm:p-7 space-y-5 animate-pulse"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/[0.05]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+                  <div className="space-y-1.5">
+                    <div className="h-5 w-32 bg-slate-200 dark:bg-slate-800 rounded-md" />
+                    <div className="h-3 w-48 bg-slate-100 dark:bg-slate-800/60 rounded-md" />
+                  </div>
+                </div>
+                <div className="h-9 w-28 bg-slate-200 dark:bg-slate-800 rounded-xl" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="h-24 bg-slate-100 dark:bg-white/[0.02] rounded-2xl border border-slate-200/50 dark:border-white/[0.05]" />
+                <div className="h-24 bg-slate-100 dark:bg-white/[0.02] rounded-2xl border border-slate-200/50 dark:border-white/[0.05]" />
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -146,11 +197,22 @@ const CoreHealth = () => {
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-6 font-sans">
-      <div className="pb-2 border-b border-slate-200/60 dark:border-white/[0.05]">
-        <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-          {t.coreHealth.title}
-        </h1>
-        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 font-medium">{t.coreHealth.subtitle}</p>
+      <div className="pb-2 border-b border-slate-200/60 dark:border-white/[0.05] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+            {t.coreHealth.title}
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 font-medium">{t.coreHealth.subtitle}</p>
+        </div>
+
+        <button
+          onClick={() => fetchData(true)}
+          disabled={isRefreshing}
+          className="flex items-center gap-2 px-3.5 py-2 bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-white/[0.08] shadow-xs active:scale-95 transition-all min-h-[44px] cursor-pointer self-start sm:self-auto"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-blue-500 ${isRefreshing ? 'animate-spin' : ''}`} />
+          <span>{isRefreshing ? 'Checking Health...' : 'Refresh Status'}</span>
+        </button>
       </div>
 
       <div className="space-y-4 sm:space-y-6">
@@ -183,7 +245,7 @@ const CoreHealth = () => {
                 <button
                   onClick={() => handleReset(coreHealth.core)}
                   disabled={updating === coreHealth.core}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold transition-all min-h-[38px] active:scale-95 disabled:opacity-50 cursor-pointer self-start sm:self-auto border border-slate-200/60 dark:border-white/[0.08]"
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold transition-all min-h-[44px] active:scale-95 disabled:opacity-50 cursor-pointer self-start sm:self-auto border border-slate-200/60 dark:border-white/[0.08]"
                 >
                   {updating === coreHealth.core ? (
                     <>
@@ -296,7 +358,7 @@ const CoreHealth = () => {
                           }
                         }}
                         disabled={updating === coreHealth.core}
-                        className="w-16 px-2 py-0.5 text-xs border border-slate-300 dark:border-white/[0.1] rounded-lg bg-white dark:bg-[#070b14] text-slate-900 dark:text-white font-mono focus:outline-none focus:ring-1 focus:ring-sky-500 tabular-nums"
+                        className="w-16 px-2 py-1.5 text-base sm:text-xs border border-slate-300 dark:border-white/[0.1] rounded-lg bg-white dark:bg-[#070b14] text-slate-900 dark:text-white font-mono focus:outline-none focus:ring-1 focus:ring-sky-500 tabular-nums"
                       />
                       <span className="text-slate-500 font-mono">min</span>
                     </div>

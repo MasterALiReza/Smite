@@ -23,6 +23,10 @@ _LAST_MANUAL_RESET: Dict[str, float] = {}
 RESET_COOLDOWN_SECONDS = 30
 
 
+_HEALTH_CACHE: Dict[str, Any] = {"timestamp": 0.0, "data": []}
+HEALTH_CACHE_TTL = 3.0  # 3 seconds cache
+
+
 class CoreHealthResponse(BaseModel):
     core: str
     nodes_status: Dict[str, Dict[str, Any]]  # Iran nodes
@@ -44,151 +48,132 @@ class ResetConfigUpdate(BaseModel):
 
 @router.get("/health", response_model=List[CoreHealthResponse])
 async def get_core_health(request: Request, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
-    """Get health status for all cores"""
-    health_data = []
+    """Get health status for all cores with concurrent checking and fast response caching"""
+    global _HEALTH_CACHE
+    now = time.time()
     
+    # Return warm cache if fresh
+    if (now - _HEALTH_CACHE["timestamp"] < HEALTH_CACHE_TTL) and _HEALTH_CACHE["data"]:
+        return _HEALTH_CACHE["data"]
+
     result = await db.execute(select(Node))
     all_nodes = result.scalars().all()
     
     iran_nodes_all = {n.id: n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"}
     foreign_nodes_all = {n.id: n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"}
     
-    for core in CORES:
-        result = await db.execute(select(Tunnel).where(Tunnel.core == core, Tunnel.status == "active"))
-        active_tunnels = result.scalars().all()
+    client = NodeClient()
+    
+    async def check_single_node(node_id: str, node: Node, role: str):
+        connection_status = {
+            "status": "failed",
+            "error_message": None
+        }
         
-        node_ids = set(t.node_id for t in active_tunnels if t.node_id)
-        
-        for tunnel in active_tunnels:
-            if tunnel.spec and tunnel.spec.get("foreign_node_id"):
-                node_ids.add(tunnel.spec.get("foreign_node_id"))
-        
-        iran_nodes = {}
-        foreign_nodes = {}
-        
-        client = NodeClient()
-        
-        async def check_iran_node(node_id, node):
-            connection_status = {
-                "status": "failed",
-                "error_message": None
-            }
-            
-            try:
-                response = await client.get_tunnel_status(node_id, "")
-                if response and response.get("status") == "ok":
-                    connection_status["status"] = "connected"
+        try:
+            # Enforce 1.8s timeout so unresponsive nodes don't block the UI
+            response = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=1.8)
+            if response and response.get("status") == "ok":
+                connection_status["status"] = "connected"
+            else:
+                error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
+                if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                    connection_status["status"] = "reconnecting"
                 else:
-                    error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
-                    if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                        connection_status["status"] = "reconnecting"
-                    else:
-                        connection_status["status"] = "failed"
-                    connection_status["error_message"] = error_msg
-            except httpx.ConnectError:
-                connection_status["status"] = "connecting"
-                connection_status["error_message"] = "Connecting to node..."
-            except httpx.TimeoutException:
-                connection_status["status"] = "reconnecting"
-                connection_status["error_message"] = "Connection timeout"
-            except Exception as e:
-                logger.error(f"Error checking {core} node {node_id} health: {e}")
-                connection_status["status"] = "failed"
-                connection_status["error_message"] = str(e)
-            
-            return {
-                "id": node_id,
-                "name": node.name,
-                "role": "iran",
-                **connection_status
-            }
+                    connection_status["status"] = "failed"
+                connection_status["error_message"] = error_msg
+        except asyncio.TimeoutError:
+            connection_status["status"] = "reconnecting"
+            connection_status["error_message"] = "Connection timeout"
+        except httpx.ConnectError:
+            connection_status["status"] = "connecting"
+            connection_status["error_message"] = "Connecting to node..."
+        except httpx.TimeoutException:
+            connection_status["status"] = "reconnecting"
+            connection_status["error_message"] = "Connection timeout"
+        except Exception as e:
+            logger.error(f"Error checking node {node_id} health: {e}")
+            connection_status["status"] = "failed"
+            connection_status["error_message"] = str(e)
         
-        async def check_foreign_node(node_id, node):
-            connection_status = {
-                "status": "failed",
-                "error_message": None
-            }
-            
-            try:
-                response = await client.get_tunnel_status(node_id, "")
-                if response and response.get("status") == "ok":
-                    connection_status["status"] = "connected"
-                else:
-                    error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
-                    if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                        connection_status["status"] = "reconnecting"
-                    else:
-                        connection_status["status"] = "failed"
-                    connection_status["error_message"] = error_msg
-            except httpx.ConnectError:
-                connection_status["status"] = "connecting"
-                connection_status["error_message"] = "Connecting to node..."
-            except httpx.TimeoutException:
-                connection_status["status"] = "reconnecting"
-                connection_status["error_message"] = "Connection timeout"
-            except Exception as e:
-                logger.error(f"Error checking {core} node {node_id} health: {e}")
-                connection_status["status"] = "failed"
-                connection_status["error_message"] = str(e)
-            
-            return {
-                "id": node_id,
-                "name": node.name,
-                "role": "foreign",
-                **connection_status
-            }
-        
-        iran_tasks = [check_iran_node(node_id, node) for node_id, node in iran_nodes_all.items()]
-        foreign_tasks = [check_foreign_node(node_id, node) for node_id, node in foreign_nodes_all.items()]
-        
-        iran_results = await asyncio.gather(*iran_tasks, return_exceptions=True)
-        foreign_results = await asyncio.gather(*foreign_tasks, return_exceptions=True)
-        
-        for result in iran_results:
-            if isinstance(result, Exception):
-                continue
-            iran_nodes[result["id"]] = result
-        
-        for result in foreign_results:
-            if isinstance(result, Exception):
-                continue
-            foreign_nodes[result["id"]] = result
-        
-        health_data.append(CoreHealthResponse(
+        return {
+            "id": node_id,
+            "name": node.name,
+            "role": role,
+            **connection_status
+        }
+    
+    # Check all nodes once in parallel
+    tasks = [
+        check_single_node(nid, n, "iran") for nid, n in iran_nodes_all.items()
+    ] + [
+        check_single_node(nid, n, "foreign") for nid, n in foreign_nodes_all.items()
+    ]
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    iran_nodes = {}
+    foreign_nodes = {}
+    
+    for r in results:
+        if isinstance(r, Exception) or not isinstance(r, dict):
+            continue
+        if r.get("role") == "iran":
+            iran_nodes[r["id"]] = r
+        else:
+            foreign_nodes[r["id"]] = r
+    
+    health_data = [
+        CoreHealthResponse(
             core=core,
             nodes_status=iran_nodes,
             servers_status=foreign_nodes
-        ))
+        )
+        for core in CORES
+    ]
+    
+    _HEALTH_CACHE = {
+        "timestamp": now,
+        "data": health_data
+    }
     
     return health_data
 
 
 @router.get("/reset-config", response_model=List[ResetConfigResponse])
 async def get_reset_configs(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
-    """Get reset timer configuration for all cores"""
-    configs = []
+    """Get reset timer configuration for all cores in a single batch query"""
+    result = await db.execute(select(CoreResetConfig).where(CoreResetConfig.core.in_(CORES)))
+    existing_configs = {c.core: c for c in result.scalars().all()}
     
+    has_new = False
     for core in CORES:
-        result = await db.execute(select(CoreResetConfig).where(CoreResetConfig.core == core))
-        config = result.scalar_one_or_none()
-        
-        if not config:
+        if core not in existing_configs:
             config = CoreResetConfig(
                 core=core,
                 enabled=False,
                 interval_minutes=10
             )
             db.add(config)
-            await db.commit()
-            await db.refresh(config)
-        
-        configs.append(ResetConfigResponse(
-            core=config.core,
-            enabled=config.enabled,
-            interval_minutes=config.interval_minutes,
-            last_reset=config.last_reset,
-            next_reset=config.next_reset
-        ))
+            existing_configs[core] = config
+            has_new = True
+    
+    if has_new:
+        await db.commit()
+        for core in CORES:
+            await db.refresh(existing_configs[core])
+    
+    configs = [
+        ResetConfigResponse(
+            core=existing_configs[core].core,
+            enabled=existing_configs[core].enabled,
+            interval_minutes=existing_configs[core].interval_minutes,
+            last_reset=existing_configs[core].last_reset,
+            next_reset=existing_configs[core].next_reset
+        )
+        for core in CORES
+        if core in existing_configs
+    ]
     
     return configs
 
@@ -278,6 +263,9 @@ async def manual_reset_core(core: str, request: Request, db: AsyncSession = Depe
         await db.refresh(config)
         
         await _reset_core(core, request, db)
+        
+        global _HEALTH_CACHE
+        _HEALTH_CACHE["timestamp"] = 0.0
         
         return {
             "status": "success",

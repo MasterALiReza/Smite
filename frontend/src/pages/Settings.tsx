@@ -248,7 +248,7 @@ const Settings = () => {
                     type="number"
                     value={settings.frp.port}
                     onChange={(e) => updateFrp({ port: parseInt(e.target.value) || 7000 })}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all tabular-nums"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all tabular-nums"
                     placeholder="7000"
                     min="1"
                     max="65535"
@@ -267,7 +267,7 @@ const Settings = () => {
                   type="text"
                   value={settings.frp.token || ''}
                   onChange={(e) => updateFrp({ token: e.target.value })}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
                   placeholder="Leave empty for no authentication"
                 />
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
@@ -340,7 +340,7 @@ const Settings = () => {
                   type="password"
                   value={settings.telegram.bot_token || ''}
                   onChange={(e) => updateTelegram({ bot_token: e.target.value })}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all min-h-[44px]"
                   placeholder="Enter bot token from @BotFather"
                 />
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
@@ -365,7 +365,7 @@ const Settings = () => {
                             newIds[index] = e.target.value
                             updateTelegram({ admin_ids: newIds })
                           }}
-                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                         />
                       </div>
                       <button
@@ -392,7 +392,7 @@ const Settings = () => {
                         }
                       }}
                       placeholder={t.settings.enterAdminId || 'Enter Telegram Admin ID'}
-                      className="flex-1 px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                     />
                     <button
                       onClick={addAdminId}
@@ -442,7 +442,7 @@ const Settings = () => {
                           type="number"
                           value={settings.telegram.backup_interval || 60}
                           onChange={(e) => updateTelegram({ backup_interval: parseInt(e.target.value) || 60 })}
-                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                           placeholder="60"
                           min="1"
                         />
@@ -454,7 +454,7 @@ const Settings = () => {
                         <select
                           value={settings.telegram.backup_interval_unit || 'minutes'}
                           onChange={(e) => updateTelegram({ backup_interval_unit: e.target.value })}
-                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                         >
                           <option value="minutes">{t.settings.minutes}</option>
                           <option value="hours">{t.settings.hours}</option>
@@ -532,7 +532,7 @@ const Settings = () => {
                     type="number"
                     value={settings.tunnel?.auto_reapply_interval || 60}
                     onChange={(e) => updateTunnel({ auto_reapply_interval: parseInt(e.target.value) || 60 })}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                     placeholder="60"
                     min="1"
                   />
@@ -544,7 +544,7 @@ const Settings = () => {
                   <select
                     value={settings.tunnel?.auto_reapply_interval_unit || 'minutes'}
                     onChange={(e) => updateTunnel({ auto_reapply_interval_unit: e.target.value })}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                   >
                     <option value="minutes">{t.settings.minutes}</option>
                     <option value="hours">{t.settings.hours}</option>

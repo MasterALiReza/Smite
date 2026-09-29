@@ -63,7 +63,7 @@ export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role }) =
       className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-2xl shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col overflow-hidden">
+      <div className="relative bg-white dark:bg-[#0c1220] rounded-3xl p-6 sm:p-7 w-full max-w-2xl max-h-[92dvh] overflow-y-auto shadow-2xl border border-slate-200/90 dark:border-white/[0.1] flex flex-col">
         {/* Modal Header */}
         <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100 dark:border-white/[0.06]">
           <div className="flex items-center gap-3">
@@ -81,7 +81,7 @@ export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role }) =
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
             aria-label="Close"
           >
             <X size={19} />
@@ -137,14 +137,14 @@ export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role }) =
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[40px]"
+                  className="px-4 py-2.5 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[44px]"
                 >
                   Close
                 </button>
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className={`px-5 py-2.5 rounded-xl font-semibold transition-all shadow-md flex items-center gap-2 text-xs cursor-pointer min-h-[40px] active:scale-95 ${
+                  className={`px-5 py-2.5 rounded-xl font-semibold transition-all shadow-md flex items-center gap-2 text-xs cursor-pointer min-h-[44px] active:scale-95 ${
                     copied
                       ? 'bg-emerald-600 text-white shadow-emerald-600/30'
                       : 'bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 text-white hover:from-blue-500 hover:to-indigo-500 shadow-blue-600/25'
