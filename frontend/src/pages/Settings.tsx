@@ -15,6 +15,7 @@ import {
   Lock,
   Unlock,
   Globe,
+  Mail,
   Copy,
   Check,
   ExternalLink,
@@ -791,7 +792,7 @@ const Settings = () => {
                       </label>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <div className="relative flex-1">
-                          <Globe className="w-4 h-4 text-slate-400 absolute left-3.5 rtl:left-auto rtl:right-3.5 top-1/2 -translate-y-1/2" />
+                          <Globe className="w-4 h-4 text-slate-400 absolute left-3.5 rtl:left-auto rtl:right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                           <input
                             type="text"
                             value={domainInput}
@@ -800,7 +801,9 @@ const Settings = () => {
                               setDnsCheckResult(null)
                             }}
                             placeholder={t.settings.domainPlaceholder || 'e.g. panel.example.com'}
-                            className="w-full pl-10 pr-3.5 rtl:pl-3.5 rtl:pr-10 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
+                            autoComplete="off"
+                            spellCheck={false}
+                            className="w-full pl-10 pr-3.5 rtl:pl-3.5 rtl:pr-10 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px] transition-colors"
                           />
                         </div>
 
@@ -822,13 +825,18 @@ const Settings = () => {
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                         {t.settings.emailOptional || 'Admin Email (Optional)'}
                       </label>
-                      <input
-                        type="email"
-                        value={emailInput}
-                        onChange={(e) => setEmailInput(e.target.value)}
-                        placeholder={t.settings.emailPlaceholder || 'e.g. admin@example.com'}
-                        className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                      />
+                      <div className="relative">
+                        <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 rtl:left-auto rtl:right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="email"
+                          value={emailInput}
+                          onChange={(e) => setEmailInput(e.target.value)}
+                          placeholder={t.settings.emailPlaceholder || 'e.g. admin@example.com'}
+                          autoComplete="off"
+                          spellCheck={false}
+                          className="w-full pl-10 pr-3.5 rtl:pl-3.5 rtl:pr-10 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px] transition-colors"
+                        />
+                      </div>
                     </div>
 
                     {/* DNS Result Banner */}
@@ -902,13 +910,18 @@ const Settings = () => {
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                         {t.settings.domainName || 'Domain Name'} <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="text"
-                        value={domainInput}
-                        onChange={(e) => setDomainInput(e.target.value)}
-                        placeholder={t.settings.domainPlaceholder || 'e.g. panel.example.com'}
-                        className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                      />
+                      <div className="relative">
+                        <Globe className="w-4 h-4 text-slate-400 absolute left-3.5 rtl:left-auto rtl:right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={domainInput}
+                          onChange={(e) => setDomainInput(e.target.value)}
+                          placeholder={t.settings.domainPlaceholder || 'e.g. panel.example.com'}
+                          autoComplete="off"
+                          spellCheck={false}
+                          className="w-full pl-10 pr-3.5 rtl:pl-3.5 rtl:pr-10 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px] transition-colors"
+                        />
+                      </div>
                     </div>
 
                     {/* Certificate PEM */}
@@ -1083,6 +1096,7 @@ const Settings = () => {
                     placeholder="7000"
                     min="1"
                     max="65535"
+                    autoComplete="off"
                   />
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
@@ -1098,6 +1112,8 @@ const Settings = () => {
                   type="text"
                   value={settings.frp.token || ''}
                   onChange={(e) => updateFrp({ token: e.target.value })}
+                  autoComplete="off"
+                  spellCheck={false}
                   className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
                   placeholder="Leave empty for no authentication"
                 />
@@ -1173,6 +1189,8 @@ const Settings = () => {
                   type="password"
                   value={settings.telegram.bot_token || ''}
                   onChange={(e) => updateTelegram({ bot_token: e.target.value })}
+                  autoComplete="off"
+                  spellCheck={false}
                   className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all min-h-[44px]"
                   placeholder="Enter bot token from @BotFather"
                 />
@@ -1198,6 +1216,7 @@ const Settings = () => {
                             newIds[index] = e.target.value
                             updateTelegram({ admin_ids: newIds })
                           }}
+                          autoComplete="off"
                           className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                         />
                       </div>
@@ -1224,6 +1243,7 @@ const Settings = () => {
                           addAdminId()
                         }
                       }}
+                      autoComplete="off"
                       placeholder={t.settings.enterAdminId || 'Enter Telegram Admin ID'}
                       className="flex-1 px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                     />
