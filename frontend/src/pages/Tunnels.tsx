@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search } from 'lucide-react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search, LayoutGrid, List, ArrowRight } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -301,6 +301,24 @@ const Tunnels = () => {
 
   // ─── Search State ───────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
+
+  // ─── View Mode (List vs Grid) ──────────────────────────────
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
+    try {
+      return (localStorage.getItem('smite_tunnel_view_mode') as 'list' | 'grid') || 'list'
+    } catch {
+      return 'list'
+    }
+  })
+
+  const handleSetViewMode = (mode: 'list' | 'grid') => {
+    setViewMode(mode)
+    try {
+      localStorage.setItem('smite_tunnel_view_mode', mode)
+    } catch {
+      // Silently ignore storage errors
+    }
+  }
 
 
   useEffect(() => {
@@ -990,6 +1008,38 @@ const Tunnels = () => {
 
             {/* Right Action Controls: on mobile col-start-2 row-start-1, on desktop md:order-3 */}
             <div className="col-start-2 row-start-1 md:order-3 flex items-center gap-1.5 shrink-0 justify-end">
+              {/* View Mode Toggle (List / Grid) */}
+              <div className="flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] shrink-0" role="group" aria-label="View mode">
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode('list')}
+                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === 'list'
+                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                  title={t.tunnels.listView || 'List View'}
+                  aria-label={t.tunnels.listView || 'List View'}
+                  aria-pressed={viewMode === 'list'}
+                >
+                  <List size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode('grid')}
+                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                    viewMode === 'grid'
+                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                  title={t.tunnels.gridView || 'Grid View'}
+                  aria-label={t.tunnels.gridView || 'Grid View'}
+                  aria-pressed={viewMode === 'grid'}
+                >
+                  <LayoutGrid size={15} />
+                </button>
+              </div>
+
               {/* Select All Toggle Button */}
               {filteredTunnels.length > 0 && (
                 <button
@@ -1036,155 +1086,283 @@ const Tunnels = () => {
       </div>
 
       {/* ── Tunnel Cards ────────────────────────────────────── */}
-      <div className="space-y-4">
-        {filteredTunnels.length === 0 && (
-          searchQuery.trim() ? (
-            <EmptyState
-              icon={<Search size={32} />}
-              title={t.tunnels.noMatchingTunnels || 'No tunnels match your search'}
-              description={`No tunnels found with name or port matching "${searchQuery}".`}
-              action={{ label: t.tunnels.clearSearch || 'Clear search', onClick: () => setSearchQuery('') }}
-            />
-          ) : (
-            <EmptyState
-              icon={<Network size={32} />}
-              title="No tunnels in this category"
-              description="No tunnels match the selected category filter."
-              action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
-            />
-          )
-        )}
-        {filteredTunnels.map((tunnel) => {
-          const isReapplying = reapplyingTunnelId === tunnel.id
+      {filteredTunnels.length === 0 ? (
+        searchQuery.trim() ? (
+          <EmptyState
+            icon={<Search size={32} />}
+            title={t.tunnels.noMatchingTunnels || 'No tunnels match your search'}
+            description={`No tunnels found with name or port matching "${searchQuery}".`}
+            action={{ label: t.tunnels.clearSearch || 'Clear search', onClick: () => setSearchQuery('') }}
+          />
+        ) : (
+          <EmptyState
+            icon={<Network size={32} />}
+            title="No tunnels in this category"
+            description="No tunnels match the selected category filter."
+            action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
+          />
+        )
+      ) : (
+        <div className={viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4' : 'space-y-4'}>
+          {filteredTunnels.map((tunnel) => {
+            const isReapplying = reapplyingTunnelId === tunnel.id
+            const isSelected = selectedTunnelIds.has(tunnel.id)
+            const isDeleting = deletingTunnelId === tunnel.id
+            const isTesting = testingTunnelId === tunnel.id
 
-          // Extract ports from spec
-          const getPorts = (): string => {
-            if (tunnel.spec?.ports) {
-              if (Array.isArray(tunnel.spec.ports)) {
-                if (tunnel.core === 'backhaul' && typeof tunnel.spec.ports[0] === 'string' && tunnel.spec.ports[0].includes('=')) {
-                  return tunnel.spec.ports.map(p => {
-                    const portPart = p.split('=')[0]
-                    const port = portPart.includes(':') ? portPart.split(':')[1] : portPart
-                    return port
-                  }).join(', ')
+            // Extract ports from spec
+            const getPorts = (): string => {
+              if (tunnel.spec?.ports) {
+                if (Array.isArray(tunnel.spec.ports)) {
+                  if (tunnel.core === 'backhaul' && typeof tunnel.spec.ports[0] === 'string' && tunnel.spec.ports[0].includes('=')) {
+                    return tunnel.spec.ports.map(p => {
+                      const portPart = p.split('=')[0]
+                      const port = portPart.includes(':') ? portPart.split(':')[1] : portPart
+                      return port
+                    }).join(', ')
+                  }
+                  return tunnel.spec.ports.map(p => typeof p === 'object' && p.local ? p.local : p).join(', ')
+                } else if (typeof tunnel.spec.ports === 'string') {
+                  return tunnel.spec.ports
                 }
-                return tunnel.spec.ports.map(p => typeof p === 'object' && p.local ? p.local : p).join(', ')
-              } else if (typeof tunnel.spec.ports === 'string') {
-                return tunnel.spec.ports
               }
+              const port = tunnel.spec?.listen_port || tunnel.spec?.remote_port
+              return port ? port.toString() : 'N/A'
             }
-            const port = tunnel.spec?.listen_port || tunnel.spec?.remote_port
-            return port ? port.toString() : 'N/A'
-          }
 
-          const getCoreBadge = () => {
-            const coreColors: Record<string, { bg: string; text: string; border: string }> = {
-              rathole: { bg: 'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400', border: 'border-purple-500/20' },
-              backhaul: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/20' },
-              chisel: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
-              frp: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/20' },
-              gost: { bg: 'bg-indigo-500/10', text: 'text-indigo-600 dark:text-indigo-400', border: 'border-indigo-500/20' },
+            const getCoreBadge = () => {
+              const coreColors: Record<string, { bg: string; text: string; border: string }> = {
+                rathole: { bg: 'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400', border: 'border-purple-500/20' },
+                backhaul: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/20' },
+                chisel: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
+                frp: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/20' },
+                gost: { bg: 'bg-indigo-500/10', text: 'text-indigo-600 dark:text-indigo-400', border: 'border-indigo-500/20' },
+              }
+              return coreColors[tunnel.core] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
             }
-            return coreColors[tunnel.core] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
-          }
 
-          const coreBadge = getCoreBadge()
-          const ports = getPorts()
-          const iranNode = nodes.find(n => n.id === tunnel.iran_node_id || n.id === tunnel.node_id)
-          const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
+            let transmissionType: string | null = null
+            if (tunnel.core === 'chisel') {
+              transmissionType = 'TCP'
+            } else if (tunnel.core === 'rathole') {
+              const transport = tunnel.spec?.transport || (tunnel.type && tunnel.type !== 'rathole' ? tunnel.type : 'tcp')
+              transmissionType = transport.toUpperCase()
+            } else if (tunnel.type && tunnel.type.toLowerCase() !== tunnel.core.toLowerCase()) {
+              transmissionType = tunnel.type.toUpperCase()
+            }
 
-          const isSelected = selectedTunnelIds.has(tunnel.id)
-          const isDeleting = deletingTunnelId === tunnel.id
+            const getTransmissionBadge = (type: string) => {
+              const typeColors: Record<string, { bg: string; text: string; border: string }> = {
+                TCP: { bg: 'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20' },
+                UDP: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
+                WS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
+                WSS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
+                GRPC: { bg: 'bg-teal-500/10', text: 'text-teal-600 dark:text-teal-400', border: 'border-teal-500/20' },
+                TCPMUX: { bg: 'bg-violet-500/10', text: 'text-violet-600 dark:text-violet-400', border: 'border-violet-500/20' },
+              }
+              return typeColors[type] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
+            }
+            const transmissionBadge = transmissionType ? getTransmissionBadge(transmissionType) : null
 
-          return (
-            <div
-              key={tunnel.id}
-              className={`relative bg-white dark:bg-[#12161f]/90 rounded-3xl shadow-xs border transition-all duration-200 ${
-                isSelected
-                  ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-500/[0.03] shadow-md'
-                  : isDeleting
-                  ? 'border-rose-500/60 ring-2 ring-rose-500/20 bg-rose-500/[0.03] shadow-md opacity-80'
-                  : isReapplying
-                  ? 'border-emerald-500/60 shadow-emerald-500/10 ring-2 ring-emerald-500/20'
-                  : 'border-slate-200/80 dark:border-white/[0.07] hover:border-slate-300 dark:hover:border-white/[0.12] hover:shadow-md'
-              }`}
-            >
-              {/* ── Per-card loading overlay ── */}
-              {isReapplying && (
-                <div className="absolute inset-0 bg-white/80 dark:bg-[#12161f]/80 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
-                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-emerald-500/20">
-                    <Loader2 size={18} className="animate-spin text-emerald-500" />
-                    <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">Applying changes...</span>
-                  </div>
-                </div>
-              )}
+            let corePort: string | null = null
+            if (tunnel.core === 'rathole') {
+              if (tunnel.spec?.bind_addr) {
+                const match = tunnel.spec.bind_addr.match(/:(\d+)$/)
+                if (match) corePort = match[1]
+              }
+              if (!corePort && tunnel.spec?.control_port) {
+                corePort = tunnel.spec.control_port
+              }
+              if (!corePort) {
+                const remoteAddr = tunnel.spec?.remote_addr || ''
+                const match = remoteAddr.match(/:(\d+)$/)
+                if (match) corePort = match[1]
+              }
+              if (!corePort) corePort = '23333'
+            } else if (tunnel.core === 'chisel') {
+              corePort = tunnel.spec?.control_port || tunnel.spec?.server_port
+            } else if (tunnel.core === 'backhaul') {
+              corePort = tunnel.spec?.control_port || tunnel.spec?.public_port || '3080'
+            } else if (tunnel.core === 'frp') {
+              corePort = tunnel.spec?.bind_port || '7000'
+            }
 
-              {/* ── Per-card deleting overlay ── */}
-              {isDeleting && (
-                <div className="absolute inset-0 bg-white/85 dark:bg-[#12161f]/85 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
-                  <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/20">
-                    <Loader2 size={18} className="animate-spin text-rose-500" />
-                    <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">Deleting tunnel...</span>
-                  </div>
-                </div>
-              )}
+            const coreBadge = getCoreBadge()
+            const ports = getPorts()
+            const iranNode = nodes.find(n => n.id === tunnel.iran_node_id || n.id === tunnel.node_id)
+            const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
 
-              <div className="p-5 sm:p-6">
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                  <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
-                    {/* Multi-Selection Checkbox */}
-                    <button
-                      type="button"
-                      onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
-                      disabled={isReapplying || isDeleting}
-                      className={`mt-1 shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
-                        selectedTunnelIds.has(tunnel.id)
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
-                          : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
-                      }`}
-                      title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
-                    >
-                      {selectedTunnelIds.has(tunnel.id) && (
-                        <CheckCircle2 size={14} className="fill-current text-white" />
-                      )}
-                    </button>
-
-                    {/* Status Badge */}
-                    <div className="flex flex-col gap-1.5 shrink-0 pt-0.5">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
-                          tunnel.status === 'active'
-                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                            : tunnel.status === 'error'
-                            ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                            : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
-                        }`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
-                          tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
-                        }`} />
-                        {tunnel.status}
-                      </span>
-                      {Boolean(tunnel.spec?._pending_reapply) && (
-                        <span
-                          className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
-                          title="Configuration modified. Click Reapply to apply changes to live core."
-                        >
-                          Pending
-                        </span>
-                      )}
+            return (
+              <div
+                key={tunnel.id}
+                className={`relative bg-white dark:bg-[#12161f]/90 rounded-3xl shadow-xs border transition-all duration-200 ${
+                  viewMode === 'grid' ? 'flex flex-col justify-between h-full' : ''
+                } ${
+                  isSelected
+                    ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-500/[0.03] shadow-md'
+                    : isDeleting
+                    ? 'border-rose-500/60 ring-2 ring-rose-500/20 bg-rose-500/[0.03] shadow-md opacity-80'
+                    : isReapplying
+                    ? 'border-emerald-500/60 shadow-emerald-500/10 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200/80 dark:border-white/[0.07] hover:border-slate-300 dark:hover:border-white/[0.12] hover:shadow-md'
+                }`}
+              >
+                {/* ── Per-card loading overlay ── */}
+                {isReapplying && (
+                  <div className="absolute inset-0 bg-white/80 dark:bg-[#12161f]/80 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
+                    <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-emerald-500/20">
+                      <Loader2 size={18} className="animate-spin text-emerald-500" />
+                      <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">Applying changes...</span>
                     </div>
+                  </div>
+                )}
 
-                    <div className="flex-1 min-w-0 space-y-2.5">
-                      {/* Name, Core Badge, Category Badge, Transmission Badge, Ports, Latency */}
-                      <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
-                        <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">{tunnel.name}</h3>
+                {/* ── Per-card deleting overlay ── */}
+                {isDeleting && (
+                  <div className="absolute inset-0 bg-white/85 dark:bg-[#12161f]/85 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
+                    <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/20">
+                      <Loader2 size={18} className="animate-spin text-rose-500" />
+                      <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">Deleting tunnel...</span>
+                    </div>
+                  </div>
+                )}
+
+                {viewMode === 'grid' ? (
+                  /* ══════════════════════════════════════════════════════════
+                     GRID CARD LAYOUT
+                     ══════════════════════════════════════════════════════════ */
+                  <div className="p-4 sm:p-5 flex flex-col justify-between h-full gap-3.5">
+                    <div>
+                      {/* Top Bar: Checkbox + Status + Action Buttons */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {/* Multi-Selection Checkbox */}
+                          <button
+                            type="button"
+                            onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
+                            disabled={isReapplying || isDeleting}
+                            className={`shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                              selectedTunnelIds.has(tunnel.id)
+                                ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
+                                : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
+                            }`}
+                            title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
+                          >
+                            {selectedTunnelIds.has(tunnel.id) && (
+                              <CheckCircle2 size={14} className="fill-current text-white" />
+                            )}
+                          </button>
+
+                          {/* Status Badge */}
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap flex items-center gap-1.5 ${
+                              tunnel.status === 'active'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : tunnel.status === 'error'
+                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                              tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                            }`} />
+                            {tunnel.status}
+                          </span>
+
+                          {/* Pending Badge */}
+                          {Boolean(tunnel.spec?._pending_reapply) && (
+                            <span
+                              className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
+                              title="Configuration modified. Click Reapply to apply changes to live core."
+                            >
+                              Pending
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Action Icon Buttons */}
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleTestActiveTunnel(tunnel)}
+                            disabled={isReapplying || isDeleting || isTesting}
+                            className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
+                            title="Test Live Connection & Ping"
+                            aria-label="Test Live Connection & Ping"
+                          >
+                            {isTesting ? (
+                              <Loader2 size={15} className="animate-spin text-amber-500" />
+                            ) : (
+                              <Zap size={15} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => reapplyTunnel(tunnel)}
+                            disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
+                            className={`p-1.5 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer ${
+                              Boolean(tunnel.spec?._pending_reapply)
+                                ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
+                                : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
+                            }`}
+                            title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
+                            aria-label="Reapply tunnel"
+                          >
+                            {isReapplying ? (
+                              <Loader2 size={15} className="animate-spin" />
+                            ) : (
+                              <RotateCw size={15} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTunnel(tunnel)}
+                            disabled={isReapplying || isDeleting}
+                            className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
+                            title="Edit tunnel"
+                            aria-label="Edit tunnel"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTunnel(tunnel.id)}
+                            disabled={isReapplying || isDeleting}
+                            className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
+                            title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
+                            aria-label="Delete tunnel"
+                          >
+                            {isDeleting ? (
+                              <Loader2 size={15} className="animate-spin text-rose-500" />
+                            ) : (
+                              <Trash2 size={15} />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Tunnel Name */}
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white truncate mt-2.5" title={tunnel.name}>
+                        {tunnel.name}
+                      </h3>
+
+                      {/* Badges Row */}
+                      <div className="flex items-center gap-1.5 flex-wrap mt-2">
                         <span
-                          className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
                         >
                           {tunnel.core}
                         </span>
+
+                        {transmissionType && transmissionBadge && (
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
+                          >
+                            {transmissionType}
+                          </span>
+                        )}
+
                         {tunnel.category && (
                           <button
                             type="button"
@@ -1192,7 +1370,7 @@ const Tunnels = () => {
                               e.stopPropagation()
                               setActiveCategoryTab(tunnel.category || 'all')
                             }}
-                            className={`px-2.5 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
                               getCategoryColorClasses(
                                 categories.find(c => c.name === tunnel.category)?.color || 'blue'
                               ).bg
@@ -1207,231 +1385,316 @@ const Tunnels = () => {
                             }`}
                             title={`Filter tunnels by "${tunnel.category}"`}
                           >
-                            <Tag size={11} />
+                            <Tag size={10} />
                             <span>{tunnel.category}</span>
                           </button>
                         )}
-                        {(() => {
-                          let transmissionType = null
-                          if (tunnel.core === 'chisel') {
-                            transmissionType = 'TCP'
-                          } else if (tunnel.core === 'rathole') {
-                            const transport = tunnel.spec?.transport || (tunnel.type && tunnel.type !== 'rathole' ? tunnel.type : 'tcp')
-                            transmissionType = transport.toUpperCase()
-                          } else if (tunnel.type && tunnel.type.toLowerCase() !== tunnel.core.toLowerCase()) {
-                            transmissionType = tunnel.type.toUpperCase()
-                          }
-                          
-                          if (!transmissionType) return null
-                          
-                          const getTransmissionBadge = () => {
-                            const typeColors: Record<string, { bg: string; text: string; border: string }> = {
-                              TCP: { bg: 'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20' },
-                              UDP: { bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
-                              WS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
-                              WSS: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/20' },
-                              GRPC: { bg: 'bg-teal-500/10', text: 'text-teal-600 dark:text-teal-400', border: 'border-teal-500/20' },
-                              TCPMUX: { bg: 'bg-violet-500/10', text: 'text-violet-600 dark:text-violet-400', border: 'border-violet-500/20' },
-                            }
-                            return typeColors[transmissionType] || { bg: 'bg-slate-100 dark:bg-white/[0.05]', text: 'text-slate-600 dark:text-slate-300', border: 'border-slate-200 dark:border-white/[0.08]' }
-                          }
-                          
-                          const transmissionBadge = getTransmissionBadge()
-                          return (
-                            <span
-                              className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
-                            >
-                              {transmissionType}
-                            </span>
-                          )
-                        })()}
-                        <div className="flex items-center gap-1.5 text-xs">
-                          <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
-                          <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums">{ports}</span>
-                        </div>
+
                         <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
                       </div>
+                    </div>
 
-                      {/* Node & Server Route info */}
-                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 flex-wrap">
-                        {(() => {
-                          let corePort = null
-                          if (tunnel.core === 'rathole') {
-                            if (tunnel.spec?.bind_addr) {
-                              const match = tunnel.spec.bind_addr.match(/:(\d+)$/)
-                              if (match) corePort = match[1]
-                            }
-                            if (!corePort && tunnel.spec?.control_port) {
-                              corePort = tunnel.spec.control_port
-                            }
-                            if (!corePort) {
-                              const remoteAddr = tunnel.spec?.remote_addr || ''
-                              const match = remoteAddr.match(/:(\d+)$/)
-                              if (match) corePort = match[1]
-                            }
-                            if (!corePort) corePort = '23333'
-                          } else if (tunnel.core === 'chisel') {
-                            corePort = tunnel.spec?.control_port || tunnel.spec?.server_port
-                          } else if (tunnel.core === 'backhaul') {
-                            corePort = tunnel.spec?.control_port || tunnel.spec?.public_port || '3080'
-                          } else if (tunnel.core === 'frp') {
-                            corePort = tunnel.spec?.bind_port || '7000'
-                          }
-                          return corePort ? (
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-medium text-slate-400">Core Port:</span>
-                              <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
-                            </div>
-                          ) : null
-                        })()}
-                        {iranNode && (
-                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
-                            <span className="text-slate-400 text-[10px] uppercase font-mono">IR:</span>
-                            <span className="text-slate-700 dark:text-slate-300 font-semibold">{iranNode.name || iranNode.id.substring(0, 8)}</span>
-                          </div>
-                        )}
-                        {foreignServer && (
-                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
-                            <span className="text-slate-400 text-[10px] uppercase font-mono">EXT:</span>
-                            <span className="text-slate-700 dark:text-slate-300 font-semibold">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
-                          </div>
-                        )}
+                    {/* Bottom Details: Ports, Core Port, Topology Nodes */}
+                    <div className="pt-2.5 border-t border-slate-100 dark:border-white/[0.05] space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
+                        <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums truncate">{ports}</span>
                       </div>
+
+                      {corePort && (
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-medium text-slate-400">Core Port:</span>
+                          <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
+                        </div>
+                      )}
+
+                      {/* Topology Nodes */}
+                      {(iranNode || foreignServer) && (
+                        <div className="flex items-center gap-1.5 pt-1 text-[11px]">
+                          {iranNode && (
+                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={`Iran Node: ${iranNode.name || iranNode.id}`}>
+                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">IR:</span>
+                              <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                            </div>
+                          )}
+                          {iranNode && foreignServer && (
+                            <ArrowRight size={12} className="text-slate-400 shrink-0 rtl:rotate-180" />
+                          )}
+                          {foreignServer && (
+                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={`Foreign Server: ${foreignServer.name || foreignServer.id}`}>
+                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">EXT:</span>
+                              <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Error Message */}
                       {tunnel.status === 'error' && tunnel.error_message && (
-                        <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl leading-relaxed">
+                        <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 p-2 bg-rose-500/10 border border-rose-500/20 rounded-lg leading-relaxed">
                           {tunnel.error_message}
                         </div>
                       )}
                     </div>
                   </div>
+                ) : (
+                  /* ══════════════════════════════════════════════════════════
+                     LIST CARD LAYOUT
+                     ══════════════════════════════════════════════════════════ */
+                  <div className="p-5 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                      <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+                        {/* Multi-Selection Checkbox */}
+                        <button
+                          type="button"
+                          onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
+                          disabled={isReapplying || isDeleting}
+                          className={`mt-1 shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                            selectedTunnelIds.has(tunnel.id)
+                              ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
+                              : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
+                          }`}
+                          title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
+                        >
+                          {selectedTunnelIds.has(tunnel.id) && (
+                            <CheckCircle2 size={14} className="fill-current text-white" />
+                          )}
+                        </button>
 
-                  {/* Desktop Action Buttons */}
-                  <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleTestActiveTunnel(tunnel)}
-                      disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
-                      className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
-                      title="Test Live Connection & Ping"
-                      aria-label="Test Live Connection & Ping"
-                    >
-                      {testingTunnelId === tunnel.id ? (
-                        <Loader2 size={18} className="animate-spin text-amber-500" />
-                      ) : (
-                        <Zap size={18} />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reapplyTunnel(tunnel)}
-                      disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
-                      className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 ${
-                        Boolean(tunnel.spec?._pending_reapply)
-                          ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
-                          : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
-                      }`}
-                      title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
-                      aria-label="Reapply tunnel"
-                    >
-                      {isReapplying ? (
-                        <Loader2 size={18} className="animate-spin" />
-                      ) : (
-                        <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditingTunnel(tunnel)}
-                      disabled={isReapplying || isDeleting}
-                      className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
-                      title="Edit tunnel"
-                      aria-label="Edit tunnel"
-                    >
-                      <Edit2 size={18} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteTunnel(tunnel.id)}
-                      disabled={isReapplying || isDeleting}
-                      className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95"
-                      title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
-                      aria-label="Delete tunnel"
-                    >
-                      {isDeleting ? (
-                        <Loader2 size={18} className="animate-spin text-rose-500" />
-                      ) : (
-                        <Trash2 size={18} />
-                      )}
-                    </button>
+                        {/* Status Badge */}
+                        <div className="flex flex-col gap-1.5 shrink-0 pt-0.5">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
+                              tunnel.status === 'active'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : tunnel.status === 'error'
+                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                              tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                            }`} />
+                            {tunnel.status}
+                          </span>
+                          {Boolean(tunnel.spec?._pending_reapply) && (
+                            <span
+                              className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
+                              title="Configuration modified. Click Reapply to apply changes to live core."
+                            >
+                              Pending
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-2.5">
+                          {/* Name, Core Badge, Category Badge, Transmission Badge, Ports, Latency */}
+                          <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
+                            <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">{tunnel.name}</h3>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
+                            >
+                              {tunnel.core}
+                            </span>
+                            {tunnel.category && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setActiveCategoryTab(tunnel.category || 'all')
+                                }}
+                                className={`px-2.5 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                                  getCategoryColorClasses(
+                                    categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                                  ).bg
+                                } ${
+                                  getCategoryColorClasses(
+                                    categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                                  ).text
+                                } ${
+                                  getCategoryColorClasses(
+                                    categories.find(c => c.name === tunnel.category)?.color || 'blue'
+                                  ).border
+                                }`}
+                                title={`Filter tunnels by "${tunnel.category}"`}
+                              >
+                                <Tag size={11} />
+                                <span>{tunnel.category}</span>
+                              </button>
+                            )}
+                            {transmissionType && transmissionBadge && (
+                              <span
+                                className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
+                              >
+                                {transmissionType}
+                              </span>
+                            )}
+                            <div className="flex items-center gap-1.5 text-xs">
+                              <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums">{ports}</span>
+                            </div>
+                            <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                          </div>
+
+                          {/* Node & Server Route info */}
+                          <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 flex-wrap">
+                            {corePort && (
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-medium text-slate-400">Core Port:</span>
+                                <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
+                              </div>
+                            )}
+                            {iranNode && (
+                              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
+                                <span className="text-slate-400 text-[10px] uppercase font-mono">IR:</span>
+                                <span className="text-slate-700 dark:text-slate-300 font-semibold">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                              </div>
+                            )}
+                            {foreignServer && (
+                              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
+                                <span className="text-slate-400 text-[10px] uppercase font-mono">EXT:</span>
+                                <span className="text-slate-700 dark:text-slate-300 font-semibold">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Error Message */}
+                          {tunnel.status === 'error' && tunnel.error_message && (
+                            <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl leading-relaxed">
+                              {tunnel.error_message}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Desktop Action Buttons */}
+                      <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleTestActiveTunnel(tunnel)}
+                          disabled={isReapplying || isDeleting || isTesting}
+                          className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
+                          title="Test Live Connection & Ping"
+                          aria-label="Test Live Connection & Ping"
+                        >
+                          {isTesting ? (
+                            <Loader2 size={18} className="animate-spin text-amber-500" />
+                          ) : (
+                            <Zap size={18} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => reapplyTunnel(tunnel)}
+                          disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
+                          className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer ${
+                            Boolean(tunnel.spec?._pending_reapply)
+                              ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
+                              : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
+                          }`}
+                          title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
+                          aria-label="Reapply tunnel"
+                        >
+                          {isReapplying ? (
+                            <Loader2 size={18} className="animate-spin" />
+                          ) : (
+                            <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTunnel(tunnel)}
+                          disabled={isReapplying || isDeleting}
+                          className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
+                          title="Edit tunnel"
+                          aria-label="Edit tunnel"
+                        >
+                          <Edit2 size={18} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteTunnel(tunnel.id)}
+                          disabled={isReapplying || isDeleting}
+                          className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
+                          title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
+                          aria-label="Delete tunnel"
+                        >
+                          {isDeleting ? (
+                            <Loader2 size={18} className="animate-spin text-rose-500" />
+                          ) : (
+                            <Trash2 size={18} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mobile Action Buttons Bar */}
+                    <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-white/[0.05]">
+                      <button
+                        type="button"
+                        onClick={() => handleTestActiveTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting || isTesting}
+                        className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
+                        title="Test Live Connection & Ping"
+                        aria-label="Test Live Connection & Ping"
+                      >
+                        {isTesting ? (
+                          <Loader2 size={18} className="animate-spin text-amber-500" />
+                        ) : (
+                          <Zap size={18} />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => reapplyTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
+                        className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer ${
+                          Boolean(tunnel.spec?._pending_reapply)
+                            ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
+                            : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
+                        }`}
+                        title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
+                        aria-label="Reapply tunnel"
+                      >
+                        {isReapplying ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting}
+                        className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
+                        title="Edit tunnel"
+                        aria-label="Edit tunnel"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteTunnel(tunnel.id)}
+                        disabled={isReapplying || isDeleting}
+                        className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
+                        title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
+                        aria-label="Delete tunnel"
+                      >
+                        {isDeleting ? (
+                          <Loader2 size={18} className="animate-spin text-rose-500" />
+                        ) : (
+                          <Trash2 size={18} />
+                        )}
+                      </button>
+                    </div>
                   </div>
-                </div>
-
-                {/* Mobile Action Buttons Bar */}
-                <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-white/[0.05]">
-                  <button
-                    type="button"
-                    onClick={() => handleTestActiveTunnel(tunnel)}
-                    disabled={isReapplying || isDeleting || testingTunnelId === tunnel.id}
-                    className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
-                    title="Test Live Connection & Ping"
-                    aria-label="Test Live Connection & Ping"
-                  >
-                    {testingTunnelId === tunnel.id ? (
-                      <Loader2 size={18} className="animate-spin text-amber-500" />
-                    ) : (
-                      <Zap size={18} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => reapplyTunnel(tunnel)}
-                    disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
-                    className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 ${
-                      Boolean(tunnel.spec?._pending_reapply)
-                        ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
-                        : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
-                    }`}
-                    title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
-                    aria-label="Reapply tunnel"
-                  >
-                    {isReapplying ? (
-                      <Loader2 size={18} className="animate-spin" />
-                    ) : (
-                      <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingTunnel(tunnel)}
-                    disabled={isReapplying || isDeleting}
-                    className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
-                    title="Edit tunnel"
-                    aria-label="Edit tunnel"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteTunnel(tunnel.id)}
-                    disabled={isReapplying || isDeleting}
-                    className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
-                    title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
-                    aria-label="Delete tunnel"
-                  >
-                    {isDeleting ? (
-                      <Loader2 size={18} className="animate-spin text-rose-500" />
-                    ) : (
-                      <Trash2 size={18} />
-                    )}
-                  </button>
-                </div>
+                )}
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Reapply All — Confirm Dialog ─────────────────────── */}
       {showConfirmReapplyAll && (

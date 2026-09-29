@@ -93,6 +93,8 @@ interface Translations {
     searchPlaceholder: string
     noMatchingTunnels: string
     clearSearch: string
+    listView: string
+    gridView: string
   }
   coreHealth: {
     title: string
@@ -237,6 +239,8 @@ const translations: Record<Language, Translations> = {
       searchPlaceholder: 'Search by name or port...',
       noMatchingTunnels: 'No tunnels match your search',
       clearSearch: 'Clear search',
+      listView: 'List View',
+      gridView: 'Grid View',
     },
     coreHealth: {
       title: 'Core Health',
@@ -379,6 +383,8 @@ const translations: Record<Language, Translations> = {
       searchPlaceholder: 'جستجو بر اساس نام یا پورت...',
       noMatchingTunnels: 'هیچ تونلی مطابق با جستجو یافت نشد',
       clearSearch: 'پاک کردن جستجو',
+      listView: 'نمای لیستی',
+      gridView: 'نمای شبکه‌ای',
     },
     coreHealth: {
       title: 'سلامت هسته',
