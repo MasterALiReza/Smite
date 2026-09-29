@@ -1111,7 +1111,8 @@ const Settings = () => {
         )}
 
         {/* 2. Telegram Bot Settings */}
-        <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group">
+        {(activeTab === 'telegram' || activeTab === 'all') && (
+          <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group animate-fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/[0.05]">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-500 shrink-0 mt-0.5">
@@ -1302,9 +1303,11 @@ const Settings = () => {
             </div>
           )}
         </div>
+        )}
 
         {/* 3. Tunnel Settings (Auto Reapply) */}
-        <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group">
+        {(activeTab === 'tunnel' || activeTab === 'all') && (
+          <div className="bg-white dark:bg-[#12161f]/90 rounded-3xl border border-slate-200/80 dark:border-white/[0.07] p-5 sm:p-7 shadow-xs relative overflow-hidden group animate-fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/[0.05]">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-500 shrink-0 mt-0.5">
@@ -1386,25 +1389,28 @@ const Settings = () => {
             </div>
           )}
         </div>
+        )}
 
         {/* Bottom Save Action Bar */}
-        <div className="flex items-center justify-between pt-2">
-          <span className="text-xs text-slate-400 dark:text-slate-500 hidden sm:inline">
-            Changes will take effect immediately upon saving.
-          </span>
-          <button
-            onClick={saveSettings}
-            disabled={saving}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white font-semibold text-sm shadow-lg shadow-indigo-500/25 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
-          >
-            {saving ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            <span>{saving ? t.settings.saving : t.settings.saveSettings}</span>
-          </button>
-        </div>
+        {activeTab !== 'ssl' && (
+          <div className="flex items-center justify-between pt-2 animate-fade-in">
+            <span className="text-xs text-slate-400 dark:text-slate-500 hidden sm:inline">
+              Changes will take effect immediately upon saving.
+            </span>
+            <button
+              onClick={saveSettings}
+              disabled={saving}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white font-semibold text-sm shadow-lg shadow-indigo-500/25 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
+            >
+              {saving ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              <span>{saving ? t.settings.saving : t.settings.saveSettings}</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
