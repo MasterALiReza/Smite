@@ -90,6 +90,9 @@ interface Translations {
     confirmReapplySelected: string
     deleteCategory: string
     categoryCreated: string
+    searchPlaceholder: string
+    noMatchingTunnels: string
+    clearSearch: string
   }
   coreHealth: {
     title: string
@@ -231,6 +234,9 @@ const translations: Record<Language, Translations> = {
       confirmReapplySelected: 'Are you sure you want to reapply the selected tunnels?',
       deleteCategory: 'Delete Category',
       categoryCreated: 'Category created successfully',
+      searchPlaceholder: 'Search by name or port...',
+      noMatchingTunnels: 'No tunnels match your search',
+      clearSearch: 'Clear search',
     },
     coreHealth: {
       title: 'Core Health',
@@ -370,6 +376,9 @@ const translations: Record<Language, Translations> = {
       confirmReapplySelected: 'آیا از اعمال مجدد تانل‌های انتخاب شده مطمئن هستید؟',
       deleteCategory: 'حذف دسته‌بندی',
       categoryCreated: 'دسته‌بندی با موفقیت ایجاد شد',
+      searchPlaceholder: 'جستجو بر اساس نام یا پورت...',
+      noMatchingTunnels: 'هیچ تونلی مطابق با جستجو یافت نشد',
+      clearSearch: 'پاک کردن جستجو',
     },
     coreHealth: {
       title: 'سلامت هسته',

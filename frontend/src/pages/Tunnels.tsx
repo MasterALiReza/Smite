@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { Plus, Trash2, Edit2, RotateCw, CheckCircle2, XCircle, Clock, Loader2, X, Network, Zap, AlertTriangle, Activity, Folder, FolderPlus, FolderMinus, CheckSquare, Tag, Layers, Shield, Globe, Gamepad2, Sliders, Sparkles, Rocket, Fingerprint, Scale, ArrowLeftRight, ShieldCheck, EyeOff, Gauge, Radio, Key, Lock, Server, Cpu, Terminal, RefreshCw, Settings2, RadioTower, Wifi, Info, Dices, Search } from 'lucide-react'
 import api from '../api/client'
 import { parseAddressPort, formatAddressPort } from '../utils/addressUtils'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -299,6 +299,25 @@ const Tunnels = () => {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newCategoryColor, setNewCategoryColor] = useState('blue')
 
+  // ─── Search & Sticky Scroll States ───────────────────────────
+  const [searchQuery, setSearchQuery] = useState('')
+  const [isScrolled, setIsScrolled] = useState(false)
+  const headerSentinelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const sentinel = headerSentinelRef.current
+    if (!sentinel) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsScrolled(!entry.isIntersecting)
+      },
+      { threshold: 0 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [])
+
   useEffect(() => {
     fetchData()
     const params = new URLSearchParams(window.location.search)
@@ -440,10 +459,88 @@ const Tunnels = () => {
     })
   }
 
+  // ─── Search Port Token Extractor ──────────────────────────────────────
+  const getTunnelSearchPorts = (tunnel: Tunnel): string[] => {
+    const portList: string[] = []
+    const addPort = (val: any) => {
+      if (val === undefined || val === null) return
+      const s = String(val).trim()
+      if (s && !portList.includes(s)) portList.push(s)
+    }
+
+    if (tunnel.spec?.ports) {
+      if (Array.isArray(tunnel.spec.ports)) {
+        tunnel.spec.ports.forEach((p: any) => {
+          if (typeof p === 'string') {
+            const tokens = p.split(/[:=,\s]+/)
+            tokens.forEach(tok => addPort(tok))
+          } else if (typeof p === 'object' && p !== null) {
+            if (p.local) addPort(p.local)
+            if (p.remote) addPort(p.remote)
+            if (p.port) addPort(p.port)
+          } else {
+            addPort(p)
+          }
+        })
+      } else if (typeof tunnel.spec.ports === 'string') {
+        tunnel.spec.ports.split(/[,\s]+/).forEach(tok => {
+          const subTokens = tok.split(/[:=]/)
+          subTokens.forEach(st => addPort(st))
+        })
+      }
+    }
+
+    addPort(tunnel.spec?.listen_port)
+    addPort(tunnel.spec?.remote_port)
+    addPort(tunnel.spec?.bind_port)
+    addPort(tunnel.spec?.control_port)
+    addPort(tunnel.spec?.public_port)
+    addPort(tunnel.spec?.client_port)
+    addPort(tunnel.spec?.server_port)
+    addPort(tunnel.spec?.port)
+
+    if (typeof tunnel.spec?.bind_addr === 'string' && tunnel.spec.bind_addr.includes(':')) {
+      addPort(tunnel.spec.bind_addr.split(':').pop())
+    }
+    if (typeof tunnel.spec?.remote_addr === 'string' && tunnel.spec.remote_addr.includes(':')) {
+      addPort(tunnel.spec.remote_addr.split(':').pop())
+    }
+    if (typeof tunnel.spec?.target_addr === 'string' && tunnel.spec.target_addr.includes(':')) {
+      addPort(tunnel.spec.target_addr.split(':').pop())
+    }
+
+    return portList
+  }
+
   const filteredTunnels = tunnels.filter(t => {
-    if (activeCategoryTab === 'all') return true
-    if (activeCategoryTab === 'uncategorized') return !t.category
-    return t.category === activeCategoryTab
+    // 1. Category Filter
+    if (activeCategoryTab !== 'all') {
+      if (activeCategoryTab === 'uncategorized' && t.category) return false
+      if (activeCategoryTab !== 'uncategorized' && t.category !== activeCategoryTab) return false
+    }
+
+    // 2. Search Query Filter
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return true
+
+    // Match tunnel name
+    if (t.name?.toLowerCase().includes(query)) return true
+
+    // Match any port associated with this tunnel
+    const ports = getTunnelSearchPorts(t)
+    if (ports.some(p => p.toLowerCase().includes(query))) return true
+
+    // Match core or protocol
+    if (t.core?.toLowerCase().includes(query)) return true
+    if (t.type?.toLowerCase().includes(query)) return true
+
+    // Match Iran or Foreign node name
+    const iranNode = nodes.find(n => n.id === t.iran_node_id || n.id === t.node_id)
+    if (iranNode?.name?.toLowerCase().includes(query)) return true
+    const foreignServer = servers.find(s => s.id === t.foreign_node_id)
+    if (foreignServer?.name?.toLowerCase().includes(query)) return true
+
+    return false
   })
 
   const toggleSelectAllFiltered = () => {
@@ -713,185 +810,270 @@ const Tunnels = () => {
         </div>
       </div>
 
-      {/* ── Category Filter & Action Bar ───────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-2 bg-slate-100/70 dark:bg-[#12161f]/80 rounded-2xl border border-slate-200/80 dark:border-white/[0.07] backdrop-blur-md">
-        <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 scrollbar-none">
-          {/* All Tunnels Tab */}
-          <button
-            type="button"
-            onClick={() => setActiveCategoryTab('all')}
-            className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 select-none cursor-pointer ${
-              activeCategoryTab === 'all'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'bg-white dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.06] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
-            }`}
-          >
-            <Layers size={14} className="shrink-0 opacity-80" />
-            <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-              activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-            }`}>
-              {tunnels.length}
-            </span>
-          </button>
+      {/* ── Sentinel for detecting scroll past header ── */}
+      <div ref={headerSentinelRef} className="h-px w-full pointer-events-none -mt-3 mb-1" />
 
-          {/* Category Tabs */}
-          {categories.map((cat) => {
-            const count = tunnels.filter(t => t.category === cat.name).length
-            const colorStyle = getCategoryColorClasses(cat.color)
-            const isActive = activeCategoryTab === cat.name
-            return (
-              <div
-                key={cat.id}
-                onClick={() => setActiveCategoryTab(cat.name)}
-                className={`group/cat h-9 pl-3 pr-2 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
-                  isActive
-                    ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-indigo-500/25`
-                    : `bg-white dark:bg-[#161c28] ${colorStyle.border} ${colorStyle.text} hover:bg-slate-50/80 dark:hover:bg-white/[0.04]`
-                }`}
-              >
-                <Tag size={13} className="shrink-0 opacity-80" />
-                <span className="truncate max-w-[130px]">{cat.name}</span>
-                <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-                  isActive ? 'bg-white/25 text-white' : `${colorStyle.bg} ${colorStyle.text}`
-                }`}>
-                  {count}
-                </span>
-                {/* Clean inline delete icon with safe confirmation */}
+      {/* ── Category Filter & Action Bar ───────────────────────────────── */}
+      <div
+        className={`sticky top-2 z-20 transition-all duration-300 rounded-2xl border p-2 sm:p-2.5 backdrop-blur-xl ${
+          isScrolled
+            ? 'bg-white/95 dark:bg-[#0c101d]/95 border-indigo-500/20 dark:border-indigo-400/20 shadow-lg shadow-indigo-500/5 ring-1 ring-black/5 dark:ring-white/5'
+            : 'bg-slate-100/70 dark:bg-[#12161f]/80 border-slate-200/80 dark:border-white/[0.07] shadow-2xs'
+        }`}
+      >
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+          {/* Left/Center: Search Bar + Categories */}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Port & Name Search Input */}
+            <div className="relative w-full sm:w-60 md:w-64 shrink-0">
+              <Search size={14} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t.tunnels.searchPlaceholder || 'Search name or port...'}
+                aria-label={t.tunnels.searchPlaceholder || 'Search name or port'}
+                className="w-full h-9 ps-9 pe-8 bg-white dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
+              />
+              {searchQuery && (
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    deleteCategory(cat.name)
-                  }}
-                  className={`p-1 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
-                    isActive
-                      ? 'text-white/70 hover:text-white hover:bg-white/20'
-                      : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
-                  }`}
-                  title={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
+                  onClick={() => setSearchQuery('')}
+                  aria-label={t.tunnels.clearSearch || 'Clear search'}
+                  className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-md transition-colors cursor-pointer"
+                  title={t.tunnels.clearSearch || 'Clear search'}
                 >
-                  <X size={13} strokeWidth={2.5} />
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            {/* Category Tabs */}
+            <div className="flex items-center gap-2 overflow-x-auto py-1 px-1 scrollbar-none flex-1">
+              {/* All Tunnels Tab */}
+              <button
+                type="button"
+                onClick={() => setActiveCategoryTab('all')}
+                className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 select-none cursor-pointer ${
+                  activeCategoryTab === 'all'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.06] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
+                }`}
+              >
+                <Layers size={13} className="shrink-0 opacity-80" />
+                <span>{t.tunnels.allTunnels || 'All Tunnels'}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
+                  activeCategoryTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                }`}>
+                  {tunnels.length}
+                </span>
+              </button>
+
+              {/* Category Tabs */}
+              {categories.map((cat) => {
+                const count = tunnels.filter(t => t.category === cat.name).length
+                const colorStyle = getCategoryColorClasses(cat.color)
+                const isActive = activeCategoryTab === cat.name
+                return (
+                  <div
+                    key={cat.id}
+                    onClick={() => setActiveCategoryTab(cat.name)}
+                    className={`group/cat h-9 pl-2.5 pr-1.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer ${
+                      isActive
+                        ? `${colorStyle.activeBg} ${colorStyle.border} shadow-xs ring-2 ring-indigo-500/25`
+                        : `bg-white dark:bg-[#161c28] ${colorStyle.border} ${colorStyle.text} hover:bg-slate-50/80 dark:hover:bg-white/[0.04]`
+                    }`}
+                  >
+                    <Tag size={12} className="shrink-0 opacity-80" />
+                    <span className="truncate max-w-[120px]">{cat.name}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
+                      isActive ? 'bg-white/25 text-white' : `${colorStyle.bg} ${colorStyle.text}`
+                    }`}>
+                      {count}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteCategory(cat.name)
+                      }}
+                      className={`p-1 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
+                        isActive
+                          ? 'text-white/70 hover:text-white hover:bg-white/20'
+                          : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/cat:opacity-100'
+                      }`}
+                      title={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
+                      aria-label={`${t.tunnels.deleteCategory || 'Delete category'} "${cat.name}"`}
+                    >
+                      <X size={12} strokeWidth={2.5} />
+                    </button>
+                  </div>
+                )
+              })}
+
+              {/* Uncategorized Tab */}
+              {tunnels.some(t => !t.category) && (
+                <button
+                  type="button"
+                  onClick={() => setActiveCategoryTab('uncategorized')}
+                  className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer ${
+                    activeCategoryTab === 'uncategorized'
+                      ? 'bg-slate-800 dark:bg-slate-700 border-slate-700 text-white shadow-xs'
+                      : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
+                  }`}
+                >
+                  <FolderMinus size={13} className="shrink-0 opacity-70" />
+                  <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
+                    activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                  }`}>
+                    {tunnels.filter(t => !t.category).length}
+                  </span>
+                </button>
+              )}
+
+              {/* Add Category Button */}
+              <button
+                type="button"
+                onClick={() => setShowCreateCategoryModal(true)}
+                className="h-9 px-2.5 rounded-xl border border-dashed border-slate-300 dark:border-white/20 hover:border-indigo-500 dark:hover:border-indigo-400 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 bg-white/40 dark:bg-[#161c28]/40 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 text-xs font-semibold flex items-center gap-1 transition-all shrink-0 cursor-pointer"
+                title={t.tunnels.newCategory || 'New Category'}
+                aria-label={t.tunnels.newCategory || 'New Category'}
+              >
+                <FolderPlus size={13} />
+                <span>{t.tunnels.newCategory || 'New Category'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Right Action Controls: Select All & Actions */}
+          <div className="flex items-center gap-2 shrink-0 justify-end flex-wrap sm:flex-nowrap">
+            {/* Select All Action */}
+            {filteredTunnels.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleSelectAllFiltered}
+                className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer ${
+                  filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                    ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-600 dark:text-indigo-400'
+                    : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <CheckSquare
+                  size={14}
+                  className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}
+                />
+                <span className="whitespace-nowrap">
+                  {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                    ? (t.tunnels.deselectAll || 'Deselect All')
+                    : `${t.tunnels.selectAll || 'Select All'} (${filteredTunnels.length})`}
+                </span>
+              </button>
+            )}
+
+            {/* When items are selected: Show Batch actions in sticky dock */}
+            {selectedTunnelIds.size > 0 ? (
+              <div className="flex items-center gap-1.5 shrink-0 animate-fade-in">
+                <span className="h-9 px-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center gap-1 font-mono font-bold text-xs">
+                  <span>{selectedTunnelIds.size}</span>
+                  <span className="hidden sm:inline font-sans font-medium text-[11px] opacity-80">{t.tunnels.selectedCount || 'selected'}</span>
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleReapplySelected}
+                  disabled={!!reapplyAllProgress && !reapplyAllDone}
+                  aria-label={t.tunnels.reapplySelected || 'Reapply Selected'}
+                  className="h-9 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.reapplySelected || 'Reapply Selected'}
+                >
+                  <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                  <span>{t.tunnels.reapplySelected || 'Reapply Selected'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAssignCategoryModal(true)}
+                  aria-label={t.tunnels.moveToCategory || 'Move to Category'}
+                  className="h-9 px-2.5 sm:px-3 rounded-xl bg-white dark:bg-[#161c28] hover:bg-slate-50 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-white/[0.08] font-semibold text-xs flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.moveToCategory || 'Move to Category'}
+                >
+                  <Folder size={13} />
+                  <span className="hidden sm:inline">{t.tunnels.moveToCategory || 'Category'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedTunnelIds(new Set())}
+                  aria-label={t.tunnels.deselectAll || 'Clear selection'}
+                  className="h-9 w-9 rounded-xl bg-white dark:bg-[#161c28] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-white/[0.08] flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+                  title={t.tunnels.deselectAll || 'Clear selection'}
+                >
+                  <X size={14} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  aria-label={t.tunnels.createTunnel}
+                  className="h-9 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={t.tunnels.createTunnel}
+                >
+                  <Plus size={14} />
+                  <span>{t.tunnels.createTunnel}</span>
                 </button>
               </div>
-            )
-          })}
+            ) : (
+              /* When NO items are selected and user is scrolled down: Show persistent Reapply All + Create Tunnel */
+              isScrolled && (
+                <div className="flex items-center gap-1.5 shrink-0 animate-fade-in">
+                  <button
+                    type="button"
+                    onClick={handleReapplyAll}
+                    disabled={!!reapplyAllProgress && !reapplyAllDone}
+                    aria-label={t.tunnels.reapplyAll}
+                    className="h-9 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                    title={t.tunnels.reapplyAll}
+                  >
+                    <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                    <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
+                  </button>
 
-          {/* Uncategorized Tab */}
-          {tunnels.some(t => !t.category) && (
-            <button
-              type="button"
-              onClick={() => setActiveCategoryTab('uncategorized')}
-              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
-                activeCategoryTab === 'uncategorized'
-                  ? 'bg-slate-800 dark:bg-slate-700 border-slate-700 text-white shadow-xs'
-                  : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
-              }`}
-            >
-              <FolderMinus size={14} className="shrink-0 opacity-70" />
-              <span>{t.tunnels.uncategorized || 'Uncategorized'}</span>
-              <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold leading-none tabular-nums ${
-                activeCategoryTab === 'uncategorized' ? 'bg-white/25 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-              }`}>
-                {tunnels.filter(t => !t.category).length}
-              </span>
-            </button>
-          )}
-
-          {/* Add Category Button */}
-          <button
-            type="button"
-            onClick={() => setShowCreateCategoryModal(true)}
-            className="h-9 px-3 rounded-xl border border-dashed border-slate-300 dark:border-white/20 hover:border-indigo-500 dark:hover:border-indigo-400 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 bg-white/40 dark:bg-[#161c28]/40 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer"
-            title={t.tunnels.newCategory || 'New Category'}
-          >
-            <FolderPlus size={14} />
-            <span>{t.tunnels.newCategory || 'New Category'}</span>
-          </button>
-        </div>
-
-        {/* Select All Action */}
-        {filteredTunnels.length > 0 && (
-          <div className="flex items-center shrink-0 px-1">
-            <button
-              type="button"
-              onClick={toggleSelectAllFiltered}
-              className={`h-9 px-3.5 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 shrink-0 border select-none cursor-pointer ${
-                filteredTunnels.every(t => selectedTunnelIds.has(t.id))
-                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-600 dark:text-indigo-400'
-                  : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <CheckSquare
-                size={15}
-                className={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}
-              />
-              <span>
-                {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
-                  ? (t.tunnels.deselectAll || 'Deselect All')
-                  : `${t.tunnels.selectAll || 'Select All'} (${filteredTunnels.length})`}
-              </span>
-            </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(true)}
+                    aria-label={t.tunnels.createTunnel}
+                    className="h-9 px-3 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                    title={t.tunnels.createTunnel}
+                  >
+                    <Plus size={14} />
+                    <span>{t.tunnels.createTunnel}</span>
+                  </button>
+                </div>
+              )
+            )}
           </div>
-        )}
+        </div>
       </div>
-
-      {/* ── Sticky Floating Batch Action Bar ─────────────────────────── */}
-      {selectedTunnelIds.size > 0 && (
-        <div className="sticky top-4 z-30 p-3 sm:p-4 rounded-2xl bg-slate-900/95 dark:bg-[#0c0f17]/95 backdrop-blur-xl text-white shadow-2xl border border-slate-700/60 dark:border-white/10 flex flex-wrap items-center justify-between gap-3 animate-slide-up">
-          <div className="flex items-center gap-2.5">
-            <span className="w-7 h-7 rounded-lg bg-indigo-500/30 flex items-center justify-center font-mono font-bold text-sm text-indigo-200 border border-indigo-400/30">
-              {selectedTunnelIds.size}
-            </span>
-            <span className="font-semibold text-sm">
-              {selectedTunnelIds.size} {t.tunnels.selectedCount || 'selected'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Selective Reapply Button */}
-            <button
-              type="button"
-              onClick={handleReapplySelected}
-              disabled={!!reapplyAllProgress && !reapplyAllDone}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
-            >
-              <RotateCw size={15} />
-              <span>{t.tunnels.reapplySelected || 'Reapply Selected'}</span>
-            </button>
-
-            {/* Assign Category Button */}
-            <button
-              type="button"
-              onClick={() => setShowAssignCategoryModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition-all border border-white/10 active:scale-95 cursor-pointer"
-            >
-              <Folder size={15} />
-              <span>{t.tunnels.moveToCategory || 'Move to Category'}</span>
-            </button>
-
-            {/* Clear Selection */}
-            <button
-              type="button"
-              onClick={() => setSelectedTunnelIds(new Set())}
-              className="px-2.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white text-xs font-semibold transition-all active:scale-95 cursor-pointer"
-              title={t.tunnels.deselectAll || 'Clear selection'}
-            >
-              <X size={15} />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── Tunnel Cards ────────────────────────────────────── */}
       <div className="space-y-4">
         {filteredTunnels.length === 0 && (
-          <EmptyState
-            icon={<Network size={32} />}
-            title="No tunnels in this category"
-            description="No tunnels match the selected category filter."
-            action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
-          />
+          searchQuery.trim() ? (
+            <EmptyState
+              icon={<Search size={32} />}
+              title={t.tunnels.noMatchingTunnels || 'No tunnels match your search'}
+              description={`No tunnels found with name or port matching "${searchQuery}".`}
+              action={{ label: t.tunnels.clearSearch || 'Clear search', onClick: () => setSearchQuery('') }}
+            />
+          ) : (
+            <EmptyState
+              icon={<Network size={32} />}
+              title="No tunnels in this category"
+              description="No tunnels match the selected category filter."
+              action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
+            />
+          )
         )}
         {filteredTunnels.map((tunnel) => {
           const isReapplying = reapplyingTunnelId === tunnel.id
