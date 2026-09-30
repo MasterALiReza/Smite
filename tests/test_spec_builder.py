@@ -490,12 +490,12 @@ def test_spec_builder_frp_wss_mode():
     s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     assert s["mode"] == "server"
     assert c["mode"] == "client"
-    assert s["transport_type"] == "wss"
-    assert c["transport"] == "wss"
+    assert s["transport_type"] == "websocket"
+    assert c["transport"] == "websocket"
     assert c["tls_enable"] is True
     assert c["custom_sni"] == "cdn.example.com"
     assert "tls_cert_pem" in s and "BEGIN CERTIFICATE" in s["tls_cert_pem"]
-    assert "tls_key_pem" in s and "BEGIN RSA PRIVATE KEY" in s["tls_key_pem"]
+    assert "tls_key_pem" in s and ("BEGIN RSA PRIVATE KEY" in s["tls_key_pem"] or "BEGIN PRIVATE KEY" in s["tls_key_pem"])
 
 
 def test_spec_builder_frp_quic_and_kcp():
@@ -683,6 +683,41 @@ def test_spec_builder_gost_reverse_default_and_force_direct():
     assert c_d["mode"] == "server"
     assert s_d["is_reverse"] is False
     assert c_d["is_reverse"] is False
+
+
+def test_spec_builder_gost_kcp_quic_no_forced_yamux():
+    """Verify GOST KCP and QUIC do not force yamux multiplexing for UDP tunnels"""
+    tunnel_kcp = DummyTunnel(
+        id="t-gost-kcp",
+        core="gost",
+        type="udp",
+        spec={"ports": [51820], "transport": "kcp", "transport_type": "kcp"}
+    )
+    s_k, c_k = build_tunnel_node_specs(tunnel_kcp, "178.239.146.188", "103.83.86.35")
+    assert s_k.get("multiplex") is not True
+    assert c_k.get("multiplex") is not True
+
+    tunnel_quic = DummyTunnel(
+        id="t-gost-quic",
+        core="gost",
+        type="udp",
+        spec={"ports": [51820], "transport": "quic", "transport_type": "quic"}
+    )
+    s_q, c_q = build_tunnel_node_specs(tunnel_quic, "178.239.146.188", "103.83.86.35")
+    assert s_q.get("multiplex") is not True
+    assert c_q.get("multiplex") is not True
+
+    # But stream-based transports (tcp, ws, grpc) SHOULD default to multiplexing for UDP mode
+    tunnel_grpc = DummyTunnel(
+        id="t-gost-grpc",
+        core="gost",
+        type="udp",
+        spec={"ports": [51820], "transport": "grpc", "transport_type": "grpc"}
+    )
+    s_g, c_g = build_tunnel_node_specs(tunnel_grpc, "178.239.146.188", "103.83.86.35")
+    assert s_g.get("multiplex") is True
+    assert c_g.get("multiplex") is True
+    assert c_g.get("mux_type") == "yamux"
 
 
 if __name__ == "__main__":

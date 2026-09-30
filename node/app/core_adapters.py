@@ -610,6 +610,10 @@ tls = {tls_val}
                         pfx_bytes = base64.b64decode(pfx_b64)
                         with open(pfx_path, "wb") as pf:
                             pf.write(pfx_bytes)
+                        try:
+                            os.chmod(pfx_path, 0o600)
+                        except Exception:
+                            pass
                     elif not pfx_path.exists():
                         raise ValueError(f"Rathole server in WSS mode requires 'tls_pkcs12_b64' or {pfx_path}")
 
@@ -651,6 +655,10 @@ nodelay = true
             config_path = self.config_dir / f"{tunnel_id}.toml"
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write(config)
+            try:
+                os.chmod(config_path, 0o600)
+            except Exception:
+                pass
         else:
             remote_addr = spec.get('remote_addr', '').strip()
             token = spec.get('token', '').strip()
@@ -719,6 +727,10 @@ tls = {tls_val}
                     if ca_pem:
                         with open(ca_path, "w", encoding="utf-8") as cf:
                             cf.write(ca_pem.strip() + "\n")
+                        try:
+                            os.chmod(ca_path, 0o600)
+                        except Exception:
+                            pass
 
                     sni = sanitize_config_str(
                         spec.get('custom_sni')
@@ -735,11 +747,12 @@ tls = {tls_val}
                     if sni:
                         config += f'hostname = "{sni}"\n'
             
+            target_host = spec.get("target_host") or spec.get("local_host") or "127.0.0.1"
             # Create multiple service sections for multiple ports
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                local_addr = f"127.0.0.1:{port_num}"
+                local_addr = f"{target_host}:{port_num}"
                 
                 if tunnel_type == 'tcp+udp':
                     config += f"""
@@ -769,6 +782,10 @@ nodelay = true
             config_path = self.config_dir / f"{tunnel_id}.toml"
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write(config)
+            try:
+                os.chmod(config_path, 0o600)
+            except Exception:
+                pass
             
         mode_flag = "-s" if mode == 'server' else "-c"
         log_path = self.config_dir / f"{tunnel_id}.log"
@@ -1095,6 +1112,10 @@ class BackhaulAdapter:
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"server": server_config}), encoding="utf-8")
+            try:
+                os.chmod(config_path, 0o600)
+            except Exception:
+                pass
 
             binary_path = self._resolve_binary_path()
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
@@ -1195,6 +1216,10 @@ class BackhaulAdapter:
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
             config_path.write_text(self._render_toml({"client": config_dict}), encoding="utf-8")
+            try:
+                os.chmod(config_path, 0o600)
+            except Exception:
+                pass
 
             binary_path = self._resolve_binary_path()
 
@@ -1417,6 +1442,7 @@ class ChiselAdapter:
                     with open(key_path, "w") as kf:
                         kf.write(tls_key_pem)
                     try:
+                        os.chmod(cert_path, 0o600)
                         os.chmod(key_path, 0o600)
                     except Exception:
                         pass
@@ -1495,6 +1521,7 @@ class ChiselAdapter:
             max_retry_count = spec.get('max_retry_count')
             max_retry_interval = spec.get('max_retry_interval') or '10s'
             
+            target_host = spec.get("target_host") or spec.get("local_host") or "127.0.0.1"
             reverse_specs = []
             ports = spec.get('ports') or []
             
@@ -1506,20 +1533,20 @@ class ChiselAdapter:
                 remote_port = spec.get('remote_port')
                 if local_port and remote_port:
                     if tunnel_proto == 'udp':
-                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}/udp")
+                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}/udp")
                     elif tunnel_proto == 'tcp+udp':
-                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
-                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}/udp")
+                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}")
+                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}/udp")
                     else:
-                        reverse_specs.append(f"R:{remote_port}:127.0.0.1:{local_port}")
+                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}")
                 elif local_port:
                     if tunnel_proto == 'udp':
-                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}/udp")
+                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}/udp")
                     elif tunnel_proto == 'tcp+udp':
-                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
-                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}/udp")
+                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}")
+                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}/udp")
                     else:
-                        reverse_specs.append(f"R:{local_port}:127.0.0.1:{local_port}")
+                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}")
             else:
                 for port_item in ports:
                     remote_p = None
@@ -1537,12 +1564,12 @@ class ChiselAdapter:
 
                     if remote_p and local_p:
                         if tunnel_proto == 'udp':
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}/udp")
+                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}/udp")
                         elif tunnel_proto == 'tcp+udp':
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}/udp")
+                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}")
+                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}/udp")
                         else:
-                            reverse_specs.append(f"R:{remote_p}:127.0.0.1:{local_p}")
+                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}")
             
             if not reverse_specs:
                 raise ValueError("Chisel client requires at least one port mapping (R:remote:local)")
@@ -1570,6 +1597,10 @@ class ChiselAdapter:
                     ca_path = self.config_dir / f"{tunnel_id}_ca.pem"
                     with open(ca_path, "w") as cf:
                         cf.write(tls_ca_pem)
+                    try:
+                        os.chmod(ca_path, 0o600)
+                    except Exception:
+                        pass
                     cmd.extend(["--tls-ca", str(ca_path)])
                 
                 custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('sni')
@@ -1768,6 +1799,7 @@ class FrpAdapter:
                 with open(key_file, 'w', encoding='utf-8') as kf:
                     kf.write(tls_key_pem)
                 try:
+                    os.chmod(cert_file, 0o600)
                     os.chmod(key_file, 0o600)
                 except Exception:
                     pass
@@ -1824,6 +1856,10 @@ class FrpAdapter:
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
+            try:
+                os.chmod(config_file, 0o600)
+            except Exception:
+                pass
             
             logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, proto={transport_proto}, tls={'force' if force_tls else 'off'}, token={'set' if clean_token else 'none'}")
             
@@ -2070,6 +2106,10 @@ transport:
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
+            try:
+                os.chmod(config_file, 0o600)
+            except Exception:
+                pass
             
             logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={clean_server_addr}:{server_port}")
             
@@ -2243,7 +2283,7 @@ class GostAdapter:
             tunnel_proto = "tcp"
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
-        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp"]
+        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp", "kcp", "quic"]
 
         config = {
             "services": [],
@@ -2281,26 +2321,31 @@ class GostAdapter:
             # Handler & Protocol Selection
             handler_type = spec.get("handler_type") or "relay"
             
-            keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
-            listener_metadata = {
-                "keepAlive": True,
-                "keepAliveInterval": keepalive_interval,
-                "keepAliveTimeout": "60s",
-                "idleTimeout": "0s",
-                "nodelay": True,
-            }
-            if spec.get("ws_path"):
-                listener_metadata["path"] = spec.get("ws_path")
-            if is_reverse:
-                listener_metadata["bind"] = True
-            if enable_mux:
-                listener_metadata["mux.type"] = mux_type
-                listener_metadata["nodelay"] = True
-            if gost_type == "kcp":
-                listener_metadata["nodelay"] = True
-                listener_metadata["interval"] = "20ms"
-                listener_metadata["resend"] = 2
-                listener_metadata["nc"] = 1
+            if gost_type in ["kcp", "quic", "udp", "rudp"]:
+                listener_metadata = {}
+                if is_reverse:
+                    listener_metadata["bind"] = True
+                if gost_type == "kcp":
+                    listener_metadata["nodelay"] = True
+                    listener_metadata["interval"] = "20ms"
+                    listener_metadata["resend"] = 2
+                    listener_metadata["nc"] = 1
+            else:
+                keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
+                listener_metadata = {
+                    "keepAlive": True,
+                    "keepAliveInterval": keepalive_interval,
+                    "keepAliveTimeout": "60s",
+                    "idleTimeout": "0s",
+                    "nodelay": True,
+                }
+                if spec.get("ws_path"):
+                    listener_metadata["path"] = spec.get("ws_path")
+                if is_reverse:
+                    listener_metadata["bind"] = True
+                if enable_mux:
+                    listener_metadata["mux.type"] = mux_type
+                    listener_metadata["nodelay"] = True
                 
             server_listener_type = "sshd" if gost_type == "ssh" else gost_type
             listener = {"type": server_listener_type}
@@ -2337,9 +2382,9 @@ class GostAdapter:
                     }
                 ]
                 
-            handler_metadata = {
-                "keepAlive": True,
-            }
+            handler_metadata = {}
+            if gost_type not in ["kcp", "quic", "udp", "rudp"]:
+                handler_metadata["keepAlive"] = True
             if is_reverse:
                 handler_metadata["bind"] = True
             if enable_mux:
@@ -2502,19 +2547,28 @@ class GostAdapter:
                 dialer["resolver"] = f"resolver-{tunnel_id}"
             
             # keepalive & socket metadata for stability
-            keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
-            dialer_metadata["keepAlive"] = True
-            dialer_metadata["keepAliveInterval"] = keepalive_interval
-            dialer_metadata["keepAliveTimeout"] = "60s"
-            dialer_metadata["timeout"] = "20s"
-            dialer_metadata["idleTimeout"] = "0s"
-            dialer_metadata["nodelay"] = True
-            
-            if gost_type == "kcp":
+            if gost_type in ["kcp", "quic", "udp", "rudp"]:
+                dialer_metadata.pop("keepAlive", None)
+                dialer_metadata.pop("keepAliveInterval", None)
+                dialer_metadata.pop("keepAliveTimeout", None)
+                dialer_metadata.pop("idleTimeout", None)
+                dialer_metadata.pop("timeout", None)
+                if gost_type == "kcp":
+                    dialer_metadata["nodelay"] = True
+                    dialer_metadata["interval"] = "20ms"
+                    dialer_metadata["resend"] = 2
+                    dialer_metadata["nc"] = 1
+            else:
+                keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
+                dialer_metadata["keepAlive"] = True
+                dialer_metadata["keepAliveInterval"] = keepalive_interval
+                dialer_metadata["keepAliveTimeout"] = "60s"
+                dialer_metadata["timeout"] = "20s"
+                dialer_metadata["idleTimeout"] = "0s"
                 dialer_metadata["nodelay"] = True
-                dialer_metadata["interval"] = "20ms"
-                dialer_metadata["resend"] = 2
-                dialer_metadata["nc"] = 1
+                if enable_mux:
+                    dialer_metadata["mux.type"] = mux_type
+                    dialer_metadata["nodelay"] = True
             
             if enable_mux:
                 dialer_metadata["mux.type"] = mux_type
@@ -2665,18 +2719,12 @@ class GostAdapter:
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
                     listener_type = "rtcp" if is_reverse else "tcp"
+                    handler_type = "rtcp" if is_reverse else "tcp"
                     listener_tcp = {"type": listener_type}
-                    
-                    if is_reverse:
-                        listener_tcp["chain"] = f"chain-{tunnel_id}"
-                        handler_tcp = {
-                            "type": "rtcp"
-                        }
-                    else:
-                        handler_tcp = {
-                            "type": "tcp",
-                            "chain": f"chain-{tunnel_id}"
-                        }
+                    handler_tcp = {
+                        "type": handler_type,
+                        "chain": f"chain-{tunnel_id}"
+                    }
                     
                     service_tcp = {
                         "name": f"tcp-in-{port_num}-{tunnel_id}",
@@ -2707,18 +2755,11 @@ class GostAdapter:
                         "ttl": "60s",
                         "readTimeout": "30s"
                     }
-                    if is_reverse:
-                        listener_udp["chain"] = f"chain-{tunnel_id}"
-                        handler_udp = {
-                            "type": "rudp",
-                            "metadata": udp_handler_metadata
-                        }
-                    else:
-                        handler_udp = {
-                            "type": "udp",
-                            "chain": f"chain-{tunnel_id}",
-                            "metadata": udp_handler_metadata
-                        }
+                    handler_udp = {
+                        "type": handler_type,
+                        "chain": f"chain-{tunnel_id}",
+                        "metadata": udp_handler_metadata
+                    }
                     
                     service_udp = {
                         "name": f"udp-in-{port_num}-{tunnel_id}",
@@ -2916,8 +2957,10 @@ class AdapterManager:
             with open(temp_file, 'w') as f:
                 json.dump(self.tunnel_configs, f, indent=2)
                 f.flush()
-                os.fsync(f.fileno())
-            
+            try:
+                os.chmod(temp_file, 0o600)
+            except Exception:
+                pass
             temp_file.replace(self.tunnels_file)
             
             if self.tunnels_file.exists():

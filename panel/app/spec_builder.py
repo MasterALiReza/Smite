@@ -765,7 +765,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         server_spec["auth_additional_scopes"] = scopes
         client_spec["auth_additional_scopes"] = scopes
 
-    # 5. Transport Protocol Resolution (tcp, kcp, quic, websocket, wss)
+    # 5. Transport Protocol Resolution (tcp, kcp, quic, websocket)
     raw_transport = (
         getattr(tunnel, "transport_type", None)
         or server_spec.get("transport_type")
@@ -774,10 +774,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         or "tcp"
     ).lower()
 
-    if raw_transport in ["websocket", "ws"]:
+    if raw_transport in ["websocket", "ws", "wss", "https"]:
         transport_proto = "websocket"
-    elif raw_transport in ["wss", "https"]:
-        transport_proto = "wss"
     elif raw_transport == "quic":
         transport_proto = "quic"
     elif raw_transport == "kcp":
@@ -785,8 +783,23 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     else:
         transport_proto = "tcp"
 
-    security_type = (getattr(tunnel, "security_type", None) or server_spec.get("security_type") or ("tls" if transport_proto in ["wss", "quic"] else "none")).lower()
-    use_tls = (transport_proto in ["wss", "quic"]) or (security_type in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", False))
+    explicit_security = (getattr(tunnel, "security_type", None) or server_spec.get("security_type") or "").lower()
+    if raw_transport in ["wss", "https"]:
+        use_tls = True
+        security_type = explicit_security or "tls"
+    elif raw_transport in ["ws", "websocket"]:
+        use_tls = (explicit_security in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", False))
+        security_type = "tls" if use_tls else "none"
+    elif transport_proto == "quic":
+        use_tls = True
+        security_type = "tls"
+    else: # tcp, kcp
+        if explicit_security == "none":
+            use_tls = False
+            security_type = "none"
+        else:
+            use_tls = (explicit_security in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", True))
+            security_type = explicit_security or ("tls" if use_tls else "none")
 
     custom_sni = (
         getattr(tunnel, "custom_sni", None)
@@ -1124,7 +1137,7 @@ def build_gost_node_specs(
         base_spec["target_host"] = target_host
 
     # For UDP datagram tunneling over streaming transports, ensure multiplexing is default
-    if tunnel_type in ["udp", "tcp+udp"] and transport_type.lower() not in ["mws", "mwss", "udp", "rudp"]:
+    if tunnel_type in ["udp", "tcp+udp"] and transport_type.lower() not in ["mws", "mwss", "udp", "rudp", "kcp", "quic"]:
         base_spec["multiplex"] = True
         if not base_spec.get("mux_type"):
             base_spec["mux_type"] = "yamux"

@@ -6,6 +6,7 @@ import { useLanguage } from '../contexts/LanguageContext'
 import { useToast } from '../contexts/ToastContext'
 import { EmptyState } from '../components/EmptyState'
 import { LatencyBadge } from '../components/LatencyBadge'
+import { CustomSelect } from '../components/CustomSelect'
 
 // ─── Reapply Progress Types ────────────────────────────────────────────────
 type ReapplyStatus = 'pending' | 'running' | 'success' | 'error'
@@ -983,7 +984,7 @@ const Tunnels = () => {
 
                       {/* Dropdown Menu Popover */}
                       {showCategoryDropdown && (
-                        <div className="absolute start-0 top-full mt-1.5 w-64 bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto">
+                        <div className="absolute start-0 top-full mt-1.5 w-64 bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto custom-scrollbar">
                           {/* Header */}
                           <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                             {t.tunnels.categories || 'Categories'}
@@ -2581,7 +2582,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           </div>
 
           {/* Scrollable Body */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-6 space-y-4 min-h-0">
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl">
               <p className="text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                 <ShieldCheck size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -2615,16 +2616,19 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   {showInlineNewCategory ? 'Cancel' : '+ New'}
                 </button>
               </div>
-              <select
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-base sm:text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
-              >
-                <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.name}>{c.name}</option>
-                ))}
-              </select>
+              <CustomSelect
+                value={formData.category || ''}
+                onChange={(val) => setFormData({ ...formData, category: val })}
+                options={[
+                  { value: '', label: t.tunnels.uncategorized || 'No Category', icon: <FolderMinus size={14} className="text-slate-400" /> },
+                  ...categories.map((c) => ({
+                    value: c.name,
+                    label: c.name,
+                    icon: <Tag size={13} className={getCategoryColorClasses(c.color).text} />
+                  }))
+                ]}
+                placeholder={t.tunnels.uncategorized || 'No Category'}
+              />
               {showInlineNewCategory && (
                 <div className="mt-2 p-2 rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex gap-1.5">
                   <input
@@ -2943,16 +2947,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       {formData.rathole_transport || 'tcp'}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.rathole_transport || 'tcp'}
-                    onChange={(e) => setFormData({ ...formData, rathole_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
-                  >
-                    <option value="tcp">TCP (Standard Raw)</option>
-                    <option value="noise">Noise Protocol (Encrypted / Gaming / Anti-DPI)</option>
-                    <option value="ws">WebSocket (WS)</option>
-                    <option value="wss">WebSocket + TLS (WSS)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, rathole_transport: val })}
+                    options={[
+                      { value: 'tcp', label: 'TCP (Standard Raw)' },
+                      { value: 'noise', label: 'Noise Protocol (Encrypted / Gaming / Anti-DPI)' },
+                      { value: 'ws', label: 'WebSocket (WS)' },
+                      { value: 'wss', label: 'WebSocket + TLS (WSS)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.rathole_transport === 'noise' && 'WireGuard-grade 256-bit encryption with zero-handshake delay.'}
                     {formData.rathole_transport === 'wss' && 'Standard TLS 1.3 encapsulation for anti-DPI camouflage.'}
@@ -3197,14 +3201,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       {formData.chisel_transport}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.chisel_transport}
-                    onChange={(e) => setFormData({ ...formData, chisel_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
-                  >
-                    <option value="ws">WS - Plain WebSocket (HTTP, Low Overhead)</option>
-                    <option value="wss">WSS - Encrypted WebSocket over TLS (HTTPS)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, chisel_transport: val })}
+                    options={[
+                      { value: 'ws', label: 'WS - Plain WebSocket (HTTP, Low Overhead)' },
+                      { value: 'wss', label: 'WSS - Encrypted WebSocket over TLS (HTTPS)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.chisel_transport === 'wss'
                       ? 'Outer TLS encryption layer + Inner SSH stream encryption (Double Layer Security).'
@@ -3222,16 +3226,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       {formData.chisel_keepalive}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.chisel_keepalive}
-                    onChange={(e) => setFormData({ ...formData, chisel_keepalive: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
-                  >
-                    <option value="5s">5s (Ultra-Aggressive / Competitive Gaming)</option>
-                    <option value="10s">10s (Recommended - High Stability)</option>
-                    <option value="15s">15s (Balanced)</option>
-                    <option value="25s">25s (Default / Low Overhead)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, chisel_keepalive: val })}
+                    options={[
+                      { value: '5s', label: '5s (Ultra-Aggressive / Competitive Gaming)' },
+                      { value: '10s', label: '10s (Recommended - High Stability)' },
+                      { value: '15s', label: '15s (Balanced)' },
+                      { value: '25s', label: '25s (Default / Low Overhead)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     Prevents firewall NAT translation state dropouts across Iranian ISPs.
                   </p>
@@ -3355,24 +3359,24 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                     onClick={() => {
                       setFormData(prev => ({
                         ...prev,
-                        frp_transport: 'quic',
+                        frp_transport: 'tcp',
                         frp_encryption: true,
-                        frp_compression: true,
+                        frp_compression: false,
                       }));
-                      showToast('info', 'Preset Applied', 'QUIC / HTTP/3 Ultra-Fast applied');
+                      showToast('info', 'Preset Applied', 'TCP + Native TLS Fast Gaming applied');
                     }}
                     className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                      formData.frp_transport === 'quic'
+                      formData.frp_transport === 'tcp'
                         ? 'bg-cyan-100/80 dark:bg-cyan-950/50 border-cyan-400 dark:border-cyan-500 ring-2 ring-cyan-400/20'
                         : 'bg-white/80 dark:bg-gray-800/80 hover:bg-cyan-50 dark:hover:bg-cyan-950/30 border-gray-200 dark:border-gray-700'
                     }`}
                   >
                     <div className="flex items-center gap-1.5 mb-1">
                       <Zap size={16} className="text-cyan-600 dark:text-cyan-400" />
-                      <span className="text-xs font-bold text-cyan-700 dark:text-cyan-300">QUIC Fast UDP</span>
+                      <span className="text-xs font-bold text-cyan-700 dark:text-cyan-300">Fast TCP + TLS</span>
                     </div>
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                      Fast 0-RTT UDP stream with built-in TLS 1.3 multiplexing.
+                      FRP Native TLS over TCP. Fast, low jitter, bypasses DPI (Best for Gaming/UDP).
                     </p>
                   </button>
 
@@ -3498,17 +3502,17 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       {formData.frp_transport || 'tcp'}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.frp_transport || 'tcp'}
-                    onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all font-medium"
-                  >
-                    <option value="tcp">TCP (with TLS & Zero-Byte Signature)</option>
-                    <option value="kcp">KCP (Fast UDP - Resilient to Packet Loss)</option>
-                    <option value="quic">QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)</option>
-                    <option value="websocket">WebSocket (Plain WS)</option>
-                    <option value="wss">WSS (Secure WebSocket - CDN Capable)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, frp_transport: val })}
+                    options={[
+                      { value: 'tcp', label: 'TCP (with TLS & Zero-Byte Signature)' },
+                      { value: 'kcp', label: 'KCP (Fast UDP - Resilient to Packet Loss)' },
+                      { value: 'quic', label: 'QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)' },
+                      { value: 'websocket', label: 'WebSocket (Plain WS)' },
+                      { value: 'wss', label: 'WSS (Secure WebSocket - CDN Capable)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.frp_transport === 'quic' && 'Ultra-fast 0-RTT UDP multiplexing with TLS 1.3 encryption.'}
                     {formData.frp_transport === 'kcp' && 'Aggressive ARQ UDP for bad or filtered routes.'}
@@ -3629,15 +3633,15 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       Proxy Protocol Version
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.frp_proxy_protocol || 'none'}
-                    onChange={(e) => setFormData({ ...formData, frp_proxy_protocol: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
-                  >
-                    <option value="none">Disabled (Direct)</option>
-                    <option value="v1">v1 (ASCII Text)</option>
-                    <option value="v2">v2 (Binary Fast)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
+                    options={[
+                      { value: 'none', label: 'Disabled (Direct)' },
+                      { value: 'v1', label: 'v1 (ASCII Text)' },
+                      { value: 'v2', label: 'v2 (Binary Fast)' },
+                    ]}
+                  />
                 </div>
               </div>
 
@@ -3743,7 +3747,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-purple-700 dark:text-purple-300">Stealth Anti-DPI</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        gRPC + uTLS Chrome. Bypasses deep packet inspection.
+                        gRPC + uTLS Chrome. Bypasses deep packet inspection (Recommended for Iran).
                       </p>
                     </button>
 
@@ -3752,15 +3756,17 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       onClick={() => {
                         setFormData(prev => ({
                           ...prev,
-                          transport_type: 'quic',
-                          security_type: 'tls',
+                          transport_type: 'grpc',
+                          security_type: 'utls',
+                          utls_fingerprint: 'chrome',
+                          stealth_domain: 'www.google.com',
                           gaming_mode: true,
                           keepalive_interval: 15
                         }));
-                        showToast('info', 'Preset Applied', 'Ultra-Low Ping (QUIC HTTP/3) applied');
+                        showToast('info', 'Preset Applied', 'Ultra-Low Ping (gRPC + uTLS Chrome) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'quic'
+                        formData.transport_type === 'grpc' && formData.gaming_mode
                           ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -3770,7 +3776,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        QUIC / HTTP/3. Fast 0-RTT UDP for gaming & streaming.
+                        gRPC + uTLS Chrome. 0-RTT Multiplexing & Lowest Jitter (Best for Gaming / UDP).
                       </p>
                     </button>
 
@@ -3779,15 +3785,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       onClick={() => {
                         setFormData(prev => ({
                           ...prev,
-                          transport_type: 'kcp',
-                          security_type: 'none',
+                          transport_type: 'wss',
+                          security_type: 'tls',
+                          stealth_domain: 'dl.google.com',
                           gaming_mode: true,
                           keepalive_interval: 15
                         }));
-                        showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
+                        showToast('info', 'Preset Applied', 'Anti-Packet-Loss (WSS + TLS) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'kcp'
+                        formData.transport_type === 'wss'
                           ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -3797,7 +3804,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Anti-Packet-Loss</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        KCP ARQ. Aggressive retransmission for bad networks.
+                        WSS + TLS. Rock-solid TCP/WebSocket framing immune to UDP loss & DPI blocking.
                       </p>
                     </button>
                   </div>
@@ -3815,19 +3822,19 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         {formData.transport_type}
                       </span>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formData.transport_type}
-                      onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
-                    >
-                      <option value="tcp">TCP (Standard)</option>
-                      <option value="ws">WebSocket (WS)</option>
-                      <option value="mws">Multiplex WS (MWS)</option>
-                      <option value="quic">QUIC (HTTP/3 UDP, 0-RTT)</option>
-                      <option value="grpc">gRPC (Multiplexed Stealth)</option>
-                      <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
-                      <option value="ssh">SSH (Encrypted Subsystem)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, transport_type: val})}
+                      options={[
+                        { value: 'tcp', label: 'TCP (Standard)' },
+                        { value: 'ws', label: 'WebSocket (WS)' },
+                        { value: 'mws', label: 'Multiplex WS (MWS)' },
+                        { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
+                        { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
+                        { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
+                        { value: 'ssh', label: 'SSH (Encrypted Subsystem)' },
+                      ]}
+                    />
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                       {formData.transport_type === 'quic' && 'Fast 0-RTT UDP handshake. Resilient to packet loss.'}
                       {formData.transport_type === 'grpc' && 'Multiplexed HTTP/2. Mimics legitimate enterprise API traffic.'}
@@ -3849,15 +3856,15 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         {formData.security_type}
                       </span>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formData.security_type}
-                      onChange={(e) => setFormData({...formData, security_type: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                    >
-                      <option value="none">None (Plaintext / Low Overhead)</option>
-                      <option value="tls">TLS (Standard Encryption)</option>
-                      <option value="utls">uTLS (Browser Spoofing Anti-DPI)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, security_type: val})}
+                      options={[
+                        { value: 'none', label: 'None (Plaintext / Low Overhead)' },
+                        { value: 'tls', label: 'TLS (Standard Encryption)' },
+                        { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
+                      ]}
+                    />
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                       {formData.security_type === 'none' && 'No TLS wrapper. Lowest CPU overhead.'}
                       {formData.security_type === 'tls' && 'Standard TLS 1.3 handshake encryption.'}
@@ -3881,18 +3888,18 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                     <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
                       Replicates exact TLS cipher suites, extensions, and curves of legitimate web browsers:
                     </p>
-                    <select
+                    <CustomSelect
                       value={formData.utls_fingerprint || 'chrome'}
-                      onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                    >
-                      <option value="chrome">Google Chrome (Recommended - Highest Compatibility)</option>
-                      <option value="firefox">Mozilla Firefox</option>
-                      <option value="ios">Apple iOS Safari</option>
-                      <option value="android">Android Chrome</option>
-                      <option value="edge">Microsoft Edge</option>
-                      <option value="randomized">Randomized (Rotates browser signature per connection)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, utls_fingerprint: val})}
+                      options={[
+                        { value: 'chrome', label: 'Google Chrome (Recommended - Highest Compatibility)' },
+                        { value: 'firefox', label: 'Mozilla Firefox' },
+                        { value: 'ios', label: 'Apple iOS Safari' },
+                        { value: 'android', label: 'Android Chrome' },
+                        { value: 'edge', label: 'Microsoft Edge' },
+                        { value: 'randomized', label: 'Randomized (Rotates browser signature per connection)' },
+                      ]}
+                    />
                   </div>
                 )}
 
@@ -3933,16 +3940,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                           {formData.selector_strategy || 'fifo'}
                         </span>
                       </div>
-                      <select
+                      <CustomSelect
                         value={formData.selector_strategy || 'fifo'}
-                        onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
-                        className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 font-medium"
-                      >
-                        <option value="fifo">FIFO Failover (Primary first, fallback to backup IPs)</option>
-                        <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
-                        <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
-                        <option value="rand">Random (Random distribution across nodes)</option>
-                      </select>
+                        onChange={(val) => setFormData({...formData, selector_strategy: val})}
+                        options={[
+                          { value: 'fifo', label: 'FIFO Failover (Primary first, fallback to backup IPs)' },
+                          { value: 'round', label: 'Round-Robin (Distribute requests evenly across all IPs)' },
+                          { value: 'parallel', label: 'Parallel Race (Connect all concurrently, use fastest ping)' },
+                          { value: 'rand', label: 'Random (Random distribution across nodes)' },
+                        ]}
+                      />
                     </div>
                   )}
                 </div>
@@ -4768,7 +4775,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           </div>
 
           {/* Scrollable Form Body */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-6 space-y-4 min-h-0">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
@@ -4797,16 +4804,19 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   {showInlineNewCategory ? 'Cancel' : '+ New'}
                 </button>
               </div>
-              <select
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
-              >
-                <option value="">{t.tunnels.uncategorized || 'No Category'}</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.name}>{c.name}</option>
-                ))}
-              </select>
+              <CustomSelect
+                value={formData.category || ''}
+                onChange={(val) => setFormData({ ...formData, category: val })}
+                options={[
+                  { value: '', label: t.tunnels.uncategorized || 'No Category', icon: <FolderMinus size={14} className="text-slate-400" /> },
+                  ...categories.map((c) => ({
+                    value: c.name,
+                    label: c.name,
+                    icon: <Tag size={13} className={getCategoryColorClasses(c.color).text} />
+                  }))
+                ]}
+                placeholder={t.tunnels.uncategorized || 'No Category'}
+              />
               {showInlineNewCategory && (
                 <div className="mt-2 p-2 rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 flex gap-1.5">
                   <input
@@ -4842,19 +4852,21 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   {t.tunnels.iranNode}
                 </label>
               </div>
-              <select
-                value={formData.iran_node_id || formData.node_id}
-                onChange={(e) => setFormData({ ...formData, iran_node_id: e.target.value, node_id: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
+              <CustomSelect
+                value={formData.iran_node_id || formData.node_id || ''}
+                onChange={(val) => setFormData({ ...formData, iran_node_id: val, node_id: val })}
+                options={[
+                  { value: '', label: t.tunnels.selectIranNode || 'Select an Iran node' },
+                  ...nodes.map((node) => ({
+                    value: node.id,
+                    label: node.name,
+                    badge: node.ip_address,
+                    icon: <Server size={14} className="text-blue-500" />
+                  }))
+                ]}
+                placeholder={t.tunnels.selectIranNode || 'Select an Iran node'}
                 required={formData.core === 'rathole' || formData.core === 'backhaul' || formData.core === 'frp' || formData.core === 'chisel'}
-              >
-                <option value="">{t.tunnels.selectIranNode}</option>
-                {nodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.name}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             <div>
               <div className="flex items-center justify-between mb-1.5 h-5">
@@ -4862,19 +4874,21 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   {t.tunnels.foreignServer}
                 </label>
               </div>
-              <select
-                value={formData.foreign_node_id}
-                onChange={(e) => setFormData({ ...formData, foreign_node_id: e.target.value })}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
+              <CustomSelect
+                value={formData.foreign_node_id || ''}
+                onChange={(val) => setFormData({ ...formData, foreign_node_id: val })}
+                options={[
+                  { value: '', label: t.tunnels.selectForeignServer || 'Select a Foreign server' },
+                  ...servers.map((server) => ({
+                    value: server.id,
+                    label: server.name,
+                    badge: server.ip_address,
+                    icon: <Globe size={14} className="text-emerald-500" />
+                  }))
+                ]}
+                placeholder={t.tunnels.selectForeignServer || 'Select a Foreign server'}
                 required={formData.core === 'rathole' || formData.core === 'backhaul' || formData.core === 'frp' || formData.core === 'chisel'}
-              >
-                <option value="">{t.tunnels.selectForeignServer}</option>
-                {servers.map((server) => (
-                  <option key={server.id} value={server.id}>
-                    {server.name}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           </div>
 
@@ -4885,17 +4899,17 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   {t.tunnels.core}
                 </label>
               </div>
-              <select
+              <CustomSelect
                 value={formData.core}
-                onChange={(e) => handleCoreChange(e.target.value)}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
-              >
-                <option value="gost">GOST</option>
-                <option value="rathole">Rathole</option>
-                <option value="backhaul">Backhaul</option>
-                <option value="chisel">Chisel</option>
-                <option value="frp">FRP</option>
-              </select>
+                onChange={(val) => handleCoreChange(val)}
+                options={[
+                  { value: 'gost', label: 'GOST', icon: <Zap size={14} className="text-indigo-500" /> },
+                  { value: 'rathole', label: 'Rathole', icon: <Rocket size={14} className="text-amber-500" /> },
+                  { value: 'backhaul', label: 'Backhaul', icon: <RadioTower size={14} className="text-blue-500" /> },
+                  { value: 'chisel', label: 'Chisel', icon: <Network size={14} className="text-cyan-500" /> },
+                  { value: 'frp', label: 'FRP', icon: <Cpu size={14} className="text-purple-500" /> },
+                ]}
+              />
             </div>
             <div>
               <div className="flex items-center justify-between mb-1.5 h-5">
@@ -4903,53 +4917,52 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   {t.tunnels.type}
                 </label>
               </div>
-              <select
+              <CustomSelect
                 value={formData.type}
-                onChange={(e) => {
-                  const value = e.target.value as BackhaulTransport
+                onChange={(val) => {
+                  const value = val as BackhaulTransport
                   setFormData({ ...formData, type: value })
                   if (formData.core === 'backhaul') {
                     setBackhaulState((prev) => ({ ...prev, transport: value }))
                   }
                 }}
-                className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700/80 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-xs"
-              >
-                {formData.core === 'chisel' ? (
-                  <>
-                    <option value="tcp">TCP (Standard)</option>
-                    <option value="udp">UDP (Gaming / Anti-Lag)</option>
-                    <option value="tcp+udp">TCP + UDP (Dual Forward)</option>
-                    <option value="socks5">SOCKS5 (Dynamic Proxy)</option>
-                  </>
-                ) : formData.core === 'rathole' ? (
-                  <>
-                    <option value="tcp">TCP</option>
-                    <option value="udp">UDP (Gaming)</option>
-                    <option value="tcp+udp">TCP + UDP</option>
-                  </>
-                ) : formData.core === 'frp' ? (
-                  <>
-                    <option value="tcp">TCP</option>
-                    <option value="udp">UDP</option>
-                  </>
-                ) : formData.core === 'backhaul' ? (
-                  <>
-                    <option value="tcp">TCP</option>
-                    <option value="udp">UDP (Pure UDP - Gaming)</option>
-                    <option value="tcpmux">TCPMux</option>
-                    <option value="ws">WebSocket (WS)</option>
-                    <option value="wsmux">WebSocket Mux</option>
-                    <option value="wss">WebSocket Secure (WSS)</option>
-                    <option value="wssmux">WebSocket Secure Mux</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="tcp">TCP</option>
-                    <option value="udp">UDP</option>
-                    <option value="tcp+udp">TCP + UDP</option>
-                  </>
-                )}
-              </select>
+                options={
+                  formData.core === 'chisel'
+                    ? [
+                        { value: 'tcp', label: 'TCP (Standard)' },
+                        { value: 'udp', label: 'UDP (Gaming / Anti-Lag)' },
+                        { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
+                        { value: 'socks5', label: 'SOCKS5 (Dynamic Proxy)' },
+                      ]
+                    : formData.core === 'rathole'
+                    ? [
+                        { value: 'tcp', label: 'TCP' },
+                        { value: 'udp', label: 'UDP (Gaming)' },
+                        { value: 'tcp+udp', label: 'TCP + UDP' },
+                      ]
+                    : formData.core === 'frp'
+                    ? [
+                        { value: 'tcp', label: 'TCP' },
+                        { value: 'udp', label: 'UDP' },
+                      ]
+                    : formData.core === 'backhaul'
+                    ? [
+                        { value: 'tcp', label: 'TCP' },
+                        { value: 'udp', label: 'UDP (Pure UDP - Gaming)' },
+                        { value: 'tcpmux', label: 'TCPMux' },
+                        { value: 'ws', label: 'WebSocket (WS)' },
+                        { value: 'wsmux', label: 'WebSocket Mux' },
+                        { value: 'wss', label: 'WebSocket Secure (WSS)' },
+                        { value: 'wssmux', label: 'WebSocket Secure Mux' },
+                      ]
+                    : [
+                        { value: 'tcp', label: 'TCP' },
+                        { value: 'udp', label: 'UDP' },
+                        { value: 'grpc', label: 'gRPC' },
+                        { value: 'tcpmux', label: 'TCP Mux' },
+                      ]
+                }
+              />
             </div>
           </div>
 
@@ -5219,16 +5232,16 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       {formData.rathole_transport || 'tcp'}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.rathole_transport || 'tcp'}
-                    onChange={(e) => setFormData({ ...formData, rathole_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
-                  >
-                    <option value="tcp">TCP (Standard Raw)</option>
-                    <option value="noise">Noise Protocol (Encrypted / Gaming / Anti-DPI)</option>
-                    <option value="ws">WebSocket (WS)</option>
-                    <option value="wss">WebSocket + TLS (WSS)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, rathole_transport: val })}
+                    options={[
+                      { value: 'tcp', label: 'TCP (Standard Raw)' },
+                      { value: 'noise', label: 'Noise Protocol (Encrypted / Gaming / Anti-DPI)' },
+                      { value: 'ws', label: 'WebSocket (WS)' },
+                      { value: 'wss', label: 'WebSocket + TLS (WSS)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.rathole_transport === 'noise' && 'WireGuard-grade 256-bit encryption with zero-handshake delay.'}
                     {formData.rathole_transport === 'wss' && 'Standard TLS 1.3 encapsulation for anti-DPI camouflage.'}
@@ -5455,14 +5468,14 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       {formData.chisel_transport}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.chisel_transport}
-                    onChange={(e) => setFormData({ ...formData, chisel_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
-                  >
-                    <option value="ws">WS - Plain WebSocket (HTTP, Low Overhead)</option>
-                    <option value="wss">WSS - Encrypted WebSocket over TLS (HTTPS)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, chisel_transport: val })}
+                    options={[
+                      { value: 'ws', label: 'WS - Plain WebSocket (HTTP, Low Overhead)' },
+                      { value: 'wss', label: 'WSS - Encrypted WebSocket over TLS (HTTPS)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.chisel_transport === 'wss'
                       ? 'Outer TLS encryption layer + Inner SSH stream encryption (Double Layer Security).'
@@ -5480,16 +5493,16 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       {formData.chisel_keepalive}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.chisel_keepalive}
-                    onChange={(e) => setFormData({ ...formData, chisel_keepalive: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all font-medium"
-                  >
-                    <option value="5s">5s (Ultra-Aggressive / Competitive Gaming)</option>
-                    <option value="10s">10s (Recommended - High Stability)</option>
-                    <option value="15s">15s (Balanced)</option>
-                    <option value="25s">25s (Default / Low Overhead)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, chisel_keepalive: val })}
+                    options={[
+                      { value: '5s', label: '5s (Ultra-Aggressive / Competitive Gaming)' },
+                      { value: '10s', label: '10s (Recommended - High Stability)' },
+                      { value: '15s', label: '15s (Balanced)' },
+                      { value: '25s', label: '25s (Default / Low Overhead)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     Prevents firewall NAT translation state dropouts across Iranian ISPs.
                   </p>
@@ -5594,24 +5607,24 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                     onClick={() => {
                       setFormData(prev => ({
                         ...prev,
-                        frp_transport: 'quic',
+                        frp_transport: 'tcp',
                         frp_encryption: true,
-                        frp_compression: true,
+                        frp_compression: false,
                       }));
-                      showToast('info', 'Preset Applied', 'QUIC Fast UDP applied');
+                      showToast('info', 'Preset Applied', 'TCP + Native TLS Fast Gaming applied');
                     }}
                     className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                      formData.frp_transport === 'quic'
+                      formData.frp_transport === 'tcp'
                         ? 'bg-cyan-100/80 dark:bg-cyan-950/50 border-cyan-400 dark:border-cyan-500 ring-2 ring-cyan-400/20'
                         : 'bg-white/80 dark:bg-gray-800/80 hover:bg-cyan-50 dark:hover:bg-cyan-950/30 border-gray-200 dark:border-gray-700'
                     }`}
                   >
                     <div className="flex items-center gap-1.5 mb-1">
                       <Zap size={16} className="text-cyan-600 dark:text-cyan-400" />
-                      <span className="text-xs font-bold text-cyan-700 dark:text-cyan-300">QUIC Fast UDP</span>
+                      <span className="text-xs font-bold text-cyan-700 dark:text-cyan-300">Fast TCP + TLS</span>
                     </div>
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                      Fast 0-RTT UDP stream with built-in TLS 1.3 multiplexing.
+                      FRP Native TLS over TCP. Fast, low jitter, bypasses DPI (Best for Gaming/UDP).
                     </p>
                   </button>
 
@@ -5737,17 +5750,17 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       {formData.frp_transport || 'tcp'}
                     </span>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.frp_transport || 'tcp'}
-                    onChange={(e) => setFormData({ ...formData, frp_transport: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all font-medium"
-                  >
-                    <option value="tcp">TCP (with TLS & Zero-Byte Signature)</option>
-                    <option value="kcp">KCP (Fast UDP - Resilient to Packet Loss)</option>
-                    <option value="quic">QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)</option>
-                    <option value="websocket">WebSocket (Plain WS)</option>
-                    <option value="wss">WSS (Secure WebSocket - CDN Capable)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, frp_transport: val })}
+                    options={[
+                      { value: 'tcp', label: 'TCP (with TLS & Zero-Byte Signature)' },
+                      { value: 'kcp', label: 'KCP (Fast UDP - Resilient to Packet Loss)' },
+                      { value: 'quic', label: 'QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)' },
+                      { value: 'websocket', label: 'WebSocket (Plain WS)' },
+                      { value: 'wss', label: 'WSS (Secure WebSocket - CDN Capable)' },
+                    ]}
+                  />
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                     {formData.frp_transport === 'quic' && 'Ultra-fast 0-RTT UDP multiplexing with TLS 1.3 encryption.'}
                     {formData.frp_transport === 'kcp' && 'Aggressive ARQ UDP for bad or filtered routes.'}
@@ -5868,15 +5881,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       Proxy Protocol Version
                     </label>
                   </div>
-                  <select
+                  <CustomSelect
                     value={formData.frp_proxy_protocol || 'none'}
-                    onChange={(e) => setFormData({ ...formData, frp_proxy_protocol: e.target.value })}
-                    className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
-                  >
-                    <option value="none">Disabled (Direct)</option>
-                    <option value="v1">v1 (ASCII Text)</option>
-                    <option value="v2">v2 (Binary Fast)</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
+                    options={[
+                      { value: 'none', label: 'Disabled (Direct)' },
+                      { value: 'v1', label: 'v1 (ASCII Text)' },
+                      { value: 'v2', label: 'v2 (Binary Fast)' },
+                    ]}
+                  />
                 </div>
               </div>
 
@@ -6005,7 +6018,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-purple-700 dark:text-purple-300">Stealth Anti-DPI</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        gRPC + uTLS Chrome. Bypasses deep packet inspection.
+                        gRPC + uTLS Chrome. Bypasses deep packet inspection (Recommended for Iran).
                       </p>
                     </button>
 
@@ -6014,15 +6027,17 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       onClick={() => {
                         setFormData(prev => ({
                           ...prev,
-                          transport_type: 'quic',
-                          security_type: 'tls',
+                          transport_type: 'grpc',
+                          security_type: 'utls',
+                          utls_fingerprint: 'chrome',
+                          stealth_domain: 'www.google.com',
                           gaming_mode: true,
                           keepalive_interval: 15
                         }));
-                        showToast('info', 'Preset Applied', 'Ultra-Low Ping (QUIC HTTP/3) applied');
+                        showToast('info', 'Preset Applied', 'Ultra-Low Ping (gRPC + uTLS Chrome) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'quic'
+                        formData.transport_type === 'grpc' && formData.gaming_mode
                           ? 'bg-amber-100/80 dark:bg-amber-900/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-amber-50 dark:hover:bg-amber-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -6032,7 +6047,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Ultra-Low Ping</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        QUIC / HTTP/3. Fast 0-RTT UDP for gaming & streaming.
+                        gRPC + uTLS Chrome. 0-RTT Multiplexing & Lowest Jitter (Best for Gaming / UDP).
                       </p>
                     </button>
 
@@ -6041,15 +6056,16 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       onClick={() => {
                         setFormData(prev => ({
                           ...prev,
-                          transport_type: 'kcp',
-                          security_type: 'none',
+                          transport_type: 'wss',
+                          security_type: 'tls',
+                          stealth_domain: 'dl.google.com',
                           gaming_mode: true,
                           keepalive_interval: 15
                         }));
-                        showToast('info', 'Preset Applied', 'Anti-Packet-Loss (KCP ARQ) applied');
+                        showToast('info', 'Preset Applied', 'Anti-Packet-Loss (WSS + TLS) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'kcp'
+                        formData.transport_type === 'wss'
                           ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -6059,7 +6075,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Anti-Packet-Loss</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                        KCP ARQ. Aggressive retransmission for bad networks.
+                        WSS + TLS. Rock-solid TCP/WebSocket framing immune to UDP loss & DPI blocking.
                       </p>
                     </button>
                   </div>
@@ -6077,19 +6093,19 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         {formData.transport_type}
                       </span>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formData.transport_type}
-                      onChange={(e) => setFormData({...formData, transport_type: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
-                    >
-                      <option value="tcp">TCP (Standard)</option>
-                      <option value="ws">WebSocket (WS)</option>
-                      <option value="mws">Multiplex WS (MWS)</option>
-                      <option value="quic">QUIC (HTTP/3 UDP, 0-RTT)</option>
-                      <option value="grpc">gRPC (Multiplexed Stealth)</option>
-                      <option value="kcp">KCP (Anti-Packet-Loss ARQ)</option>
-                      <option value="ssh">SSH (Encrypted Subsystem)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, transport_type: val})}
+                      options={[
+                        { value: 'tcp', label: 'TCP (Standard)' },
+                        { value: 'ws', label: 'WebSocket (WS)' },
+                        { value: 'mws', label: 'Multiplex WS (MWS)' },
+                        { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
+                        { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
+                        { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
+                        { value: 'ssh', label: 'SSH (Encrypted Subsystem)' },
+                      ]}
+                    />
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                       {formData.transport_type === 'quic' && 'Fast 0-RTT UDP handshake. Resilient to packet loss.'}
                       {formData.transport_type === 'grpc' && 'Multiplexed HTTP/2. Mimics legitimate enterprise API traffic.'}
@@ -6111,15 +6127,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         {formData.security_type}
                       </span>
                     </div>
-                    <select
+                    <CustomSelect
                       value={formData.security_type}
-                      onChange={(e) => setFormData({...formData, security_type: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                    >
-                      <option value="none">None (Plaintext / Low Overhead)</option>
-                      <option value="tls">TLS (Standard Encryption)</option>
-                      <option value="utls">uTLS (Browser Spoofing Anti-DPI)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, security_type: val})}
+                      options={[
+                        { value: 'none', label: 'None (Plaintext / Low Overhead)' },
+                        { value: 'tls', label: 'TLS (Standard Encryption)' },
+                        { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
+                      ]}
+                    />
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
                       {formData.security_type === 'none' && 'No TLS wrapper. Lowest CPU overhead.'}
                       {formData.security_type === 'tls' && 'Standard TLS 1.3 handshake encryption.'}
@@ -6143,18 +6159,18 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                     <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
                       Replicates exact TLS cipher suites, extensions, and curves of legitimate web browsers:
                     </p>
-                    <select
+                    <CustomSelect
                       value={formData.utls_fingerprint || 'chrome'}
-                      onChange={(e) => setFormData({...formData, utls_fingerprint: e.target.value})}
-                      className="w-full px-3 py-2 text-sm sm:text-xs rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                    >
-                      <option value="chrome">Google Chrome (Recommended - Highest Compatibility)</option>
-                      <option value="firefox">Mozilla Firefox</option>
-                      <option value="ios">Apple iOS Safari</option>
-                      <option value="android">Android Chrome</option>
-                      <option value="edge">Microsoft Edge</option>
-                      <option value="randomized">Randomized (Rotates browser signature per connection)</option>
-                    </select>
+                      onChange={(val) => setFormData({...formData, utls_fingerprint: val})}
+                      options={[
+                        { value: 'chrome', label: 'Google Chrome (Recommended - Highest Compatibility)' },
+                        { value: 'firefox', label: 'Mozilla Firefox' },
+                        { value: 'ios', label: 'Apple iOS Safari' },
+                        { value: 'android', label: 'Android Chrome' },
+                        { value: 'edge', label: 'Microsoft Edge' },
+                        { value: 'randomized', label: 'Randomized (Rotates browser signature per connection)' },
+                      ]}
+                    />
                   </div>
                 )}
 
@@ -6195,16 +6211,16 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                           {formData.selector_strategy || 'fifo'}
                         </span>
                       </div>
-                      <select
+                      <CustomSelect
                         value={formData.selector_strategy || 'fifo'}
-                        onChange={(e) => setFormData({...formData, selector_strategy: e.target.value})}
-                        className="w-full px-3 py-2 text-sm sm:text-xs rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20 font-medium"
-                      >
-                        <option value="fifo">FIFO Failover (Primary first, fallback to backup IPs)</option>
-                        <option value="round">Round-Robin (Distribute requests evenly across all IPs)</option>
-                        <option value="parallel">Parallel Race (Connect all concurrently, use fastest ping)</option>
-                        <option value="rand">Random (Random distribution across nodes)</option>
-                      </select>
+                        onChange={(val) => setFormData({...formData, selector_strategy: val})}
+                        options={[
+                          { value: 'fifo', label: 'FIFO Failover (Primary first, fallback to backup IPs)' },
+                          { value: 'round', label: 'Round-Robin (Distribute requests evenly across all IPs)' },
+                          { value: 'parallel', label: 'Parallel Race (Connect all concurrently, use fastest ping)' },
+                          { value: 'rand', label: 'Random (Random distribution across nodes)' },
+                        ]}
+                      />
                     </div>
                   )}
                 </div>
@@ -6974,14 +6990,14 @@ function BackhaulAdvancedDrawer({
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Yamux Protocol Version
                 </label>
-                <select
+                <CustomSelect
                   value={state.server.mux_version || '1'}
-                  onChange={(e) => updateBoth('mux_version', e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                >
-                  <option value="1">Version 1 (Standard)</option>
-                  <option value="2">Version 2 (Modern)</option>
-                </select>
+                  onChange={(val) => updateBoth('mux_version', val)}
+                  options={[
+                    { value: '1', label: 'Version 1 (Standard)' },
+                    { value: '2', label: 'Version 2 (Modern)' },
+                  ]}
+                />
               </div>
 
               <div>
@@ -7049,17 +7065,17 @@ function BackhaulAdvancedDrawer({
 
               <div>
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Log Level</label>
-                <select
+                <CustomSelect
                   value={state.server.log_level}
-                  onChange={(e) => updateBoth('log_level', e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                >
-                  <option value="info">Info</option>
-                  <option value="warn">Warn</option>
-                  <option value="error">Error</option>
-                  <option value="debug">Debug</option>
-                  <option value="trace">Trace</option>
-                </select>
+                  onChange={(val) => updateBoth('log_level', val)}
+                  options={[
+                    { value: 'info', label: 'Info' },
+                    { value: 'warn', label: 'Warn' },
+                    { value: 'error', label: 'Error' },
+                    { value: 'debug', label: 'Debug' },
+                    { value: 'trace', label: 'Trace' },
+                  ]}
+                />
               </div>
 
               <div>

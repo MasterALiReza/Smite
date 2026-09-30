@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import api from '../api/client'
 import { useLanguage } from '../contexts/LanguageContext'
+import CustomSelect from '../components/CustomSelect'
 
 interface SslCertInfo {
   installed: boolean
@@ -1317,14 +1318,14 @@ const Settings = () => {
                         <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                           {t.settings.intervalUnit}
                         </label>
-                        <select
+                        <CustomSelect
                           value={settings.telegram.backup_interval_unit || 'minutes'}
-                          onChange={(e) => updateTelegram({ backup_interval_unit: e.target.value })}
-                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                        >
-                          <option value="minutes">{t.settings.minutes}</option>
-                          <option value="hours">{t.settings.hours}</option>
-                        </select>
+                          onChange={(val) => updateTelegram({ backup_interval_unit: val })}
+                          options={[
+                            { value: 'minutes', label: t.settings.minutes },
+                            { value: 'hours', label: t.settings.hours },
+                          ]}
+                        />
                       </div>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -1409,14 +1410,14 @@ const Settings = () => {
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     {t.settings.intervalUnit || 'Interval Unit'}
                   </label>
-                  <select
+                  <CustomSelect
                     value={settings.tunnel?.auto_reapply_interval_unit || 'minutes'}
-                    onChange={(e) => updateTunnel({ auto_reapply_interval_unit: e.target.value })}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                  >
-                    <option value="minutes">{t.settings.minutes}</option>
-                    <option value="hours">{t.settings.hours}</option>
-                  </select>
+                    onChange={(val) => updateTunnel({ auto_reapply_interval_unit: val })}
+                    options={[
+                      { value: 'minutes', label: t.settings.minutes },
+                      { value: 'hours', label: t.settings.hours },
+                    ]}
+                  />
                 </div>
               </div>
             </div>
