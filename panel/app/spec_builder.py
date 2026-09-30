@@ -1045,15 +1045,18 @@ def build_gost_node_specs(
         tunnel.spec["ports"] = ports
 
     force_direct = bool(spec.get("force_direct") or (getattr(tunnel, "spec", {}) or {}).get("force_direct"))
-    is_reverse = getattr(tunnel, "is_reverse", None)
-    if is_reverse is None:
-        is_reverse = spec.get("is_reverse")
-    # For multi-node setup (iran + foreign), default to reverse unless force_direct is explicitly set
-    if is_reverse is None or not is_reverse:
-        if not force_direct and (foreign_node_ip or getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)):
-            is_reverse = True
-        else:
-            is_reverse = bool(is_reverse)
+    if force_direct:
+        is_reverse = False
+    else:
+        is_reverse = getattr(tunnel, "is_reverse", None)
+        if is_reverse is None:
+            is_reverse = spec.get("is_reverse")
+        # For multi-node setup (iran + foreign), default to reverse unless force_direct is explicitly set
+        if is_reverse is None or not is_reverse:
+            if foreign_node_ip or getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
+                is_reverse = True
+            else:
+                is_reverse = bool(is_reverse)
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         tunnel.spec["is_reverse"] = is_reverse

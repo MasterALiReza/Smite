@@ -378,7 +378,7 @@ def test_spec_builder_gost_ports_resolution_from_listen_port():
         id="listen-port-gost",
         core="gost",
         type="tcp",
-        spec={"listen_port": 9990}
+        spec={"listen_port": 9990, "force_direct": True}
     )
     tunnel.is_reverse = False
     s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
