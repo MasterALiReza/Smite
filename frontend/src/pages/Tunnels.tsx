@@ -2272,7 +2272,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     custom_host: tunnel.custom_host || '',
     custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
     ws_path: tunnel.ws_path || '',
-    is_reverse: tunnel.is_reverse || false,
+    is_reverse: tunnel.is_reverse !== undefined ? tunnel.is_reverse : true,
     stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.spec?.custom_sni || '',
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type || 'none',
@@ -2531,7 +2531,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse,
+          is_reverse: formData.is_reverse !== undefined ? formData.is_reverse : true,
           stealth_domain: formData.stealth_domain || null,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
@@ -2544,7 +2544,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
             : null,
           port_ranges: port_ranges.length > 0 ? port_ranges : null
         }),
-        node_id: formData.is_reverse ? (formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id) : (formData.foreign_node_id || tunnel.foreign_node_id || tunnel.node_id),
+        node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id) : (formData.foreign_node_id || tunnel.foreign_node_id || tunnel.node_id),
         iran_node_id: formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id || undefined,
         foreign_node_id: formData.foreign_node_id || tunnel.foreign_node_id || undefined
       })
@@ -3956,7 +3956,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
-                        Iran connects to foreign
+                        Foreign connects to Iran (Recommended)
                       </p>
                     </div>
                     <input
@@ -4338,7 +4338,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     custom_host: '',
     custom_sni: '',
     ws_path: '',
-    is_reverse: false,
+    is_reverse: true,
     stealth_domain: '',
     transport_type: 'tcp',
     security_type: 'none',
@@ -4637,7 +4637,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse,
+          is_reverse: formData.is_reverse !== undefined ? formData.is_reverse : true,
           stealth_domain: formData.stealth_domain || null,
           transport_type: formData.transport_type,
           security_type: formData.security_type,
@@ -4672,7 +4672,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           transport_type: backhaulState.transport || 'tcpmux',
           is_reverse: true,
         }),
-        node_id: formData.is_reverse ? formData.iran_node_id : formData.node_id,
+        node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || formData.node_id) : formData.node_id,
         foreign_node_id: formData.foreign_node_id || null,
         iran_node_id: formData.iran_node_id || formData.node_id || null,
         category: formData.category ? formData.category.trim() : null
@@ -6218,7 +6218,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
-                        Iran connects to foreign
+                        Foreign connects to Iran (Recommended)
                       </p>
                     </div>
                     <input

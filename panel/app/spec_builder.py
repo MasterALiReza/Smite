@@ -1044,19 +1044,37 @@ def build_gost_node_specs(
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         tunnel.spec["ports"] = ports
 
-    is_reverse = getattr(tunnel, "is_reverse", False) or False
-    cdn_mode = getattr(tunnel, "cdn_mode", False) or False
-    gaming_mode = getattr(tunnel, "gaming_mode", False) or False
-    custom_host = getattr(tunnel, "custom_host", None)
-    custom_sni = getattr(tunnel, "custom_sni", None)
-    ws_path = getattr(tunnel, "ws_path", None)
-    stealth_domain = getattr(tunnel, "stealth_domain", None)
-    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None)
-    transport_type = getattr(tunnel, "transport_type", "tcp") or "tcp"
-    security_type = getattr(tunnel, "security_type", "none") or "none"
-    failover_ips = getattr(tunnel, "failover_ips", None)
-    port_ranges = getattr(tunnel, "port_ranges", None)
-    allowed_ips = getattr(tunnel, "allowed_ips", None)
+    force_direct = bool(spec.get("force_direct") or (getattr(tunnel, "spec", {}) or {}).get("force_direct"))
+    is_reverse = getattr(tunnel, "is_reverse", None)
+    if is_reverse is None:
+        is_reverse = spec.get("is_reverse")
+    # For multi-node setup (iran + foreign), default to reverse unless force_direct is explicitly set
+    if is_reverse is None or not is_reverse:
+        if not force_direct and (foreign_node_ip or getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)):
+            is_reverse = True
+        else:
+            is_reverse = bool(is_reverse)
+
+    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+        tunnel.spec["is_reverse"] = is_reverse
+    if hasattr(tunnel, "is_reverse"):
+        try:
+            tunnel.is_reverse = is_reverse
+        except Exception:
+            pass
+
+    cdn_mode = getattr(tunnel, "cdn_mode", False) or spec.get("cdn_mode", False) or False
+    gaming_mode = getattr(tunnel, "gaming_mode", False) or spec.get("gaming_mode", False) or False
+    custom_host = getattr(tunnel, "custom_host", None) or spec.get("custom_host")
+    custom_sni = getattr(tunnel, "custom_sni", None) or spec.get("custom_sni")
+    ws_path = getattr(tunnel, "ws_path", None) or spec.get("ws_path")
+    stealth_domain = getattr(tunnel, "stealth_domain", None) or spec.get("stealth_domain")
+    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or spec.get("rate_limit_mbps")
+    transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
+    security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "none"
+    failover_ips = getattr(tunnel, "failover_ips", None) or spec.get("failover_ips")
+    port_ranges = getattr(tunnel, "port_ranges", None) or spec.get("port_ranges")
+    allowed_ips = getattr(tunnel, "allowed_ips", None) or spec.get("allowed_ips")
 
     tunnel_type = (
         getattr(tunnel, "type", None)

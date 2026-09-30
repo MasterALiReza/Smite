@@ -465,7 +465,13 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         custom_host=tunnel.custom_host,
         custom_sni=tunnel.custom_sni,
         ws_path=tunnel.ws_path,
-        is_reverse=tunnel.is_reverse or False,
+        is_reverse=(
+            True if (
+                tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
+                or (tunnel.core == "gost" and not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_to_store or iran_node_id_to_store))
+                or tunnel.is_reverse is True
+            ) else (tunnel.is_reverse or False)
+        ),
         port_ranges=tunnel.port_ranges,
         stealth_domain=tunnel.stealth_domain,
         allowed_ips=tunnel.allowed_ips,
@@ -1369,6 +1375,8 @@ async def update_tunnel(
         tunnel.ws_path = tunnel_update.ws_path
     if tunnel_update.is_reverse is not None:
         tunnel.is_reverse = tunnel_update.is_reverse
+    elif tunnel.core == "gost" and not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):
+        tunnel.is_reverse = True
     if tunnel_update.node_id is not None:
         tunnel.node_id = tunnel_update.node_id if tunnel_update.node_id.strip() else None
     if tunnel_update.foreign_node_id is not None:

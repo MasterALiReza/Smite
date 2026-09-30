@@ -654,6 +654,36 @@ def test_spec_builder_gost_udp_multiplexing_and_target_host():
     assert s["target_host"] == "127.0.0.1"
     assert c["target_host"] == "127.0.0.1"
 
+def test_spec_builder_gost_reverse_default_and_force_direct():
+    """Verify GOST multi-node tunnels default to reverse mode unless force_direct is set"""
+    tunnel_multi = DummyTunnel(
+        id="t-gost-multi",
+        core="gost",
+        type="udp",
+        transport_type="grpc",
+        spec={"ports": [51820]}
+    )
+    s, c = build_tunnel_node_specs(tunnel_multi, "178.239.146.188", "103.83.86.35")
+    assert s["mode"] == "server"
+    assert c["mode"] == "client"
+    assert c["server_ip"] == "178.239.146.188"
+    assert s["is_reverse"] is True
+    assert c["is_reverse"] is True
+
+    tunnel_direct = DummyTunnel(
+        id="t-gost-direct",
+        core="gost",
+        type="udp",
+        transport_type="grpc",
+        spec={"ports": [51820], "force_direct": True}
+    )
+    s_d, c_d = build_tunnel_node_specs(tunnel_direct, "178.239.146.188", "103.83.86.35")
+    assert s_d["mode"] == "client"
+    assert s_d["server_ip"] == "103.83.86.35"
+    assert c_d["mode"] == "server"
+    assert s_d["is_reverse"] is False
+    assert c_d["is_reverse"] is False
+
 
 if __name__ == "__main__":
     import inspect

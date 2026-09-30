@@ -2448,6 +2448,18 @@ class GostAdapter:
                 if not dialer_tls.get("serverName"):
                     dialer_tls["serverName"] = "www.google.com"
                 dialer_tls["secure"] = False
+
+            # Align authority for gRPC and TLS dialers in GOST v3
+            # Go's gRPC client requires transport credentials authority to match dial option / metadata host
+            if gost_type == "grpc" or dialer_tls.get("serverName") or security_type in ["tls", "utls"]:
+                effective_sni = dialer_tls.get("serverName") or dialer_metadata.get("host")
+                if not effective_sni and gost_type == "grpc":
+                    effective_sni = "www.google.com"
+                    dialer_tls["serverName"] = effective_sni
+                    dialer_tls["secure"] = False
+                if effective_sni:
+                    dialer_metadata["host"] = effective_sni
+                    dialer_metadata["grpc.host"] = effective_sni
                 
             # Anti-DPI custom headers for WebSocket/HTTP
             if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
