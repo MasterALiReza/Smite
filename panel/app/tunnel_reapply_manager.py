@@ -210,9 +210,22 @@ class TunnelReapplyManager:
             }
         )
 
-        is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (tunnel.core == "gost" and (tunnel.foreign_node_id or tunnel.iran_node_id))
+        is_multi_node_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
+            tunnel.core == "gost" and (
+                bool(tunnel.foreign_node_id)
+                or bool(tunnel.iran_node_id)
+                or tunnel.is_reverse is not None
+            )
+        )
+        is_reverse = (
+            True if (
+                tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
+                or (tunnel.core == "gost" and tunnel.is_reverse is True)
+                or (tunnel.core == "gost" and tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id))
+            ) else False
+        )
         
-        if is_reverse_tunnel:
+        if is_multi_node_tunnel:
             iran_node_id = tunnel.iran_node_id or tunnel.node_id
             if not iran_node_id:
                 return False
@@ -256,37 +269,46 @@ class TunnelReapplyManager:
                 logger.error(f"Spec builder failed for tunnel {tunnel.id}: {e}")
                 return False
             
-            server_response = await client.send_to_node(
-                node_id=iran_node.id,
+            if is_reverse:
+                first_node, first_spec, first_role = iran_node, server_spec, "iran node"
+                second_node, second_spec, second_role = foreign_node, client_spec, "foreign node"
+            else:
+                first_node, first_spec, first_role = foreign_node, client_spec, "foreign node"
+                second_node, second_spec, second_role = iran_node, server_spec, "iran node"
+
+            first_response = await client.send_to_node(
+                node_id=first_node.id,
                 endpoint="/api/agent/tunnels/apply",
                 data={
                     "tunnel_id": tunnel.id,
                     "core": tunnel.core,
                     "type": tunnel.type,
-                    "spec": server_spec
+                    "spec": first_spec
                 }
             )
             
-            if server_response.get("status") == "error":
-                logger.error(f"Failed to reapply tunnel {tunnel.id} to iran node: {server_response.get('message')}")
+            if first_response.get("status") == "error":
+                logger.error(f"Failed to reapply tunnel {tunnel.id} to {first_role}: {first_response.get('message')}")
                 return False
             
-            client_response = await client.send_to_node(
-                node_id=foreign_node.id,
+            await asyncio.sleep(1.0)
+
+            second_response = await client.send_to_node(
+                node_id=second_node.id,
                 endpoint="/api/agent/tunnels/apply",
                 data={
                     "tunnel_id": tunnel.id,
                     "core": tunnel.core,
                     "type": tunnel.type,
-                    "spec": client_spec
+                    "spec": second_spec
                 }
             )
             
-            if client_response.get("status") == "error":
-                logger.error(f"Failed to reapply tunnel {tunnel.id} to foreign node: {client_response.get('message')}")
+            if second_response.get("status") == "error":
+                logger.error(f"Failed to reapply tunnel {tunnel.id} to {second_role}: {second_response.get('message')}")
                 return False
             
-            ok = server_response.get("status") == "success" and client_response.get("status") == "success"
+            ok = first_response.get("status") == "success" and second_response.get("status") == "success"
             if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
                 tunnel.spec.pop("_pending_reapply", None)
                 from sqlalchemy.orm.attributes import flag_modified
