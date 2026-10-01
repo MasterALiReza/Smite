@@ -2536,9 +2536,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         category: formData.category ? formData.category.trim() : null,
         spec: updatedSpec,
         transport_type: tunnel.core === 'backhaul'
-          ? (backhaulState.transport || 'tcp')
+          ? (backhaulState.transport || 'tcpmux')
           : (tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type))),
         ...(tunnel.core === 'backhaul' && {
+          type: (backhaulState.accept_udp ? (tunnel.type === 'udp' ? 'udp' : 'tcp+udp') : 'tcp'),
           security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
           custom_sni: backhaulAdvanced.client.edge_ip || formData.custom_sni || null,
           gaming_mode: Boolean(backhaulState.gaming_mode),
@@ -2745,7 +2746,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               onChange={(partial) => {
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
                 if (partial.transport) {
-                  setFormData((prev: any) => ({ ...prev, transport_type: partial.transport as string, type: partial.transport as string }))
+                  setFormData((prev: any) => ({ ...prev, transport_type: partial.transport as string }))
+                }
+                if (partial.accept_udp !== undefined) {
+                  if (partial.accept_udp && formData.type === 'tcp') {
+                    setFormData((prev: any) => ({ ...prev, type: 'tcp+udp' }))
+                  } else if (!partial.accept_udp && formData.type !== 'tcp') {
+                    setFormData((prev: any) => ({ ...prev, type: 'tcp' }))
+                  }
                 }
                 if (partial.gaming_mode !== undefined) {
                   setFormData((prev) => ({ ...prev, gaming_mode: partial.gaming_mode }))
@@ -4646,7 +4654,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         } else {
           console.warn('Backhaul tunnel creation - no ports found! formData.ports:', formData.ports, 'publicPorts:', updatedBackhaulState.public_port)
         }
-        tunnelType = backhaulState.transport
+        tunnelType = (formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
+        spec.transport = backhaulState.transport || 'tcpmux'
+        spec.transport_type = backhaulState.transport || 'tcpmux'
+        spec.type = tunnelType
       }
       
       if (formData.core === 'frp') {
@@ -4802,7 +4813,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         updated.frp_bind_port = generateRandomControlPort()
       }
     } else if (core === 'backhaul') {
-      newType = backhaulState.transport
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
       if (!backhaulState.control_port || backhaulState.control_port === '3080') {
         setBackhaulState(prev => ({ ...prev, control_port: generateRandomControlPort() }))
       }
@@ -4993,10 +5004,14 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               <CustomSelect
                 value={formData.type}
                 onChange={(val) => {
-                  const value = val as BackhaulTransport
+                  const value = val as string
                   setFormData({ ...formData, type: value })
                   if (formData.core === 'backhaul') {
-                    setBackhaulState((prev) => ({ ...prev, transport: value }))
+                    if (value === 'udp' || value === 'tcp+udp') {
+                      setBackhaulState((prev) => ({ ...prev, accept_udp: true }))
+                    } else if (value === 'tcp') {
+                      setBackhaulState((prev) => ({ ...prev, accept_udp: false }))
+                    }
                   }
                 }}
                 options={
@@ -5020,13 +5035,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       ]
                     : formData.core === 'backhaul'
                     ? [
-                        { value: 'tcp', label: 'TCP' },
-                        { value: 'udp', label: 'UDP (Pure UDP - Gaming)' },
-                        { value: 'tcpmux', label: 'TCPMux' },
-                        { value: 'ws', label: 'WebSocket (WS)' },
-                        { value: 'wsmux', label: 'WebSocket Mux' },
-                        { value: 'wss', label: 'WebSocket Secure (WSS)' },
-                        { value: 'wssmux', label: 'WebSocket Secure Mux' },
+                        { value: 'tcp', label: 'TCP (Standard)' },
+                        { value: 'udp', label: 'UDP (Gaming / Anti-Lag)' },
+                        { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
                       ]
                     : [
                         { value: 'tcp', label: 'TCP' },
@@ -5089,7 +5100,14 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               onChange={(partial) => {
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
                 if (partial.transport) {
-                  setFormData((prev) => ({ ...prev, type: partial.transport as string }))
+                  setFormData((prev) => ({ ...prev, transport_type: partial.transport as string }))
+                }
+                if (partial.accept_udp !== undefined) {
+                  if (partial.accept_udp && formData.type === 'tcp') {
+                    setFormData((prev) => ({ ...prev, type: 'tcp+udp' }))
+                  } else if (!partial.accept_udp && formData.type !== 'tcp') {
+                    setFormData((prev) => ({ ...prev, type: 'tcp' }))
+                  }
                 }
                 if (partial.gaming_mode !== undefined) {
                   setFormData((prev: any) => ({ ...prev, gaming_mode: Boolean(partial.gaming_mode) }))
@@ -6714,17 +6732,16 @@ function BackhaulForm({
             value={state.transport}
             onChange={(val) => onChange({ transport: val as BackhaulTransport })}
             options={[
-              { value: 'tcp', label: 'TCP' },
-              { value: 'tcpmux', label: 'TCPMux (SMUX)' },
+              { value: 'tcpmux', label: 'TCPMux (SMUX - Recommended)' },
+              { value: 'tcp', label: 'TCP (Direct Stream)' },
               { value: 'ws', label: 'WebSocket (WS)' },
               { value: 'wsmux', label: 'WS Mux' },
               { value: 'wss', label: 'WSS (TLS Secure)' },
               { value: 'wssmux', label: 'WSS Mux (TLS)' },
-              { value: 'udp', label: 'UDP (UDP-over-TCP)' },
             ]}
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Tunnel transport stream.
+            Underlying connection protocol between nodes.
           </p>
         </div>
 
@@ -7391,9 +7408,12 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
   const state = createDefaultBackhaulState()
   const advanced = createDefaultBackhaulAdvancedState()
 
-  const candidateTransport = (spec?.transport || spec?.transport_type || currentType || '') as BackhaulTransport
+  const candidateTransport = (spec?.transport || spec?.transport_type || (currentType !== 'tcp' && currentType !== 'udp' && currentType !== 'tcp+udp' ? currentType : '') || 'tcpmux') as BackhaulTransport
   if (BACKHAUL_TRANSPORTS.includes(candidateTransport)) {
-    state.transport = candidateTransport
+    state.transport = candidateTransport === 'udp' ? 'tcpmux' : candidateTransport
+  }
+  if (spec?.accept_udp === true || currentType === 'udp' || currentType === 'tcp+udp') {
+    state.accept_udp = true
   }
 
   if (!spec) {

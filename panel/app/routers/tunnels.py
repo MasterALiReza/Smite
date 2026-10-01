@@ -469,17 +469,29 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         if ports:
             tunnel.spec["ports"] = ports
     
-    is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
+    foreign_node_id_val = tunnel.foreign_node_id if tunnel.foreign_node_id and (not isinstance(tunnel.foreign_node_id, str) or tunnel.foreign_node_id.strip()) else None
+    iran_node_id_val = tunnel.iran_node_id if tunnel.iran_node_id and (not isinstance(tunnel.iran_node_id, str) or tunnel.iran_node_id.strip()) else None
+    node_id_val = tunnel.node_id if tunnel.node_id and (not isinstance(tunnel.node_id, str) or tunnel.node_id.strip()) else None
+
+    is_multi_node_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
         tunnel.core == "gost" and (
-            tunnel.is_reverse
-            or bool(getattr(tunnel, "foreign_node_id", None))
-            or bool(getattr(tunnel, "iran_node_id", None))
+            bool(foreign_node_id_val)
+            or bool(iran_node_id_val)
+            or bool(node_id_val)
+            or tunnel.is_reverse is not None
         )
+    )
+    is_reverse = (
+        True if (
+            tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
+            or (tunnel.core == "gost" and tunnel.is_reverse is True)
+            or (tunnel.core == "gost" and tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_val or iran_node_id_val))
+        ) else False
     )
     foreign_node = None
     iran_node = None
     
-    if is_reverse_tunnel:
+    if is_multi_node_tunnel:
         foreign_node_id_val = tunnel.foreign_node_id if tunnel.foreign_node_id and (not isinstance(tunnel.foreign_node_id, str) or tunnel.foreign_node_id.strip()) else None
         if foreign_node_id_val:
             result = await db.execute(select(Node).where(Node.id == foreign_node_id_val))
@@ -549,7 +561,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         foreign_node_id=foreign_node_id_to_store,
         node_id=tunnel_node_id,
         core=tunnel.core,
-        is_reverse=is_reverse_tunnel
+        is_reverse=is_reverse
     )
     
     db_tunnel = Tunnel(
@@ -565,13 +577,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         custom_host=tunnel.custom_host,
         custom_sni=tunnel.custom_sni,
         ws_path=tunnel.ws_path,
-        is_reverse=(
-            True if (
-                tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
-                or (tunnel.core == "gost" and not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_to_store or iran_node_id_to_store))
-                or tunnel.is_reverse is True
-            ) else (tunnel.is_reverse or False)
-        ),
+        is_reverse=is_reverse,
         port_ranges=tunnel.port_ranges,
         stealth_domain=tunnel.stealth_domain,
         allowed_ips=tunnel.allowed_ips,
@@ -616,7 +622,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             needs_frp_server,
         )
         
-        if is_reverse_tunnel and foreign_node and iran_node:
+        if is_multi_node_tunnel and foreign_node and iran_node:
             client = NodeClient()
             
             iran_node_ip = iran_node.node_metadata.get("ip_address")
@@ -643,52 +649,62 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
-            
-            logger.info(f"Applying server config to iran node {iran_node.id} for tunnel {db_tunnel.id}")
-            server_response = await client.send_to_node(
-                node_id=iran_node.id,
-                endpoint="/api/agent/tunnels/apply",
-                data={
-                    "tunnel_id": db_tunnel.id,
-                    "core": db_tunnel.core,
-                    "type": db_tunnel.type,
-                    "spec": server_spec
-                }
-            )
-            
-            if server_response.get("status") == "error":
-                db_tunnel.status = "error"
-                error_msg = server_response.get("message", "Unknown error from iran node")
-                db_tunnel.error_message = f"Iran node error: {error_msg}"
-                logger.error(f"Tunnel {db_tunnel.id}: Iran node error: {error_msg}")
-                await db.commit()
-                await db.refresh(db_tunnel)
-                return db_tunnel
-            
+
             if not foreign_node.node_metadata.get("api_address"):
                 foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
-            
-            logger.info(f"Applying client config to foreign node {foreign_node.id} for tunnel {db_tunnel.id}")
-            client_response = await client.send_to_node(
-                node_id=foreign_node.id,
+
+            if is_reverse:
+                first_node, first_spec, first_role = iran_node, server_spec, f"iran node {iran_node.id} (server)"
+                second_node, second_spec, second_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (client)"
+            else:
+                first_node, first_spec, first_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (server)"
+                second_node, second_spec, second_role = iran_node, server_spec, f"iran node {iran_node.id} (client)"
+
+            logger.info(f"Applying config to {first_role} for tunnel {db_tunnel.id}")
+            first_response = await client.send_to_node(
+                node_id=first_node.id,
                 endpoint="/api/agent/tunnels/apply",
                 data={
                     "tunnel_id": db_tunnel.id,
                     "core": db_tunnel.core,
                     "type": db_tunnel.type,
-                    "spec": client_spec
+                    "spec": first_spec
                 }
             )
             
-            if client_response.get("status") == "error":
+            if first_response.get("status") == "error":
                 db_tunnel.status = "error"
-                error_msg = client_response.get("message", "Unknown error from foreign node")
-                db_tunnel.error_message = f"Foreign node error: {error_msg}"
-                logger.error(f"Tunnel {db_tunnel.id}: Foreign node error: {error_msg}")
+                error_msg = first_response.get("message", f"Unknown error from {first_role}")
+                db_tunnel.error_message = f"{first_role} error: {error_msg}"
+                logger.error(f"Tunnel {db_tunnel.id}: {first_role} error: {error_msg}")
+                await db.commit()
+                await db.refresh(db_tunnel)
+                return db_tunnel
+
+            # Allow server to bind and stabilize before client connects
+            await asyncio.sleep(1.0)
+
+            logger.info(f"Applying config to {second_role} for tunnel {db_tunnel.id}")
+            second_response = await client.send_to_node(
+                node_id=second_node.id,
+                endpoint="/api/agent/tunnels/apply",
+                data={
+                    "tunnel_id": db_tunnel.id,
+                    "core": db_tunnel.core,
+                    "type": db_tunnel.type,
+                    "spec": second_spec
+                }
+            )
+            
+            if second_response.get("status") == "error":
+                db_tunnel.status = "error"
+                error_msg = second_response.get("message", f"Unknown error from {second_role}")
+                db_tunnel.error_message = f"{second_role} error: {error_msg}"
+                logger.error(f"Tunnel {db_tunnel.id}: {second_role} error: {error_msg}")
                 try:
                     await client.send_to_node(
-                        node_id=iran_node.id,
+                        node_id=first_node.id,
                         endpoint="/api/agent/tunnels/remove",
                         data={"tunnel_id": db_tunnel.id}
                     )
@@ -698,7 +714,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 await db.refresh(db_tunnel)
                 return db_tunnel
             
-            if server_response.get("status") == "success" and client_response.get("status") == "success":
+            if first_response.get("status") == "success" and second_response.get("status") == "success":
                 db_tunnel.status = "active"
                 logger.info(f"Tunnel {db_tunnel.id} successfully applied to both nodes")
             else:
@@ -711,7 +727,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             return db_tunnel
         
         
-        if needs_node_apply and not is_reverse_tunnel:
+        if needs_node_apply and not is_multi_node_tunnel:
             remote_addr = db_tunnel.spec.get("remote_addr")
             token = db_tunnel.spec.get("token")
             proxy_port = db_tunnel.spec.get("remote_port") or db_tunnel.spec.get("listen_port")
@@ -1475,8 +1491,16 @@ async def update_tunnel(
         tunnel.ws_path = tunnel_update.ws_path
     if tunnel_update.is_reverse is not None:
         tunnel.is_reverse = tunnel_update.is_reverse
-    elif tunnel.core == "gost" and not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):
-        tunnel.is_reverse = True
+        if isinstance(tunnel.spec, dict):
+            tunnel.spec["is_reverse"] = tunnel_update.is_reverse
+            tunnel.spec["force_direct"] = not tunnel_update.is_reverse
+    elif tunnel.core == "gost":
+        if tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):
+            tunnel.is_reverse = True
+        if isinstance(tunnel.spec, dict):
+            if tunnel.is_reverse is not None:
+                tunnel.spec["is_reverse"] = tunnel.is_reverse
+                tunnel.spec["force_direct"] = not tunnel.is_reverse
     if tunnel_update.node_id is not None:
         tunnel.node_id = tunnel_update.node_id if tunnel_update.node_id.strip() else None
     if tunnel_update.foreign_node_id is not None:
@@ -1570,12 +1594,19 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
     
     client = NodeClient()
     
-    is_reverse_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
+    is_multi_node_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
         tunnel.core == "gost" and (
-            tunnel.is_reverse
-            or bool(getattr(tunnel, "foreign_node_id", None))
+            bool(getattr(tunnel, "foreign_node_id", None))
             or bool(getattr(tunnel, "iran_node_id", None))
+            or tunnel.is_reverse is not None
         )
+    )
+    is_reverse = (
+        True if (
+            tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
+            or (tunnel.core == "gost" and tunnel.is_reverse is True)
+            or (tunnel.core == "gost" and tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)))
+        ) else False
     )
     foreign_node = None
     iran_node = None
@@ -1591,10 +1622,10 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         node_id=tunnel.node_id,
         exclude_tunnel_id=tunnel.id,
         core=tunnel.core,
-        is_reverse=is_reverse_tunnel
+        is_reverse=is_reverse
     )
     
-    if is_reverse_tunnel:
+    if is_multi_node_tunnel:
         iran_node_id = getattr(tunnel, "iran_node_id", None) or tunnel.node_id
         result = await db.execute(select(Node).where(Node.id == iran_node_id))
         iran_node = result.scalar_one_or_none()
@@ -1662,53 +1693,62 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 if not iran_node.node_metadata.get("api_address"):
                     iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                     await db.commit()
-                
-                logger.info(f"Reapplying tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
-                server_response = await client.send_to_node(
-                    node_id=iran_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": server_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
-                    }
-                )
-                
-                if server_response.get("status") == "error":
-                    tunnel.status = "error"
-                    error_msg = server_response.get("message", "Unknown error from iran node")
-                    tunnel.error_message = f"Iran node error: {error_msg}"
-                    await db.commit()
-                    raise HTTPException(status_code=500, detail=error_msg)
-                
-                # Allow server to bind and stabilize before foreign node client connects
-                await asyncio.sleep(1.0)
 
                 if not foreign_node.node_metadata.get("api_address"):
                     foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                     await db.commit()
-                
-                logger.info(f"Reapplying tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
-                client_response = await client.send_to_node(
-                    node_id=foreign_node.id,
+
+                if is_reverse:
+                    first_node, first_spec, first_role = iran_node, server_spec, f"iran node {iran_node.id} (server)"
+                    second_node, second_spec, second_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (client)"
+                    verify_mode = "server"
+                else:
+                    first_node, first_spec, first_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (server)"
+                    second_node, second_spec, second_role = iran_node, server_spec, f"iran node {iran_node.id} (client)"
+                    verify_mode = "client"
+
+                logger.info(f"Reapplying tunnel {tunnel.id}: applying config to {first_role}")
+                first_response = await client.send_to_node(
+                    node_id=first_node.id,
                     endpoint="/api/agent/tunnels/apply",
                     data={
                         "tunnel_id": tunnel.id,
                         "core": tunnel.core,
                         "type": tunnel.type,
-                        "spec": client_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
+                        "spec": first_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
                     }
                 )
                 
-                if client_response.get("status") == "error":
+                if first_response.get("status") == "error":
                     tunnel.status = "error"
-                    error_msg = client_response.get("message", "Unknown error from foreign node")
-                    tunnel.error_message = f"Foreign node error: {error_msg}"
+                    error_msg = first_response.get("message", f"Unknown error from {first_role}")
+                    tunnel.error_message = f"{first_role} error: {error_msg}"
                     await db.commit()
                     raise HTTPException(status_code=500, detail=error_msg)
                 
-                if server_response.get("status") == "success" and client_response.get("status") == "success":
+                # Allow server to bind and stabilize before client connects
+                await asyncio.sleep(1.0)
+
+                logger.info(f"Reapplying tunnel {tunnel.id}: applying config to {second_role}")
+                second_response = await client.send_to_node(
+                    node_id=second_node.id,
+                    endpoint="/api/agent/tunnels/apply",
+                    data={
+                        "tunnel_id": tunnel.id,
+                        "core": tunnel.core,
+                        "type": tunnel.type,
+                        "spec": second_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
+                    }
+                )
+                
+                if second_response.get("status") == "error":
+                    tunnel.status = "error"
+                    error_msg = second_response.get("message", f"Unknown error from {second_role}")
+                    tunnel.error_message = f"{second_role} error: {error_msg}"
+                    await db.commit()
+                    raise HTTPException(status_code=500, detail=error_msg)
+                
+                if first_response.get("status") == "success" and second_response.get("status") == "success":
                     # ── 3-Way Verification Check ─────────────────────────────────────
                     await asyncio.sleep(0.8)
                     
@@ -1729,7 +1769,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                             node_id=iran_node.id,
                             tunnel_id=tunnel.id,
                             core=tunnel.core,
-                            mode="server",
+                            mode=verify_mode,
                             ports=verify_ports,
                             control_port=verify_ctrl_port,
                             proto="udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp"

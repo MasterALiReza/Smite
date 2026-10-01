@@ -157,8 +157,8 @@ def test_spec_builder_backhaul_udp_over_tcp():
     )
     server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     
-    assert server_spec["transport"] == "tcp"
-    assert client_spec["transport"] == "tcp"
+    assert server_spec["transport"] == "tcpmux"
+    assert client_spec["transport"] == "tcpmux"
     assert server_spec["accept_udp"] is True
     assert client_spec["accept_udp"] is True
 

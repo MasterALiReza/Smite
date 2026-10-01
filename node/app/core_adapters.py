@@ -992,7 +992,7 @@ class BackhaulAdapter:
                 or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
                 or is_pure_udp
             )
-            if is_pure_udp or is_udp_over_tcp:
+            if is_pure_udp:
                 transport = "tcp"
             elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
                 transport = raw_transport
@@ -1196,7 +1196,7 @@ class BackhaulAdapter:
                 or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
                 or is_pure_udp
             )
-            if is_pure_udp or is_udp_over_tcp:
+            if is_pure_udp:
                 transport = "tcp"
             elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
                 transport = raw_transport

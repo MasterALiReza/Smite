@@ -315,21 +315,19 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         or is_pure_udp
     )
 
-    if is_pure_udp or is_udp_over_tcp:
-        # Musixal/Backhaul encapsulates UDP traffic via accept_udp = true over TCP/TCPMUX.
-        # Raw transport = "udp" is invalid in upstream Backhaul and causes exit code 1.
+    if is_pure_udp:
+        # Upstream Backhaul does not have a raw transport = "udp". Map to TCP with accept_udp = true.
         transport = "tcp"
-        server_spec["accept_udp"] = True
-        client_spec["accept_udp"] = True
-        server_spec["transport"] = "tcp"
-        client_spec["transport"] = "tcp"
-        if getattr(tunnel, "spec", None) is not None:
-            tunnel.spec["accept_udp"] = True
-            tunnel.spec["transport"] = "tcp"
     elif raw_transport_str in {"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux"}:
         transport = raw_transport_str
     else:
         transport = "tcpmux"
+
+    if is_udp_over_tcp:
+        server_spec["accept_udp"] = True
+        client_spec["accept_udp"] = True
+        if getattr(tunnel, "spec", None) is not None:
+            tunnel.spec["accept_udp"] = True
 
     # WSS and TLS resolution
     use_tls = (
@@ -1267,17 +1265,25 @@ def build_gost_node_specs(
         is_reverse = False
     else:
         is_reverse = getattr(tunnel, "is_reverse", None)
+        if is_reverse is None and hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            is_reverse = tunnel.spec.get("is_reverse")
         if is_reverse is None:
             is_reverse = spec.get("is_reverse")
-        # For multi-node setup (iran + foreign), default to reverse unless force_direct is explicitly set
-        if is_reverse is None or not is_reverse:
+
+        # Only default to reverse if is_reverse was NOT explicitly set (i.e. is None)
+        if is_reverse is None:
             if foreign_node_ip or getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
                 is_reverse = True
             else:
-                is_reverse = bool(is_reverse)
+                is_reverse = False
+        else:
+            is_reverse = bool(is_reverse)
 
+    spec["is_reverse"] = is_reverse
+    spec["force_direct"] = not is_reverse
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         tunnel.spec["is_reverse"] = is_reverse
+        tunnel.spec["force_direct"] = not is_reverse
     if hasattr(tunnel, "is_reverse"):
         try:
             tunnel.is_reverse = is_reverse
@@ -1326,6 +1332,7 @@ def build_gost_node_specs(
         "failover_ips": failover_ips,
         "port_ranges": port_ranges,
         "is_reverse": is_reverse,
+        "force_direct": not is_reverse,
         "utls_fingerprint": getattr(tunnel, "utls_fingerprint", None),
         "custom_headers": getattr(tunnel, "custom_headers", None),
         "obfuscation_type": getattr(tunnel, "obfuscation_type", None),
@@ -1348,7 +1355,7 @@ def build_gost_node_specs(
             base_spec["mux_type"] = "yamux"
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout"]:
+        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout", "force_direct"]:
             if k in tunnel.spec:
                 base_spec[k] = tunnel.spec[k]
 
