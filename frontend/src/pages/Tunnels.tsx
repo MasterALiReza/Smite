@@ -2429,7 +2429,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.ports = ports
         updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
         updatedSpec.listen_port = ports[0]  // Keep for backward compatibility
-      } else if (tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux')) {
+      } else if (tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'tcp+udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux')) {
         const remoteIp = formData.remote_ip || '127.0.0.1'
         updatedSpec.remote_ip = remoteIp
         updatedSpec.ports = ports
@@ -2668,7 +2668,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               )}
             </div>
           </div>
-          {tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux') && (
+          {tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'tcp+udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
               <div>
                 <div className="flex items-center justify-between mb-1 h-5">
@@ -4181,12 +4181,12 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   </div>
                 </div>
 
-                {/* CDN Mode Extra Options */}
-                {formData.cdn_mode && (
+                {/* CDN / Stealth / TLS Extra Options */}
+                {(formData.cdn_mode || formData.gost_transport === 'wss' || formData.gost_transport === 'ws' || formData.gost_transport === 'grpc' || formData.gost_security === 'tls' || formData.gost_security === 'utls' || formData.type === 'ws' || formData.type === 'grpc') && (
                   <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-900/50 space-y-2.5">
                     <label className="text-xs font-bold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
                       <Globe size={15} className="text-blue-600 dark:text-blue-400" />
-                      CDN / WebSocket Configuration
+                      Host, SNI & Path Configuration
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>
@@ -4493,7 +4493,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         }
       }
       
-      if (formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux')) {
+      if (formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp' || formData.type === 'grpc' || formData.type === 'tcpmux')) {
         const remoteIp = formData.remote_ip || (formData.use_ipv6 ? '::1' : '127.0.0.1')
         // For GOST, ports are equal (listen_port = forward_to port)
         spec.remote_ip = remoteIp
@@ -4983,7 +4983,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
             </div>
           </div>
 
-          {formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux') && (
+          {formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp' || formData.type === 'grpc' || formData.type === 'tcpmux') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
               <div>
                 <div className="flex items-center justify-between mb-1 h-5">
@@ -6458,12 +6458,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   </div>
                 </div>
 
-                {/* CDN Mode Extra Options */}
-                {formData.cdn_mode && (
+                {/* CDN / Stealth / TLS Extra Options */}
+                {(formData.cdn_mode || formData.gost_transport === 'wss' || formData.gost_transport === 'ws' || formData.gost_transport === 'grpc' || formData.gost_security === 'tls' || formData.gost_security === 'utls' || formData.type === 'ws' || formData.type === 'grpc') && (
                   <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-900/50 space-y-2.5">
                     <label className="text-xs font-bold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
                       <Globe size={15} className="text-blue-600 dark:text-blue-400" />
-                      CDN / WebSocket Configuration
+                      Host, SNI & Path Configuration
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>

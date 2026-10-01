@@ -288,6 +288,7 @@ class TunnelReapplyManager:
             
             ok = server_response.get("status") == "success" and client_response.get("status") == "success"
             if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+                tunnel.spec.pop("_pending_reapply", None)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
                 await session.commit()

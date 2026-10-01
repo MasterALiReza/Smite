@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y \
     gzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Stage: Install FRP binaries
-FROM base AS frp-bin
+# Stage: Install FRP & GOST binaries
+FROM base AS core-bins
 RUN set -eux; \
     ARCH_RAW="$(uname -m)"; \
     case "$ARCH_RAW" in \
@@ -29,7 +29,20 @@ RUN set -eux; \
         install -Dm755 "$FRPS_BIN" /usr/local/bin/frps; \
     fi; \
     rm -rf "$FRP_TMP"; \
-    /usr/local/bin/frps --version || true
+    /usr/local/bin/frps --version || true; \
+    echo "Fetching GOST release"; \
+    GOST_VERSION="v3.0.0-rc10"; \
+    GOST_VERSION_NO_V="${GOST_VERSION#v}"; \
+    GOST_URL="https://github.com/go-gost/gost/releases/download/${GOST_VERSION}/gost_${GOST_VERSION_NO_V}_linux_${ARCH}.tar.gz"; \
+    GOST_TMP="$(mktemp -d)"; \
+    curl -fsSL "$GOST_URL" -o "$GOST_TMP/gost.tar.gz"; \
+    tar -xzf "$GOST_TMP/gost.tar.gz" -C "$GOST_TMP"; \
+    GOST_BIN="$(find "$GOST_TMP" -type f -name 'gost' | head -n1)"; \
+    if [ -n "$GOST_BIN" ]; then \
+        install -Dm755 "$GOST_BIN" /usr/local/bin/gost; \
+    fi; \
+    rm -rf "$GOST_TMP"; \
+    /usr/local/bin/gost -V || true
 
 FROM node:18-alpine AS frontend-build
 WORKDIR /app
@@ -57,8 +70,9 @@ LABEL smite.version="${SMITE_VERSION}"
 ENV SMITE_VERSION="${SMITE_VERSION}"
 RUN echo "${SMITE_VERSION}" > /app/VERSION
 
-# Copy FRP binary from frp-bin stage
-COPY --from=frp-bin /usr/local/bin/frps /usr/local/bin/frps
+# Copy FRP and GOST binaries from core-bins stage
+COPY --from=core-bins /usr/local/bin/frps /usr/local/bin/frps
+COPY --from=core-bins /usr/local/bin/gost /usr/local/bin/gost
 
 COPY --from=deps /usr/local /usr/local
 COPY --from=frontend-build /app/dist ./static

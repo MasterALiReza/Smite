@@ -181,58 +181,52 @@ class GostForwarder:
             raise
     
     async def stop_forward(self, tunnel_id: str):
-        """Stop forwarding for a tunnel"""
-        if tunnel_id in self.active_forwards:
-            proc = self.active_forwards[tunnel_id]
-            await stop_async_process(proc)
-            del self.active_forwards[tunnel_id]
-            logger.info(f"Stopped gost forwarding for tunnel {tunnel_id}")
-            
-        if tunnel_id in self.log_files:
-            try:
-                self.log_files[tunnel_id].close()
-            except Exception:
-                pass
-            del self.log_files[tunnel_id]
+        """Stop forwarding for a tunnel and all its multi-port sub-processes"""
+        matching_keys = set()
+        for k in list(self.active_forwards.keys()) + list(self.forward_configs.keys()) + list(self.log_files.keys()):
+            if k == tunnel_id or k.startswith(f"{tunnel_id}_"):
+                matching_keys.add(k)
         
-        config_file = self.config_dir / f"gost_{tunnel_id}.json"
-        if config_file.exists():
-            try:
-                config_file.unlink()
-            except Exception:
-                pass
+        if not matching_keys:
+            matching_keys.add(tunnel_id)
+            
+        for tid in matching_keys:
+            if tid in self.active_forwards:
+                proc = self.active_forwards[tid]
+                await stop_async_process(proc)
+                del self.active_forwards[tid]
+                logger.info(f"Stopped gost forwarding for tunnel {tid}")
+                
+            if tid in self.log_files:
+                try:
+                    self.log_files[tid].close()
+                except Exception:
+                    pass
+                del self.log_files[tid]
+            
+            config_file = self.config_dir / f"gost_{tid}.json"
+            if config_file.exists():
+                try:
+                    config_file.unlink()
+                except Exception:
+                    pass
 
-        log_file = self.config_dir / f"gost_{tunnel_id}.log"
-        if log_file.exists():
-            try:
-                log_file.unlink()
-            except Exception:
-                pass
+            log_file = self.config_dir / f"gost_{tid}.log"
+            if log_file.exists():
+                try:
+                    log_file.unlink()
+                except Exception:
+                    pass
 
-        if tunnel_id in self.forward_configs:
-            del self.forward_configs[tunnel_id]
+            if tid in self.forward_configs:
+                del self.forward_configs[tid]
     
     async def is_forwarding(self, tunnel_id: str) -> bool:
-        """Check if forwarding is active for a tunnel"""
-        if tunnel_id not in self.active_forwards:
+        """Check if forwarding is active for a tunnel or any of its sub-processes"""
+        matching = [k for k in self.active_forwards.keys() if k == tunnel_id or k.startswith(f"{tunnel_id}_")]
+        if not matching:
             return False
-        proc = self.active_forwards[tunnel_id]
-        is_alive = proc.returncode is None
-        if not is_alive and tunnel_id in self.forward_configs:
-            logger.warning(f"Gost process for tunnel {tunnel_id} died, attempting restart...")
-            try:
-                config = self.forward_configs[tunnel_id]
-                await self.start_forward(
-                    tunnel_id=tunnel_id,
-                    local_port=config["local_port"],
-                    forward_to=config["forward_to"],
-                    tunnel_type=config["tunnel_type"]
-                )
-                return True
-            except Exception as e:
-                logger.error(f"Failed to restart gost for tunnel {tunnel_id}: {e}")
-                return False
-        return is_alive
+        return any(self.active_forwards[k].returncode is None for k in matching)
     
     def get_forwarding_tunnels(self) -> list:
         """Get list of tunnel IDs with active forwarding"""

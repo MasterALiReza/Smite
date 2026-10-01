@@ -13,6 +13,7 @@ import signal
 import shutil
 import threading
 import uuid
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -2296,37 +2297,49 @@ class GostAdapter:
             await self.remove(tunnel_id)
             
         auth_token = spec.get('auth_token', '')
-        transport_type = (spec.get('transport_type') or spec.get('transport') or 'tcp').lower()
+        transport_type = (spec.get('transport_type') or spec.get('transport') or spec.get('gost_type') or 'tcp').lower()
         security_type = (spec.get('security_type') or 'none').lower()
         use_ipv6 = spec.get('use_ipv6', False)
         
-        if transport_type in ["multiplex ws", "multiplex_ws"]:
+        if transport_type in ["multiplex ws", "multiplex_ws", "wsmux"]:
             transport_type = "mws"
+        elif transport_type in ["tcpmux", "tcp_mux"]:
+            transport_type = "mtcp"
 
         gost_type = transport_type
         if transport_type == "ws" and security_type in ["tls", "utls"]:
             gost_type = "wss"
         elif transport_type == "mws" and security_type in ["tls", "utls"]:
             gost_type = "mwss"
+        elif transport_type == "wssmux":
+            gost_type = "mwss"
         elif transport_type == "tcp" and security_type in ["tls", "utls"]:
             gost_type = "tls"
+        elif transport_type == "mtcp" and security_type in ["tls", "utls"]:
+            gost_type = "mtls"
         
         tunnel_proto = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
         if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
             tunnel_proto = "tcp"
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
-        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp", "kcp", "quic", "grpc"]
+        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "udp", "rudp", "kcp", "quic", "grpc"]
 
         config = {
             "services": [],
-            "chains": []
+            "chains": [],
+            "log": {
+                "level": "warn"
+            }
         }
         
         # Add Resolvers if specified
-        if spec.get("dns_resolvers") and isinstance(spec.get("dns_resolvers"), list):
+        raw_resolvers = spec.get("dns_resolvers")
+        if isinstance(raw_resolvers, str):
+            raw_resolvers = [r.strip() for r in re.split(r'[\r\n,]+', raw_resolvers) if r.strip()]
+        if raw_resolvers and isinstance(raw_resolvers, list):
             resolver_nodes = []
-            for i, res in enumerate(spec.get("dns_resolvers")):
+            for i, res in enumerate(raw_resolvers):
                 resolver_nodes.append({"name": f"dns-{tunnel_id}-{i}", "addr": res})
             config["resolvers"] = [{
                 "name": f"resolver-{tunnel_id}",
@@ -2334,21 +2347,45 @@ class GostAdapter:
             }]
             
         # Add Bypasses if specified
-        if spec.get("bypass_ips") and isinstance(spec.get("bypass_ips"), list):
+        raw_bypass = spec.get("bypass_ips")
+        if isinstance(raw_bypass, str):
+            raw_bypass = [b.strip() for b in re.split(r'[\r\n,]+', raw_bypass) if b.strip()]
+        if raw_bypass and isinstance(raw_bypass, list):
             config["bypasses"] = [{
                 "name": f"bypass-{tunnel_id}",
-                "matchers": spec.get("bypass_ips")
+                "matchers": raw_bypass
             }]
         
         if mode == 'server':
             # 1. Server Configuration (Foreign Node in direct mode, Iran Node in reverse mode)
             if control_port:
                 await free_port(control_port)
-            if is_reverse and spec.get("ports"):
-                for p in spec.get("ports"):
-                    p_num = p.get('local_port') or p.get('local') or p.get('port') if isinstance(p, dict) else p
-                    if isinstance(p_num, (int, str)) and str(p_num).isdigit():
-                        await free_port(int(p_num))
+            if is_reverse:
+                server_ports = []
+                if spec.get("ports"):
+                    for p in spec.get("ports"):
+                        if isinstance(p, dict):
+                            p_num = p.get('local_port') or p.get('local') or p.get('port')
+                        elif isinstance(p, str) and "=" in p:
+                            p_num = p.split("=", 1)[0].strip()
+                        else:
+                            p_num = p
+                        if isinstance(p_num, (int, str)) and str(p_num).isdigit():
+                            server_ports.append(int(p_num))
+                if spec.get("port_ranges"):
+                    pr_list = spec.get("port_ranges")
+                    if isinstance(pr_list, str):
+                        pr_list = [x.strip() for x in re.split(r'[\r\n,]+', pr_list) if x.strip()]
+                    for pr in pr_list:
+                        if isinstance(pr, str) and "-" in pr:
+                            try:
+                                start_p, end_p = pr.split("-", 1)
+                                if int(end_p) - int(start_p) <= 500:
+                                    server_ports.extend(range(int(start_p), int(end_p) + 1))
+                            except Exception:
+                                pass
+                if server_ports:
+                    await free_ports(server_ports)
             bind_addr = f"[::]:{control_port}" if use_ipv6 else f"0.0.0.0:{control_port}"
             
             # Handler & Protocol Selection
@@ -2363,6 +2400,9 @@ class GostAdapter:
                     listener_metadata["interval"] = "20ms"
                     listener_metadata["resend"] = 2
                     listener_metadata["nc"] = 1
+                    kcp_key = spec.get("kcp_key") or auth_token or "smite-kcp-secure"
+                    listener_metadata["crypt"] = spec.get("kcp_crypt") or "aes"
+                    listener_metadata["key"] = kcp_key
             else:
                 keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
                 listener_metadata = {
@@ -2379,25 +2419,60 @@ class GostAdapter:
                     listener_metadata["bind"] = True
                 if enable_mux:
                     listener_metadata["mux.type"] = mux_type
+                    listener_metadata["mux"] = True
                     listener_metadata["nodelay"] = True
                 
             server_listener_type = "sshd" if gost_type == "ssh" else gost_type
             listener = {"type": server_listener_type}
+
+            if gost_type in ["ssh", "sshd"]:
+                ssh_key_path = self.config_dir / f"ssh_host_key_{tunnel_id}.pem"
+                ssh_key_pem = spec.get("ssh_key_pem") or spec.get("keyfile_content")
+                if ssh_key_pem:
+                    ssh_key_path.write_text(ssh_key_pem.strip())
+                    try:
+                        os.chmod(ssh_key_path, 0o600)
+                    except Exception:
+                        pass
+                elif not ssh_key_path.exists():
+                    try:
+                        subprocess.run([
+                            "openssl", "genpkey", "-algorithm", "RSA",
+                            "-out", str(ssh_key_path),
+                            "-pkeyopt", "rsa_keygen_bits:2048"
+                        ], check=True, timeout=5, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        os.chmod(ssh_key_path, 0o600)
+                    except Exception as e:
+                        logger.warning(f"Could not generate SSH host key with openssl: {e}")
+                if ssh_key_path.exists():
+                    listener_metadata["hostKey"] = str(ssh_key_path)
+                if auth_token:
+                    listener["auth"] = {
+                        "username": "smite",
+                        "password": auth_token
+                    }
+
             if listener_metadata:
                 listener["metadata"] = listener_metadata
             
-            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "quic", "grpc"]) and gost_type not in ["tcp", "udp", "rtcp", "rudp", "kcp", "ssh", "sshd"]:
-                cert_path = self.config_dir / "dummy_cert.pem"
-                key_path = self.config_dir / "dummy_key.pem"
-                if not cert_path.exists() or not key_path.exists():
+            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "mtls", "quic", "grpc"]) and gost_type not in ["tcp", "udp", "rtcp", "rudp", "kcp", "ssh", "sshd"]:
+                cert_path = self.config_dir / f"cert_{tunnel_id}.pem"
+                key_path = self.config_dir / f"key_{tunnel_id}.pem"
+                
+                # Check if custom cert/key provided in spec
+                if spec.get("tls_cert") and spec.get("tls_key"):
+                    cert_path.write_text(spec["tls_cert"].strip())
+                    key_path.write_text(spec["tls_key"].strip())
+                elif not cert_path.exists() or not key_path.exists():
+                    sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "www.cloudflare.com"
                     try:
                         subprocess.run([
                             "openssl", "req", "-new", "-newkey", "rsa:2048", "-days", "3650",
-                            "-nodes", "-x509", "-subj", "/O=Smite/CN=smite.node",
+                            "-nodes", "-x509", "-subj", f"/CN={sni_domain}",
                             "-keyout", str(key_path), "-out", str(cert_path)
                         ], check=True, timeout=5, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                     except Exception as e:
-                        logger.error(f"Failed to generate self-signed cert: {e}")
+                        logger.error(f"Failed to generate self-signed cert for SNI {sni_domain}: {e}")
                 
                 if cert_path.exists() and key_path.exists():
                     listener["tls"] = {
@@ -2461,10 +2536,12 @@ class GostAdapter:
             
             # 4. Port Ranges
             if spec.get("port_ranges"):
-                for port_range in spec.get("port_ranges"):
+                raw_ranges = spec.get("port_ranges")
+                range_list = [x.strip() for x in re.split(r'[\r\n,]+', raw_ranges) if x.strip()] if isinstance(raw_ranges, str) else raw_ranges
+                for port_range in range_list:
                     if isinstance(port_range, str) and '-' in port_range:
                         try:
-                            start, end = port_range.split('-')
+                            start, end = port_range.split('-', 1)
                             # expand carefully to avoid thousands of ports
                             if int(end) - int(start) <= 500:
                                 ports.extend(range(int(start), int(end) + 1))
@@ -2487,8 +2564,9 @@ class GostAdapter:
             if not ports:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
             
-            for p in ports:
-                await free_port(p)
+            # Free ports ONLY in direct mode on client! In reverse mode, client is on Foreign Node!
+            if not is_reverse:
+                await free_ports(ports)
                 
             server_ip = spec.get('server_ip') or spec.get('remote_ip')
             if not server_ip:
@@ -2564,18 +2642,28 @@ class GostAdapter:
 
             # 2. Rate Limit (Limiter)
             if spec.get("rate_limit_mbps"):
-                rate_bytes = int(spec.get("rate_limit_mbps") * 125000) # Mbps to Bytes/sec
-                config["limiters"] = [
-                    {
-                        "name": f"limiter-{tunnel_id}",
-                        "limits": [
-                            f"{rate_bytes}B"
+                try:
+                    mbps_val = float(spec.get("rate_limit_mbps"))
+                    if mbps_val > 0:
+                        rate_bytes = int(mbps_val * 125000) # Mbps to Bytes/sec
+                        config["limiters"] = [
+                            {
+                                "name": f"limiter-{tunnel_id}",
+                                "limits": [
+                                    f"{rate_bytes}B"
+                                ]
+                            }
                         ]
-                    }
-                ]
+                except (ValueError, TypeError):
+                    pass
                 
             dialer_client_type = "ssh" if gost_type in ["ssh", "sshd"] else gost_type
             dialer = {"type": dialer_client_type}
+            if gost_type in ["ssh", "sshd"] and auth_token:
+                dialer["auth"] = {
+                    "username": "smite",
+                    "password": auth_token
+                }
             if spec.get("bypass_ips"):
                 dialer["bypass"] = f"bypass-{tunnel_id}"
             if spec.get("dns_resolvers"):
@@ -2593,6 +2681,9 @@ class GostAdapter:
                     dialer_metadata["interval"] = "20ms"
                     dialer_metadata["resend"] = 2
                     dialer_metadata["nc"] = 1
+                    kcp_key = spec.get("kcp_key") or auth_token or "smite-kcp-secure"
+                    dialer_metadata["crypt"] = spec.get("kcp_crypt") or "aes"
+                    dialer_metadata["key"] = kcp_key
             else:
                 keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
                 dialer_metadata["keepAlive"] = True
@@ -2604,11 +2695,12 @@ class GostAdapter:
                 dialer_metadata["bufferSize"] = 65536
                 if enable_mux:
                     dialer_metadata["mux.type"] = mux_type
+                    dialer_metadata["mux"] = True
                     dialer_metadata["nodelay"] = True
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "quic", "grpc"]) and gost_type not in ["udp", "kcp", "ssh", "sshd"]:
+            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "mtls", "quic", "grpc"]) and gost_type not in ["udp", "kcp", "ssh", "sshd"]:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
@@ -2622,6 +2714,7 @@ class GostAdapter:
             }
             if enable_mux:
                 connector_metadata["mux.type"] = mux_type
+                connector_metadata["mux"] = True
                 connector_metadata["nodelay"] = True
                 connector_metadata["keepAlive"] = True
             
@@ -2644,7 +2737,17 @@ class GostAdapter:
             })
             
             # Failover IPs
-            failover_ips = spec.get("failover_ips") or []
+            raw_fips = spec.get("failover_ips") or []
+            failover_ips = []
+            if isinstance(raw_fips, str):
+                failover_ips = [x.strip() for x in re.split(r'[\r\n,]+', raw_fips) if x.strip()]
+            elif isinstance(raw_fips, list):
+                for item in raw_fips:
+                    if isinstance(item, str):
+                        failover_ips.extend([x.strip() for x in re.split(r'[\r\n,]+', item) if x.strip()])
+                    elif item:
+                        failover_ips.append(str(item).strip())
+
             if failover_ips:
                 for i, f_ip in enumerate(failover_ips):
                     if not f_ip or not f_ip.strip(): continue
@@ -2749,18 +2852,25 @@ class GostAdapter:
                     target_address = default_target_address
                     target_port_num = port_num
                     
+                target_addr_formatted = f"[{target_address}]:{target_port_num}" if ":" in target_address and not target_address.startswith("[") else f"{target_address}:{target_port_num}"
                 listen_addr = f":{port_num}" if is_reverse else (f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}")
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
-                    listener_type = "rtcp" if is_reverse else "tcp"
-                    listener_tcp = {"type": listener_type}
-                    
                     if is_reverse:
-                        listener_tcp["chain"] = f"chain-{tunnel_id}"
+                        listener_tcp = {
+                            "type": "rtcp",
+                            "chain": f"chain-{tunnel_id}",
+                            "metadata": {
+                                "keepAlive": True,
+                                "ttl": "10s",
+                                "bufferSize": 65536
+                            }
+                        }
                         handler_tcp = {
-                            "type": "rtcp"
+                            "type": "tcp"
                         }
                     else:
+                        listener_tcp = {"type": "tcp"}
                         handler_tcp = {
                             "type": "tcp",
                             "chain": f"chain-{tunnel_id}"
@@ -2773,7 +2883,7 @@ class GostAdapter:
                         "listener": listener_tcp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-tcp-{port_num}-{tunnel_id}", "addr": f"{target_address}:{target_port_num}"}
+                                {"name": f"target-tcp-{port_num}-{tunnel_id}", "addr": target_addr_formatted}
                             ]
                         }
                     }
@@ -2783,27 +2893,34 @@ class GostAdapter:
                     config["services"].append(service_tcp)
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
-                    listener_type = "rudp" if is_reverse else "udp"
-                    listener_udp = {
-                        "type": listener_type,
-                        "metadata": {
-                            "readTimeout": "120s",
-                            "bufferSize": 65536
-                        }
-                    }
-                    
                     udp_handler_metadata = {
                         "ttl": "300s",
                         "readTimeout": "120s",
                         "bufferSize": 65536
                     }
                     if is_reverse:
-                        listener_udp["chain"] = f"chain-{tunnel_id}"
-                        handler_udp = {
+                        listener_udp = {
                             "type": "rudp",
+                            "chain": f"chain-{tunnel_id}",
+                            "metadata": {
+                                "keepAlive": True,
+                                "ttl": "10s",
+                                "readTimeout": "120s",
+                                "bufferSize": 65536
+                            }
+                        }
+                        handler_udp = {
+                            "type": "udp",
                             "metadata": udp_handler_metadata
                         }
                     else:
+                        listener_udp = {
+                            "type": "udp",
+                            "metadata": {
+                                "readTimeout": "120s",
+                                "bufferSize": 65536
+                            }
+                        }
                         handler_udp = {
                             "type": "udp",
                             "chain": f"chain-{tunnel_id}",
@@ -2817,7 +2934,7 @@ class GostAdapter:
                         "listener": listener_udp,
                         "forwarder": {
                             "nodes": [
-                                {"name": f"target-udp-{port_num}-{tunnel_id}", "addr": f"{target_address}:{target_port_num}"}
+                                {"name": f"target-udp-{port_num}-{tunnel_id}", "addr": target_addr_formatted}
                             ]
                         }
                     }
@@ -2906,6 +3023,17 @@ class GostAdapter:
                 log_file.unlink()
             except Exception:
                 pass
+
+        for extra in [
+            self.config_dir / f"cert_{tunnel_id}.pem",
+            self.config_dir / f"key_{tunnel_id}.pem",
+            self.config_dir / f"ssh_host_key_{tunnel_id}.pem",
+        ]:
+            if extra.exists():
+                try:
+                    extra.unlink()
+                except Exception:
+                    pass
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -3080,7 +3208,7 @@ class AdapterManager:
                 mode = spec.get('mode', 'N/A')
                 logger.info(f"Restoring tunnel {tunnel_id}: core={tunnel_core}, mode={mode}, spec_keys={list(spec.keys())}")
                 
-                if tunnel_core in ["rathole", "backhaul", "chisel", "frp"] and mode == 'N/A':
+                if tunnel_core in ["rathole", "backhaul", "chisel", "frp", "gost"] and mode == 'N/A':
                     logger.warning(f"Tunnel {tunnel_id}: Reverse tunnel missing mode field, defaulting to client")
                     spec['mode'] = 'client'
                 
@@ -3110,15 +3238,35 @@ class AdapterManager:
             for p in raw_ports:
                 if isinstance(p, (int, str)) and str(p).isdigit() and int(p) > 0:
                     ports.add(int(p))
+                elif isinstance(p, str) and "=" in p:
+                    lhs = p.split("=", 1)[0].strip()
+                    if lhs.isdigit() and int(lhs) > 0:
+                        ports.add(int(lhs))
                 elif isinstance(p, dict):
                     for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
                         v = p.get(k)
                         if v and str(v).isdigit() and int(v) > 0:
                             ports.add(int(v))
         elif isinstance(raw_ports, str):
-            for p in raw_ports.split(","):
-                if p.strip().isdigit() and int(p.strip()) > 0:
-                    ports.add(int(p.strip()))
+            for p in re.split(r'[\r\n,]+', raw_ports):
+                p = p.strip()
+                if "=" in p:
+                    p = p.split("=", 1)[0].strip()
+                if p.isdigit() and int(p) > 0:
+                    ports.add(int(p))
+
+        # Also extract port_ranges
+        raw_ranges = spec.get("port_ranges")
+        if raw_ranges:
+            range_list = [x.strip() for x in re.split(r'[\r\n,]+', raw_ranges) if x.strip()] if isinstance(raw_ranges, str) else raw_ranges
+            for pr in range_list:
+                if isinstance(pr, str) and "-" in pr:
+                    parts = pr.split("-", 1)
+                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 0 < end_p - start_p <= 500:
+                            ports.update(range(start_p, end_p + 1))
+
         for k in ["proxy_port", "remote_port", "listen_port", "bind_port", "control_port", "server_port", "vhost_http_port", "vhost_https_port"]:
             val = spec.get(k)
             if val and str(val).isdigit() and int(val) > 0:
@@ -3352,8 +3500,8 @@ class AdapterManager:
         missing_ports = []
         
         if actual_mode == "server":
-            transport = (spec.get("transport_type") or spec.get("transport") or "").lower()
-            ctrl_proto = "udp" if transport in ["quic", "kcp"] else "tcp"
+            transport = (spec.get("transport_type") or spec.get("transport") or spec.get("gost_type") or "").lower()
+            ctrl_proto = "udp" if transport in ["quic", "kcp", "udp", "rudp"] else "tcp"
             if ctrl_port:
                 is_ctrl_listening = await asyncio.to_thread(is_port_listening_locally, int(ctrl_port), proto=ctrl_proto)
                 if not is_ctrl_listening and ctrl_proto == "udp":
@@ -3363,24 +3511,32 @@ class AdapterManager:
                 else:
                     missing_ports.append({"port": int(ctrl_port), "type": f"control_{ctrl_proto}"})
                     
-            for p in checked_ports:
-                try:
-                    p_num = None
-                    if isinstance(p, (int, str)) and str(p).isdigit():
-                        p_num = int(p)
-                    elif isinstance(p, dict):
-                        p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port")
-                        if p_val and str(p_val).isdigit():
-                            p_num = int(p_val)
-                    if p_num:
-                        eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
-                        is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
-                        if is_svc_listening:
-                            listening_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
-                        else:
-                            missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
-                except Exception:
-                    pass
+            # In direct GOST server mode, the server only terminates control_port.
+            # Service ports listen on the Iran client side.
+            skip_service_ports = (core == "gost" and not spec.get("is_reverse", False))
+            if not skip_service_ports:
+                for p in checked_ports:
+                    try:
+                        p_num = None
+                        if isinstance(p, (int, str)) and str(p).isdigit():
+                            p_num = int(p)
+                        elif isinstance(p, str) and "=" in p:
+                            left = p.split("=", 1)[0].strip()
+                            if left.isdigit():
+                                p_num = int(left)
+                        elif isinstance(p, dict):
+                            p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port") or p.get("local_port")
+                            if p_val and str(p_val).isdigit():
+                                p_num = int(p_val)
+                        if p_num:
+                            eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
+                            is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
+                            if is_svc_listening:
+                                listening_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
+                            else:
+                                missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
+                    except Exception:
+                        pass
         elif actual_mode == "client" and core == "gost" and not spec.get("is_reverse", False):
             # Direct GOST tunnel: Iran client node listens locally on service ports
             for p in checked_ports:
@@ -3388,8 +3544,12 @@ class AdapterManager:
                     p_num = None
                     if isinstance(p, (int, str)) and str(p).isdigit():
                         p_num = int(p)
+                    elif isinstance(p, str) and "=" in p:
+                        left = p.split("=", 1)[0].strip()
+                        if left.isdigit():
+                            p_num = int(left)
                     elif isinstance(p, dict):
-                        p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port")
+                        p_val = p.get("local_port") or p.get("local") or p.get("port") or p.get("listen_port") or p.get("remote") or p.get("remote_port")
                         if p_val and str(p_val).isdigit():
                             p_num = int(p_val)
                     if p_num:

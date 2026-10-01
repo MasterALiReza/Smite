@@ -144,33 +144,42 @@ async def _restore_forwards():
             
             for tunnel in tunnels:
                 logger.info(f"Checking tunnel {tunnel.id}: type={tunnel.type}, core={tunnel.core}, node_id={tunnel.node_id}")
-                needs_gost_forwarding = tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.node_id
+                needs_gost_forwarding = tunnel.type in ["tcp", "udp", "tcp+udp", "ws", "grpc", "tcpmux"] and tunnel.core == "gost" and not tunnel.node_id
                 if not needs_gost_forwarding:
                     continue
                 
-                listen_port = tunnel.spec.get("listen_port")
+                ports = tunnel.spec.get("ports") or []
+                if not ports:
+                    lp = tunnel.spec.get("listen_port") or tunnel.spec.get("remote_port")
+                    if lp:
+                        ports = [lp]
+
                 forward_to = tunnel.spec.get("forward_to")
-                
-                if not forward_to:
-                    remote_ip = tunnel.spec.get("remote_ip", "127.0.0.1")
-                    remote_port = tunnel.spec.get("remote_port", 8080)
-                    forward_to = f"{remote_ip}:{remote_port}"
-                
-                panel_port = listen_port or tunnel.spec.get("remote_port")
-                if not panel_port or not forward_to:
-                    logger.warning(f"Tunnel {tunnel.id}: Missing panel_port or forward_to, skipping restore")
+                remote_ip = tunnel.spec.get("remote_ip", "127.0.0.1")
+                use_ipv6 = tunnel.spec.get("use_ipv6", False)
+
+                if not ports:
+                    logger.warning(f"Tunnel {tunnel.id}: Missing ports, skipping restore")
                     continue
                 
                 try:
-                    use_ipv6 = tunnel.spec.get("use_ipv6", False)
-                    logger.info(f"Restoring gost forwarding for tunnel {tunnel.id}: {tunnel.type}://:{panel_port} -> {forward_to}, use_ipv6={use_ipv6}")
-                    await gost_forwarder.start_forward(
-                        tunnel_id=tunnel.id,
-                        local_port=int(panel_port),
-                        forward_to=forward_to,
-                        tunnel_type=tunnel.type,
-                        use_ipv6=bool(use_ipv6)
-                    )
+                    for port in ports:
+                        port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
+                        if not forward_to:
+                            from app.utils import format_address_port
+                            forward_to_port = format_address_port(remote_ip, port_num)
+                        else:
+                            forward_to_port = forward_to
+                        
+                        tunnel_id_for_port = f"{tunnel.id}_{port_num}" if len(ports) > 1 else tunnel.id
+                        logger.info(f"Restoring gost forwarding for tunnel {tunnel.id}: {tunnel.type}://:{port_num} -> {forward_to_port}, use_ipv6={use_ipv6}")
+                        await gost_forwarder.start_forward(
+                            tunnel_id=tunnel_id_for_port,
+                            local_port=int(port_num),
+                            forward_to=forward_to_port,
+                            tunnel_type=tunnel.type,
+                            use_ipv6=bool(use_ipv6)
+                        )
                     logger.info(f"Successfully restored gost forwarding for tunnel {tunnel.id}")
                 except Exception as e:
                     logger.error(f"Failed to restore forwarding for tunnel {tunnel.id}: {e}", exc_info=True)

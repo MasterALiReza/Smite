@@ -67,6 +67,12 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
                 port_num = int(val)
                 if 1 <= port_num <= 65535 and port_num not in clean_ports:
                     clean_ports.append(port_num)
+        elif isinstance(p, str) and "=" in p:
+            left = p.split("=", 1)[0].strip()
+            if left.isdigit():
+                port_num = int(left)
+                if 1 <= port_num <= 65535 and port_num not in clean_ports:
+                    clean_ports.append(port_num)
         elif isinstance(p, str) and "-" in p:
             parts = p.split("-", 1)
             if parts[0].strip().isdigit() and parts[1].strip().isdigit():
