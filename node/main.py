@@ -3,6 +3,7 @@ Smite Node - Lightweight Agent
 """
 import asyncio
 import logging
+import os
 import random
 from contextlib import asynccontextmanager
 
@@ -56,6 +57,17 @@ async def lifespan(app: FastAPI):
         logger.error("Node API will still be available, but panel connection will not work")
         logger.error("Make sure CA certificate is available at the configured path")
         app.state.h2_client = None
+    
+    if os.name == 'posix':
+        try:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            target = min(65535, hard) if hard > 0 else 65535
+            if soft < target:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (target, max(hard, target)))
+                logger.info(f"Increased file descriptor limit (RLIMIT_NOFILE) from {soft} to {target}")
+        except Exception as e:
+            logger.debug(f"Could not adjust RLIMIT_NOFILE: {e}")
     
     adapter_manager = AdapterManager()
     app.state.adapter_manager = adapter_manager

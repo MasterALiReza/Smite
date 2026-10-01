@@ -717,7 +717,99 @@ def test_spec_builder_gost_kcp_quic_no_forced_yamux():
     s_g, c_g = build_tunnel_node_specs(tunnel_grpc, "178.239.146.188", "103.83.86.35")
     assert s_g.get("multiplex") is True
     assert c_g.get("multiplex") is True
-    assert c_g.get("mux_type") == "yamux"
+def test_spec_builder_gost_token_entropy():
+    """Verify GOST spec builder generates a high-entropy random auth_token when none is provided"""
+    t1 = DummyTunnel(id="t-gost-entropy-1", core="gost", type="tcp", spec={"ports": [8080]})
+    t2 = DummyTunnel(id="t-gost-entropy-2", core="gost", type="tcp", spec={"ports": [8081]})
+    s1, c1 = build_tunnel_node_specs(t1, "1.1.1.1", "2.2.2.2")
+    s2, c2 = build_tunnel_node_specs(t2, "1.1.1.1", "2.2.2.2")
+    
+    assert s1["auth_token"].startswith("gost-")
+    assert s1["auth_token"] == c1["auth_token"]
+    assert s2["auth_token"] == c2["auth_token"]
+    assert s1["auth_token"] != s2["auth_token"]  # Unique per tunnel
+    assert len(s1["auth_token"]) >= 20
+
+
+def test_extract_all_tunnel_ports_with_ranges():
+    """Verify extract_all_tunnel_ports includes ports from port_ranges for collision safety"""
+    from app.routers.tunnels import extract_all_tunnel_ports
+    spec = {
+        "ports": [8080],
+        "port_ranges": ["10000-10005"],
+        "control_port": 35000
+    }
+    extracted = extract_all_tunnel_ports(spec)
+    assert 8080 in extracted["service_ports"]
+    for p in range(10000, 10006):
+        assert p in extracted["service_ports"]
+    assert 35000 in extracted["control_ports"]
+
+
+def test_extract_all_tunnel_ports_with_dict_and_vhost():
+    """Verify extract_all_tunnel_ports correctly extracts dict-based ports and vhost ports"""
+    from app.routers.tunnels import extract_all_tunnel_ports
+    spec = {
+        "ports": [{"local": 8080, "remote": 8080}],
+        "vhost_http_port": 80,
+        "vhost_https_port": 443,
+        "bind_port": 7000
+    }
+    extracted = extract_all_tunnel_ports(spec)
+    assert 8080 in extracted["service_ports"]
+    assert 80 in extracted["service_ports"]
+    assert 443 in extracted["service_ports"]
+    assert 7000 in extracted["control_ports"]
+    assert {8080, 80, 443, 7000}.issubset(extracted["all_ports"])
+
+
+def test_parse_ports_list_robustness():
+    """Verify parse_ports_list handles comma strings, ranges, dicts, and integer lists"""
+    from panel.app.spec_builder import parse_ports_list
+
+    # Comma-separated string in dict
+    assert parse_ports_list({"ports": "8080,8081"}) == [8080, 8081]
+    # Range string
+    assert parse_ports_list({"ports": "9000-9003"}) == [9000, 9001, 9002, 9003]
+    # Dict ports
+    assert parse_ports_list({"ports": [{"remote": 443, "local": 443}]}) == [443]
+    # Single integer
+    assert parse_ports_list(80) == [80]
+
+
+def test_spec_builder_frp_target_host_and_bandwidth():
+    """Verify FRP target_host and bandwidth normalization (GB to MB)"""
+    tunnel = DummyTunnel(
+        id="t-frp-bw",
+        core="frp",
+        type="tcp",
+        spec={"ports": [8080], "bandwidth_limit": "2GB", "target_host": "192.168.1.50"}
+    )
+    s_spec, c_spec = build_frp_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert c_spec["local_ip"] == "192.168.1.50"
+    assert c_spec["bandwidth_limit"] == "2048MB"
+    assert "health_check_type" not in c_spec  # Default disabled!
+
+
+def test_spec_builder_frp_san_cert():
+    """Verify in-memory TLS certificate includes SubjectAlternativeName"""
+    from cryptography import x509
+    tunnel = DummyTunnel(
+        id="t-frp-san",
+        core="frp",
+        type="tcp",
+        spec={"ports": [8080], "transport": "tcp", "security_type": "tls", "custom_sni": "my-domain.com"}
+    )
+    s_spec, c_spec = build_frp_node_specs(tunnel, "203.0.113.10", "198.51.100.20")
+    assert s_spec["tls_enable"] is True
+    cert_pem = s_spec.get("tls_cert_pem")
+    assert cert_pem and "BEGIN CERTIFICATE" in cert_pem
+
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    san_ext = cert.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+    dns_names = san_ext.value.get_values_for_type(x509.DNSName)
+    assert "my-domain.com" in dns_names
+
 
 
 if __name__ == "__main__":

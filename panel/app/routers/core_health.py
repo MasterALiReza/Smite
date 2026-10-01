@@ -307,21 +307,28 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
                     else:
                         iran_node = node_obj
             
+            foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
             foreign_node_id = getattr(tunnel, "foreign_node_id", None)
-            if foreign_node_id and not foreign_node:
+            if foreign_node_id:
                 matched_foreign = [n for n in all_nodes if n.id == foreign_node_id]
                 if matched_foreign:
                     foreign_node = matched_foreign[0]
+                else:
+                    logger.warning(f"Tunnel {tunnel.id}: Assigned foreign node {foreign_node_id} not found, skipping reset to prevent node drift")
+                    continue
+            elif len(foreign_nodes) == 1:
+                foreign_node = foreign_nodes[0]
+            elif len(foreign_nodes) > 1:
+                logger.warning(f"Tunnel {tunnel.id}: Multiple foreign nodes available and no foreign_node_id specified, skipping reset")
+                continue
             
-            if not foreign_node:
-                foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
-                if foreign_nodes:
-                    foreign_node = foreign_nodes[0]
-            
+            iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
             if not iran_node:
-                iran_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "iran"]
-                if iran_nodes:
+                if len(iran_nodes) == 1:
                     iran_node = iran_nodes[0]
+                else:
+                    logger.warning(f"Tunnel {tunnel.id}: Multiple or zero iran nodes and no iran_node_id matched, skipping reset")
+                    continue
             
             if not foreign_node or not iran_node:
                 logger.warning(f"Tunnel {tunnel.id}: Missing foreign or iran node, skipping reset")

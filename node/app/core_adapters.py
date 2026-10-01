@@ -11,6 +11,8 @@ import time
 import logging
 import signal
 import shutil
+import threading
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -1739,6 +1741,31 @@ class FrpAdapter:
         raise FileNotFoundError(
             "frpc binary not found. Expected at FRPC_BINARY, '/usr/local/bin/frpc', or in PATH."
         )
+        
+    def _resolve_server_binary_path(self) -> Path:
+        """Resolve frps binary path"""
+        env_path = os.environ.get("FRPS_BINARY")
+        if env_path:
+            resolved = Path(env_path)
+            if resolved.exists() and resolved.is_file():
+                return resolved
+        
+        common_paths = [
+            Path("/usr/local/bin/frps"),
+            Path("/usr/bin/frps"),
+        ]
+        
+        for path in common_paths:
+            if path.exists() and path.is_file():
+                return path
+        
+        resolved = shutil.which("frps")
+        if resolved:
+            return Path(resolved)
+        
+        raise FileNotFoundError(
+            "frps binary not found. Expected at FRPS_BINARY, '/usr/local/bin/frps', or in PATH."
+        )
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply FRP tunnel - supports both server and client modes"""
@@ -1805,7 +1832,8 @@ class FrpAdapter:
                     pass
 
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
-            config_content = f"""bindPort: {bind_port}
+            config_content = f"""bindAddr: "::"
+bindPort: {bind_port}
 """
             if transport_proto == 'kcp':
                 config_content += f"kcpBindPort: {bind_port}\nquicBindPort: 0\n"
@@ -1834,15 +1862,17 @@ class FrpAdapter:
 
             config_content += f"""transport:
   maxPoolCount: 8
-  heartbeatTimeout: 90
+  heartbeatTimeout: 30
   tcpMux: true
   tcpMuxKeepaliveInterval: 25
   tls:
     force: {'true' if force_tls else 'false'}
 """
             if cert_file and key_file:
-                config_content += f"""    certFile: "{cert_file.resolve()}"
-    keyFile: "{key_file.resolve()}"
+                cert_posix = cert_file.resolve().as_posix()
+                key_posix = key_file.resolve().as_posix()
+                config_content += f"""    certFile: "{cert_posix}"
+    keyFile: "{key_posix}"
 """
 
             if clean_token:
@@ -1863,25 +1893,7 @@ class FrpAdapter:
             
             logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, proto={transport_proto}, tls={'force' if force_tls else 'off'}, token={'set' if clean_token else 'none'}")
             
-            env_path = os.environ.get("FRPS_BINARY")
-            if env_path:
-                binary_path = Path(env_path)
-            else:
-                common_paths = [
-                    Path("/usr/local/bin/frps"),
-                    Path("/usr/bin/frps"),
-                ]
-                binary_path = None
-                for path in common_paths:
-                    if path.exists() and path.is_file():
-                        binary_path = path
-                        break
-                if not binary_path:
-                    resolved = shutil.which("frps")
-                    if resolved:
-                        binary_path = Path(resolved)
-                    else:
-                        raise FileNotFoundError("frps binary not found. Expected at FRPS_BINARY, '/usr/local/bin/frps', or in PATH.")
+            binary_path = self._resolve_server_binary_path()
             
             config_file_abs = config_file.resolve()
             cmd = [
@@ -1890,6 +1902,11 @@ class FrpAdapter:
             ]
             
             log_file = self.config_dir / f"{tunnel_id}.log"
+            if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+                try:
+                    log_file.write_text("")
+                except Exception:
+                    pass
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting FRP server for tunnel {tunnel_id}\n")
@@ -1901,9 +1918,11 @@ class FrpAdapter:
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
                 )
-            except FileNotFoundError:
+            except Exception as e:
                 log_f.close()
-                raise RuntimeError("FRP server binary (frps) not found. Please install FRP.")
+                if isinstance(e, FileNotFoundError):
+                    raise RuntimeError("FRP server binary (frps) not found. Please install FRP.")
+                raise
         else:
             logger.info(f"FRP tunnel {tunnel_id} received spec: {sanitize_spec_for_log(spec)}")
             
@@ -2024,14 +2043,16 @@ serverPort: {server_port}
 loginFailExit: false
 transport:
   protocol: "{transport_proto}"
-  heartbeatInterval: 25
-  heartbeatTimeout: 90
-  tcpMux: true
-  tcpMuxKeepaliveInterval: 25
+  heartbeatInterval: 10
+  heartbeatTimeout: 30
   dialServerTimeout: 15
+"""
+            if transport_proto != 'quic':
+                config_content += """  tcpMux: true
+  tcpMuxKeepaliveInterval: 25
   poolCount: 5
 """
-            if tls_enable:
+            if tls_enable and transport_proto != 'quic':
                 config_content += """  tls:
     enable: true
     disableCustomTLSFirstByte: true
@@ -2049,9 +2070,13 @@ transport:
 """
             
             def _build_proxy_block(p_name: str, p_type: str, l_port: int, r_port: Optional[int]) -> str:
-                block = f"""  - name: {p_name}
+                clean_p_name = str(p_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                clean_local_ip = str(local_ip).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                name_val = f'"{clean_p_name}"' if any(c in clean_p_name for c in [':', ' ', '#', '"', "'", '@', '%']) else clean_p_name
+                local_ip_val = f'"{clean_local_ip}"' if ':' in clean_local_ip else clean_local_ip
+                block = f"""  - name: {name_val}
     type: {p_type}
-    localIP: {local_ip}
+    localIP: {local_ip_val}
     localPort: {l_port}
 """
                 if p_type in ['tcp', 'udp'] and r_port is not None:
@@ -2122,6 +2147,11 @@ transport:
             ]
             
             log_file = self.config_dir / f"{tunnel_id}.log"
+            if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+                try:
+                    log_file.unlink()
+                except Exception:
+                    pass
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting FRP client for tunnel {tunnel_id}\n")
@@ -2136,6 +2166,9 @@ transport:
             except FileNotFoundError:
                 log_f.close()
                 raise RuntimeError("FRP binary (frpc) not found. Please install FRP.")
+            except Exception:
+                log_f.close()
+                raise
         
         self.log_handles[tunnel_id] = log_f
         self.processes[tunnel_id] = proc
@@ -2168,7 +2201,7 @@ transport:
 
         await safe_stop_subprocess(
             proc,
-            patterns=[tunnel_id, f"frps_{tunnel_id}", f"frpc_{tunnel_id}"],
+            patterns=[f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"],
             pid=pid
         )
         _remove_tunnel_pid(tunnel_id)
@@ -2283,7 +2316,7 @@ class GostAdapter:
             tunnel_proto = "tcp"
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
-        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp", "kcp", "quic"]
+        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "udp", "rudp", "kcp", "quic", "grpc"]
 
         config = {
             "services": [],
@@ -2335,9 +2368,10 @@ class GostAdapter:
                 listener_metadata = {
                     "keepAlive": True,
                     "keepAliveInterval": keepalive_interval,
-                    "keepAliveTimeout": "60s",
-                    "idleTimeout": "0s",
+                    "keepAliveTimeout": "30s",
+                    "idleTimeout": "120s",
                     "nodelay": True,
+                    "bufferSize": 65536,
                 }
                 if spec.get("ws_path"):
                     listener_metadata["path"] = spec.get("ws_path")
@@ -2504,7 +2538,8 @@ class GostAdapter:
                     dialer_tls["secure"] = False
                 if effective_sni:
                     dialer_metadata["host"] = effective_sni
-                    dialer_metadata["grpc.host"] = effective_sni
+                    if gost_type == "grpc":
+                        dialer_metadata["grpc.host"] = effective_sni
                 
             # Anti-DPI custom headers for WebSocket/HTTP
             if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
@@ -2562,17 +2597,14 @@ class GostAdapter:
                 keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
                 dialer_metadata["keepAlive"] = True
                 dialer_metadata["keepAliveInterval"] = keepalive_interval
-                dialer_metadata["keepAliveTimeout"] = "60s"
+                dialer_metadata["keepAliveTimeout"] = "30s"
                 dialer_metadata["timeout"] = "20s"
-                dialer_metadata["idleTimeout"] = "0s"
+                dialer_metadata["idleTimeout"] = "120s"
                 dialer_metadata["nodelay"] = True
+                dialer_metadata["bufferSize"] = 65536
                 if enable_mux:
                     dialer_metadata["mux.type"] = mux_type
                     dialer_metadata["nodelay"] = True
-            
-            if enable_mux:
-                dialer_metadata["mux.type"] = mux_type
-                dialer_metadata["nodelay"] = True
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
@@ -2585,7 +2617,9 @@ class GostAdapter:
             # Generate node objects for primary and failover IPs
             hop_nodes = []
             
-            connector_metadata = {}
+            connector_metadata = {
+                "bufferSize": 65536
+            }
             if enable_mux:
                 connector_metadata["mux.type"] = mux_type
                 connector_metadata["nodelay"] = True
@@ -2719,12 +2753,18 @@ class GostAdapter:
                 
                 if tunnel_proto in ["tcp", "tcp+udp"]:
                     listener_type = "rtcp" if is_reverse else "tcp"
-                    handler_type = "rtcp" if is_reverse else "tcp"
                     listener_tcp = {"type": listener_type}
-                    handler_tcp = {
-                        "type": handler_type,
-                        "chain": f"chain-{tunnel_id}"
-                    }
+                    
+                    if is_reverse:
+                        listener_tcp["chain"] = f"chain-{tunnel_id}"
+                        handler_tcp = {
+                            "type": "rtcp"
+                        }
+                    else:
+                        handler_tcp = {
+                            "type": "tcp",
+                            "chain": f"chain-{tunnel_id}"
+                        }
                     
                     service_tcp = {
                         "name": f"tcp-in-{port_num}-{tunnel_id}",
@@ -2747,19 +2787,28 @@ class GostAdapter:
                     listener_udp = {
                         "type": listener_type,
                         "metadata": {
-                            "readTimeout": "30s"
+                            "readTimeout": "120s",
+                            "bufferSize": 65536
                         }
                     }
                     
                     udp_handler_metadata = {
-                        "ttl": "60s",
-                        "readTimeout": "30s"
+                        "ttl": "300s",
+                        "readTimeout": "120s",
+                        "bufferSize": 65536
                     }
-                    handler_udp = {
-                        "type": handler_type,
-                        "chain": f"chain-{tunnel_id}",
-                        "metadata": udp_handler_metadata
-                    }
+                    if is_reverse:
+                        listener_udp["chain"] = f"chain-{tunnel_id}"
+                        handler_udp = {
+                            "type": "rudp",
+                            "metadata": udp_handler_metadata
+                        }
+                    else:
+                        handler_udp = {
+                            "type": "udp",
+                            "chain": f"chain-{tunnel_id}",
+                            "metadata": udp_handler_metadata
+                        }
                     
                     service_udp = {
                         "name": f"udp-in-{port_num}-{tunnel_id}",
@@ -2898,6 +2947,7 @@ class AdapterManager:
         self.tunnels_file = self.config_dir / "tunnels.json"
         self.tunnel_configs: Dict[str, Dict[str, Any]] = {}
         self._tunnel_locks: Dict[str, asyncio.Lock] = {}
+        self._io_lock = threading.Lock()
         logger.info(f"Tunnel persistence file: {self.tunnels_file}")
     
     def _get_tunnel_lock(self, tunnel_id: str) -> asyncio.Lock:
@@ -2949,27 +2999,35 @@ class AdapterManager:
     def _save_tunnels(self):
         """Save tunnel configurations to disk"""
         import json
-        import os
-        try:
-            logger.info(f"Saving {len(self.tunnel_configs)} tunnel configurations to {self.tunnels_file}")
-            
-            temp_file = self.tunnels_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(self.tunnel_configs, f, indent=2)
-                f.flush()
+        with self._io_lock:
+            temp_file = None
             try:
-                os.chmod(temp_file, 0o600)
-            except Exception:
-                pass
-            temp_file.replace(self.tunnels_file)
-            
-            if self.tunnels_file.exists():
-                file_size = self.tunnels_file.stat().st_size
-                logger.info(f"Successfully saved tunnel configurations to {self.tunnels_file} (size: {file_size} bytes, tunnels: {list(self.tunnel_configs.keys())})")
-            else:
-                logger.error(f"File {self.tunnels_file} was not created after write operation")
-        except Exception as e:
-            logger.error(f"Failed to save tunnel configurations to {self.tunnels_file}: {e}", exc_info=True)
+                logger.info(f"Saving {len(self.tunnel_configs)} tunnel configurations to {self.tunnels_file}")
+                
+                temp_file = self.tunnels_file.with_name(f"tunnels_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp")
+                with open(temp_file, 'w') as f:
+                    json.dump(self.tunnel_configs, f, indent=2)
+                    f.flush()
+                try:
+                    os.chmod(temp_file, 0o600)
+                except Exception:
+                    pass
+                temp_file.replace(self.tunnels_file)
+                temp_file = None
+                
+                if self.tunnels_file.exists():
+                    file_size = self.tunnels_file.stat().st_size
+                    logger.info(f"Successfully saved tunnel configurations to {self.tunnels_file} (size: {file_size} bytes, tunnels: {list(self.tunnel_configs.keys())})")
+                else:
+                    logger.error(f"File {self.tunnels_file} was not created after write operation")
+            except Exception as e:
+                logger.error(f"Failed to save tunnel configurations to {self.tunnels_file}: {e}", exc_info=True)
+            finally:
+                if temp_file and temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except Exception:
+                        pass
     
     async def restore_tunnels(self):
         """Restore all persisted tunnels on startup"""
@@ -3052,11 +3110,16 @@ class AdapterManager:
             for p in raw_ports:
                 if isinstance(p, (int, str)) and str(p).isdigit() and int(p) > 0:
                     ports.add(int(p))
+                elif isinstance(p, dict):
+                    for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
+                        v = p.get(k)
+                        if v and str(v).isdigit() and int(v) > 0:
+                            ports.add(int(v))
         elif isinstance(raw_ports, str):
             for p in raw_ports.split(","):
                 if p.strip().isdigit() and int(p.strip()) > 0:
                     ports.add(int(p.strip()))
-        for k in ["proxy_port", "remote_port", "listen_port", "bind_port", "control_port", "server_port"]:
+        for k in ["proxy_port", "remote_port", "listen_port", "bind_port", "control_port", "server_port", "vhost_http_port", "vhost_https_port"]:
             val = spec.get(k)
             if val and str(val).isdigit() and int(val) > 0:
                 ports.add(int(val))
@@ -3228,6 +3291,7 @@ class AdapterManager:
         """Remove tunnel"""
         async with self._get_tunnel_lock(tunnel_id):
             await self._remove_tunnel_unlocked(tunnel_id)
+        self._tunnel_locks.pop(tunnel_id, None)
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get tunnel status with non-destructive live adoption fallback"""
@@ -3282,38 +3346,59 @@ class AdapterManager:
         if not checked_ports and spec.get("remote_port"):
             checked_ports = [spec.get("remote_port")]
             
-        ctrl_port = control_port or spec.get("control_port")
+        ctrl_port = control_port or spec.get("control_port") or spec.get("bind_port")
         
         listening_ports = []
         missing_ports = []
         
         if actual_mode == "server":
+            transport = (spec.get("transport_type") or spec.get("transport") or "").lower()
+            ctrl_proto = "udp" if transport in ["quic", "kcp"] else "tcp"
             if ctrl_port:
-                if is_port_listening_locally(int(ctrl_port), proto="tcp"):
-                    listening_ports.append({"port": int(ctrl_port), "type": "control_tcp"})
+                is_ctrl_listening = await asyncio.to_thread(is_port_listening_locally, int(ctrl_port), proto=ctrl_proto)
+                if not is_ctrl_listening and ctrl_proto == "udp":
+                    is_ctrl_listening = await asyncio.to_thread(is_port_listening_locally, int(ctrl_port), proto="tcp")
+                if is_ctrl_listening:
+                    listening_ports.append({"port": int(ctrl_port), "type": f"control_{ctrl_proto}"})
                 else:
-                    missing_ports.append({"port": int(ctrl_port), "type": "control_tcp"})
+                    missing_ports.append({"port": int(ctrl_port), "type": f"control_{ctrl_proto}"})
                     
             for p in checked_ports:
                 try:
-                    p_num = int(p) if isinstance(p, (int, str)) and str(p).isdigit() else None
+                    p_num = None
+                    if isinstance(p, (int, str)) and str(p).isdigit():
+                        p_num = int(p)
+                    elif isinstance(p, dict):
+                        p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port")
+                        if p_val and str(p_val).isdigit():
+                            p_num = int(p_val)
                     if p_num:
-                        if is_port_listening_locally(p_num, proto=proto):
-                            listening_ports.append({"port": p_num, "type": f"service_{proto}"})
+                        eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
+                        is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
+                        if is_svc_listening:
+                            listening_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                         else:
-                            missing_ports.append({"port": p_num, "type": f"service_{proto}"})
+                            missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                 except Exception:
                     pass
         elif actual_mode == "client" and core == "gost" and not spec.get("is_reverse", False):
             # Direct GOST tunnel: Iran client node listens locally on service ports
             for p in checked_ports:
                 try:
-                    p_num = int(p) if isinstance(p, (int, str)) and str(p).isdigit() else None
+                    p_num = None
+                    if isinstance(p, (int, str)) and str(p).isdigit():
+                        p_num = int(p)
+                    elif isinstance(p, dict):
+                        p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port")
+                        if p_val and str(p_val).isdigit():
+                            p_num = int(p_val)
                     if p_num:
-                        if is_port_listening_locally(p_num, proto=proto):
-                            listening_ports.append({"port": p_num, "type": f"service_{proto}"})
+                        eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
+                        is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
+                        if is_svc_listening:
+                            listening_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                         else:
-                            missing_ports.append({"port": p_num, "type": f"service_{proto}"})
+                            missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                 except Exception:
                     pass
                         

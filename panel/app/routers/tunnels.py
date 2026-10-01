@@ -247,11 +247,27 @@ def extract_all_tunnel_ports(spec: dict) -> Dict[str, Set[int]]:
     for p in parsed:
         if isinstance(p, int) and p > 0:
             service_ports.add(p)
+        elif isinstance(p, dict):
+            for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
+                v = p.get(k)
+                if v and str(v).isdigit() and int(v) > 0:
+                    service_ports.add(int(v))
             
-    for key in ["remote_port", "proxy_port", "listen_port"]:
+    for key in ["remote_port", "proxy_port", "listen_port", "vhost_http_port", "vhost_https_port"]:
         val = spec.get(key)
         if val and str(val).isdigit() and int(val) > 0:
             service_ports.add(int(val))
+
+    # Port ranges (e.g. ["10000-10020"])
+    port_ranges = spec.get("port_ranges") or []
+    if isinstance(port_ranges, list):
+        for pr in port_ranges:
+            if isinstance(pr, str) and "-" in pr:
+                parts = pr.split("-")
+                if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                    start, end = int(parts[0].strip()), int(parts[1].strip())
+                    if 0 < start <= end <= 65535 and (end - start) <= 500:
+                        service_ports.update(range(start, end + 1))
             
     # 2. Control / bind ports
     for key in ["control_port", "bind_port", "server_port"]:
@@ -1616,8 +1632,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                         verify_ctrl_port = assigned_control_port
                     elif control_port is not None:
                         verify_ctrl_port = control_port
-                    elif tunnel.spec and tunnel.spec.get("control_port"):
-                        verify_ctrl_port = tunnel.spec.get("control_port")
+                    elif tunnel.spec and (tunnel.spec.get("control_port") or tunnel.spec.get("bind_port")):
+                        verify_ctrl_port = tunnel.spec.get("control_port") or tunnel.spec.get("bind_port")
                     
                     verify_res = {}
                     try:
@@ -2127,12 +2143,65 @@ async def test_tunnel_config(
             "status": "passed",
             "detail": " + ".join(detail_parts) + " verified"
         })
+    elif core == "gost":
+        gost_transport = (payload.get("transport") or payload.get("transport_type") or spec.get("transport_type") or "tcp").lower()
+        gost_sec = (payload.get("security_type") or spec.get("security_type") or "none").lower()
+        cdn_mode = bool(payload.get("cdn_mode") or spec.get("cdn_mode", False))
+        ws_path = payload.get("ws_path") or spec.get("ws_path")
+
+        detail_items = [f"GOST {gost_transport.upper()}"]
+
+        if cdn_mode and gost_transport not in ["ws", "wss", "mws", "mwss"]:
+            checks.append({
+                "name": "protocol",
+                "title": "GOST CDN Mode Conflict",
+                "status": "failed",
+                "detail": "CDN Mode requires WebSocket (WS/WSS/MWS) transport to allow proxying through Cloudflare/ArvanCloud."
+            })
+        elif ws_path and not str(ws_path).startswith("/"):
+            checks.append({
+                "name": "protocol",
+                "title": "GOST WebSocket Path",
+                "status": "failed",
+                "detail": f"WS Path '{ws_path}' must begin with a leading forward slash (e.g., /graphql or /api)."
+            })
+        elif gost_transport in ["kcp", "ssh", "sshd"] and gost_sec in ["tls", "utls"]:
+            checks.append({
+                "name": "protocol",
+                "title": "GOST Transport & Security Notice",
+                "status": "warning",
+                "detail": f"{gost_transport.upper()} operates natively with its own protocol encryption. The {gost_sec.upper()} wrapper is automatically bypassed."
+            })
+        elif gost_transport == "quic" and gost_sec == "utls":
+            checks.append({
+                "name": "protocol",
+                "title": "GOST QUIC Security Spec",
+                "status": "warning",
+                "detail": "QUIC operates over UDP with integrated TLS 1.3. uTLS browser spoofing is tailored for TCP/HTTP2/WS streams."
+            })
+        else:
+            if gost_sec == "utls":
+                detail_items.append("uTLS Chrome Camouflage")
+            elif gost_sec == "tls":
+                detail_items.append("TLS 1.3 Encrypted")
+            else:
+                detail_items.append("Raw Stream")
+
+            if cdn_mode:
+                detail_items.append("CDN Proxy")
+
+            checks.append({
+                "name": "protocol",
+                "title": "GOST Protocol Spec",
+                "status": "passed",
+                "detail": " + ".join(detail_items) + " verified"
+            })
     else:
         checks.append({
             "name": "protocol",
-            "title": "GOST Protocol Spec",
+            "title": f"{core.upper()} Protocol Spec",
             "status": "passed",
-            "detail": f"GOST {transport.upper()} routing verified"
+            "detail": f"{core.upper()} {transport.upper()} routing verified"
         })
 
     all_passed = all(c["status"] in ["passed", "warning"] for c in checks)

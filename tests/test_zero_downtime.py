@@ -528,3 +528,82 @@ async def test_gost_adapter_unique_service_names(monkeypatch, tmp_path):
     await adapter.remove("tun-gost-xyz")
 
 
+@pytest.mark.asyncio
+async def test_adapter_manager_save_tunnels_atomic(tmp_path):
+    """Test that AdapterManager._save_tunnels uses atomic write and cleans up temporary files."""
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+    manager.tunnel_configs = {
+        "tun-1": {"core": "frp", "spec": {"mode": "server"}},
+        "tun-2": {"core": "rathole", "spec": {"mode": "client"}}
+    }
+    
+    # Verify save works atomically
+    manager._save_tunnels()
+    assert manager.tunnels_file.exists()
+    
+    import json
+    loaded = json.loads(manager.tunnels_file.read_text(encoding="utf-8"))
+    assert "tun-1" in loaded
+    assert "tun-2" in loaded
+    
+    # Verify no dangling .tmp files remain in config_dir
+    tmp_files = list(tmp_path.glob("tunnels_*.tmp"))
+    assert len(tmp_files) == 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_manager_remove_tunnel_cleans_lock(tmp_path):
+    """Test that removing a tunnel prunes the tunnel lock from _tunnel_locks to prevent memory leak."""
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+    
+    tunnel_id = "test-leak-tunnel"
+    # Acquire lock once to populate dictionary
+    lock = manager._get_tunnel_lock(tunnel_id)
+    assert tunnel_id in manager._tunnel_locks
+    
+    await manager.remove_tunnel(tunnel_id)
+    assert tunnel_id not in manager._tunnel_locks
+
+
+@pytest.mark.asyncio
+async def test_frp_adapter_log_rotation(monkeypatch, tmp_path):
+    """Test that FrpAdapter rotates log files exceeding 5MB threshold on apply."""
+    adapter = FrpAdapter()
+    adapter.config_dir = tmp_path
+    tunnel_id = "test-log-rot"
+    log_file = tmp_path / f"{tunnel_id}.log"
+    
+    # Create oversized log file (> 5MB)
+    log_file.write_bytes(b"A" * (5 * 1024 * 1024 + 100))
+    assert log_file.stat().st_size > 5 * 1024 * 1024
+    
+    monkeypatch.setattr(adapter, "_resolve_server_binary_path", lambda: Path("/bin/frps"))
+    monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    
+    class DummyProc:
+        pid = 9999
+        returncode = None
+        
+    async def mock_exec(*cmd, **kwargs):
+        return DummyProc()
+        
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+    
+    spec = {
+        "mode": "server",
+        "bind_port": 7000,
+        "ports": [8080],
+        "type": "tcp"
+    }
+    await adapter.apply(tunnel_id, spec)
+    
+    # After apply, the log file should have been truncated/rotated, so it is small
+    assert log_file.stat().st_size < 5 * 1024 * 1024
+    await adapter.remove(tunnel_id)
+
+
+

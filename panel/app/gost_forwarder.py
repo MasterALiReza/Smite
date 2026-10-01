@@ -47,11 +47,18 @@ class GostForwarder:
             services = []
             if tunnel_type == "tcp+udp":
                 for proto in ["tcp", "udp"]:
+                    h_meta = {"keepAlive": True, "bufferSize": 65536}
+                    l_meta = {"keepAlive": True, "keepAliveInterval": "15s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
+                    if proto == "udp":
+                        h_meta["ttl"] = "300s"
+                        h_meta["readTimeout"] = "120s"
+                        l_meta["readTimeout"] = "120s"
+
                     services.append({
                         "name": f"forward-{tunnel_id}-{proto}",
                         "addr": listen_addr,
-                        "handler": {"type": proto, "metadata": {"keepAlive": True}},
-                        "listener": {"type": proto, "metadata": {"keepAlive": True, "keepAliveInterval": "15s", "nodelay": True}},
+                        "handler": {"type": proto, "metadata": h_meta},
+                        "listener": {"type": proto, "metadata": l_meta},
                         "forwarder": {
                             "nodes": [
                                 {"name": f"target-{tunnel_id}-{proto}", "addr": target_addr}
@@ -62,7 +69,13 @@ class GostForwarder:
                 listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux", "quic", "kcp"] else "tcp"
                 handler_type = "udp" if tunnel_type in ["udp", "kcp"] else "tcp"
                 
-                listener_metadata = {"keepAlive": True, "keepAliveInterval": "15s", "nodelay": True}
+                listener_metadata = {"keepAlive": True, "keepAliveInterval": "15s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
+                handler_metadata = {"keepAlive": True, "bufferSize": 65536}
+                if handler_type == "udp":
+                    handler_metadata["ttl"] = "300s"
+                    handler_metadata["readTimeout"] = "120s"
+                    listener_metadata["readTimeout"] = "120s"
+
                 if path and tunnel_type == "ws":
                     listener_metadata["path"] = path
 
@@ -71,7 +84,7 @@ class GostForwarder:
                 services.append({
                     "name": f"forward-{tunnel_id}",
                     "addr": listen_addr,
-                    "handler": {"type": handler_type, "metadata": {"keepAlive": True}},
+                    "handler": {"type": handler_type, "metadata": handler_metadata},
                     "listener": listener_obj,
                     "forwarder": {
                         "nodes": [

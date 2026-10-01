@@ -41,7 +41,7 @@ def is_valid_ipv6(addr: str) -> bool:
 
 
 def parse_ports_list(spec_or_ports: Any) -> List[int]:
-    """Extract integer ports from various spec input formats"""
+    """Extract integer ports from various spec input formats (int, str, dict, ranges, comma-separated)"""
     if isinstance(spec_or_ports, dict):
         raw_ports = spec_or_ports.get("ports") or []
         if not raw_ports:
@@ -49,21 +49,41 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
             if single is not None:
                 raw_ports = [single]
     elif isinstance(spec_or_ports, (list, tuple)):
-        raw_ports = spec_or_ports
+        raw_ports = list(spec_or_ports)
     else:
         raw_ports = [spec_or_ports] if spec_or_ports else []
 
-    clean_ports = []
+    if isinstance(raw_ports, str):
+        if "," in raw_ports:
+            raw_ports = [p.strip() for p in raw_ports.split(",") if p.strip()]
+        else:
+            raw_ports = [raw_ports.strip()]
+
+    clean_ports: List[int] = []
     for p in raw_ports:
         if isinstance(p, dict):
-            val = p.get("local") or p.get("remote") or p.get("port")
+            val = p.get("remote") or p.get("remote_port") or p.get("local") or p.get("local_port") or p.get("port")
             if val is not None and str(val).isdigit():
                 port_num = int(val)
-                if 1 <= port_num <= 65535:
+                if 1 <= port_num <= 65535 and port_num not in clean_ports:
                     clean_ports.append(port_num)
+        elif isinstance(p, str) and "-" in p:
+            parts = p.split("-", 1)
+            if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                if 1 <= start_p <= end_p <= 65535 and (end_p - start_p) <= 500:
+                    for r_p in range(start_p, end_p + 1):
+                        if r_p not in clean_ports:
+                            clean_ports.append(r_p)
+        elif isinstance(p, str) and "," in p:
+            for sub_p in p.split(","):
+                if sub_p.strip().isdigit():
+                    port_num = int(sub_p.strip())
+                    if 1 <= port_num <= 65535 and port_num not in clean_ports:
+                        clean_ports.append(port_num)
         elif isinstance(p, (int, str)) and str(p).isdigit():
             port_num = int(p)
-            if 1 <= port_num <= 65535:
+            if 1 <= port_num <= 65535 and port_num not in clean_ports:
                 clean_ports.append(port_num)
     return clean_ports
 
@@ -814,17 +834,19 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         tls_key_pem = server_spec.get("tls_key_pem")
         if not (tls_cert_pem and tls_key_pem):
             try:
+                import ipaddress
+                import datetime
                 from cryptography import x509
                 from cryptography.x509.oid import NameOID
                 from cryptography.hazmat.primitives import hashes, serialization
                 from cryptography.hazmat.primitives.asymmetric import rsa
-                import datetime
 
                 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                cn = custom_sni or iran_node_ip or "frp-tunnel"
                 subject = issuer = x509.Name([
-                    x509.NameAttribute(NameOID.COMMON_NAME, custom_sni or iran_node_ip or "frp-tunnel"),
+                    x509.NameAttribute(NameOID.COMMON_NAME, cn),
                 ])
-                cert = x509.CertificateBuilder().subject_name(
+                builder = x509.CertificateBuilder().subject_name(
                     subject
                 ).issuer_name(
                     issuer
@@ -836,7 +858,20 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                     datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
                 ).not_valid_after(
                     datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
-                ).sign(key, hashes.SHA256())
+                )
+
+                san_items = []
+                if custom_sni:
+                    san_items.append(x509.DNSName(custom_sni))
+                if iran_node_ip:
+                    try:
+                        san_items.append(x509.IPAddress(ipaddress.ip_address(iran_node_ip)))
+                    except ValueError:
+                        san_items.append(x509.DNSName(iran_node_ip))
+                if not san_items:
+                    san_items.append(x509.DNSName("frp-tunnel"))
+                builder = builder.add_extension(x509.SubjectAlternativeName(san_items), critical=False)
+                cert = builder.sign(key, hashes.SHA256())
 
                 tls_key_pem = key.private_bytes(
                     encoding=serialization.Encoding.PEM,
@@ -857,24 +892,24 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 tunnel.spec["tls_key_pem"] = tls_key_pem
 
     # 6. Reliability, Health Checks & Bandwidth Shaping
-    # UDP datagrams have high entropy/pre-encryption (e.g. WireGuard/gaming),
-    # so compression wastes CPU and increases packet jitter.
-    default_compression = False if (tunnel_type in ["udp", "tcp+udp"] or getattr(tunnel, "gaming_mode", False)) else True
-    use_encryption = bool(server_spec.get("use_encryption", True))
+    # Avoid double encryption / compression overhead if transport is already TLS/QUIC/WSS
+    is_transport_encrypted = use_tls or transport_proto in ["quic", "wss"]
+    default_encryption = False if is_transport_encrypted else True
+    default_compression = False if (tunnel_type in ["udp", "tcp+udp"] or getattr(tunnel, "gaming_mode", False) or is_transport_encrypted) else True
+    use_encryption = bool(server_spec.get("use_encryption", default_encryption))
     use_compression = bool(server_spec.get("use_compression", default_compression))
     
     # Internal health check configuration
-    # Note: FRP ONLY supports 'tcp' and 'http' health checks. It has NO UDP health check.
-    # Attaching a TCP health check to a pure UDP service causes continuous health check failure
-    # (TCP connection refused) which immediately kills/unregisters the UDP proxy!
+    # FRP ONLY supports 'tcp' and 'http' health checks. It has NO UDP health check.
+    # Health checks must NOT be enabled by default to prevent premature unregistering of proxies
+    # before target services (e.g. Xray/V2Ray) are active.
     if tunnel_type == "udp":
         enable_health_check = False
         health_check_type = None
     else:
         enable_health_check = bool(
-            server_spec.get("enable_health_check", True)
+            server_spec.get("enable_health_check", False)
             or server_spec.get("health_check_type")
-            or getattr(tunnel, "gaming_mode", False)
         )
         health_check_type = server_spec.get("health_check_type") or ("tcp" if enable_health_check else None)
     health_check_interval = int(server_spec.get("health_check_interval_s") or 10)
@@ -885,7 +920,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         health_check_path = f"/{health_check_path}"
     health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
 
-    # Bandwidth limit per proxy (normalized and validated format: e.g. 10MB, 500KB)
+    # Bandwidth limit per proxy: normalize units (FRP schema only accepts KB and MB)
     rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or server_spec.get("rate_limit_mbps")
     raw_bw = server_spec.get("bandwidth_limit")
     if not raw_bw and rate_limit_mbps and float(rate_limit_mbps) > 0:
@@ -896,8 +931,16 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         clean_bw = str(raw_bw).strip().upper().replace(" ", "")
         if clean_bw.isdigit():
             clean_bw = f"{clean_bw}MB"
-        if re.match(r'^\d+(KB|MB|GB|B)$', clean_bw):
-            bandwidth_limit = clean_bw
+        import re
+        m = re.match(r'^(\d+)(KB|MB|GB|B)$', clean_bw)
+        if m:
+            val_num, unit = int(m.group(1)), m.group(2)
+            if unit == "GB":
+                bandwidth_limit = f"{val_num * 1024}MB"
+            elif unit == "B":
+                bandwidth_limit = f"{max(1, val_num // 1024)}KB"
+            else:
+                bandwidth_limit = f"{val_num}{unit}"
     bandwidth_limit_mode = server_spec.get("bandwidth_limit_mode", "client")
     if bandwidth_limit_mode not in ["client", "server"]:
         bandwidth_limit_mode = "client"
@@ -914,6 +957,9 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     if not custom_domains and (getattr(tunnel, "custom_host", None) or server_spec.get("custom_host")):
         custom_domains = [getattr(tunnel, "custom_host", None) or server_spec.get("custom_host")]
 
+    # Target host resolution
+    target_host = getattr(tunnel, "target_host", None) or server_spec.get("target_host") or server_spec.get("local_ip") or "127.0.0.1"
+
     # 7. Assembling Server & Client Specs
     server_spec["bind_port"] = bind_port
     server_spec["control_port"] = bind_port
@@ -929,6 +975,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     server_spec["ports"] = ports
     server_spec["use_encryption"] = use_encryption
     server_spec["use_compression"] = use_compression
+    server_spec["local_ip"] = target_host
+    server_spec["target_host"] = target_host
 
     client_spec["server_addr"] = iran_node_ip
     client_spec["server_port"] = bind_port
@@ -945,7 +993,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["use_compression"] = use_compression
     client_spec["tunnel_type"] = tunnel_type
     client_spec["type"] = tunnel_type
-    client_spec["local_ip"] = server_spec.get("local_ip", "127.0.0.1")
+    client_spec["local_ip"] = target_host
+    client_spec["target_host"] = target_host
     client_spec["ports"] = ports
 
     if health_check_type:
@@ -1048,7 +1097,13 @@ def build_gost_node_specs(
         else:
             control_port = parsed_port
     if auth_token is None:
-        auth_token = spec.get("auth_token") or spec.get("token") or "gost-token"
+        auth_token = spec.get("auth_token") or spec.get("token")
+        if not auth_token:
+            import secrets
+            auth_token = f"gost-{secrets.token_hex(12)}"
+            spec["auth_token"] = auth_token
+            if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+                tunnel.spec["auth_token"] = auth_token
     if ports is None:
         parsed_ports = parse_ports_list(spec)
         ports = parsed_ports if parsed_ports else [8080]

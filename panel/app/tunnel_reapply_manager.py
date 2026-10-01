@@ -233,8 +233,14 @@ class TunnelReapplyManager:
                 matched = [n for n in all_nodes if n.id == tunnel.foreign_node_id]
                 if matched:
                     foreign_node = matched[0]
-            if not foreign_node:
+                else:
+                    logger.warning(f"Tunnel {tunnel.id}: Assigned foreign node {tunnel.foreign_node_id} not found in database, skipping auto-reapply to prevent node drift")
+                    return False
+            elif len(foreign_nodes) == 1:
                 foreign_node = foreign_nodes[0]
+            else:
+                logger.warning(f"Tunnel {tunnel.id}: Multiple foreign nodes available and no foreign_node_id specified, skipping auto-reapply")
+                return False
             
             iran_node_ip = iran_node.node_metadata.get("ip_address")
             if not iran_node_ip:

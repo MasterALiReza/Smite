@@ -254,3 +254,40 @@ async def test_adapter_manager_get_tunnel_status_adopts_persisted_or_pid():
     assert "persisted-tunnel" in manager.active_tunnels
 
 
+@pytest.mark.asyncio
+async def test_inspect_tunnel_health_dict_ports_and_bind_port():
+    """Test inspect_tunnel_health correctly parses dict ports and bind_port fallback for FRP"""
+    manager = AdapterManager()
+    mock_adapter = MagicMock()
+    mock_adapter.status.return_value = {"process_running": True, "active": True}
+    manager.active_tunnels["frp-tun-test"] = mock_adapter
+
+    # Ephemeral TCP socket
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(('127.0.0.1', 0))
+    srv.listen(5)
+    active_port = srv.getsockname()[1]
+
+    try:
+        # Pass spec with bind_port and dict port mappings
+        manager.tunnel_configs["frp-tun-test"] = {
+            "core": "frp",
+            "spec": {
+                "mode": "server",
+                "bind_port": active_port,
+                "ports": [{"local": 9000, "remote": active_port}],
+                "tunnel_type": "tcp+udp"
+            }
+        }
+        res = await manager.inspect_tunnel_health("frp-tun-test")
+        assert res["healthy"] is True
+        assert res["process_running"] is True
+        port_numbers = [item["port"] for item in res["listening_ports"]]
+        assert active_port in port_numbers
+        assert len(res["missing_ports"]) == 0
+    finally:
+        srv.close()
+
+
+

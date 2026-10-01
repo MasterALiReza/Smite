@@ -2240,7 +2240,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     node_id: tunnel.node_id || '',
     iran_node_id: tunnel.iran_node_id || tunnel.node_id || '',
     foreign_node_id: tunnel.foreign_node_id || '',
-    ports: parsePortsFromSpec(tunnel.spec || {}),
+    ports: (() => {
+      const basePorts = parsePortsFromSpec(tunnel.spec || {})
+      const ranges = tunnel.port_ranges || tunnel.spec?.port_ranges
+      if (ranges && Array.isArray(ranges) && ranges.length > 0) {
+        return basePorts ? `${basePorts},${ranges.join(',')}` : ranges.join(',')
+      }
+      return basePorts
+    })(),
     remote_ip: remoteIp,
     rathole_remote_addr: tunnel.spec?.control_port ? tunnel.spec.control_port.toString() : (tunnel.spec?.remote_addr ? (() => {
       const parsed = parseAddressPort(tunnel.spec.remote_addr)
@@ -2317,6 +2324,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         chisel_transport: formData.chisel_transport,
         chisel_backend_url: formData.chisel_backend_url,
         transport: tunnel.core === 'backhaul' ? backhaulState.transport : (tunnel.core === 'rathole' ? formData.rathole_transport : (tunnel.core === 'chisel' ? formData.chisel_transport : (tunnel.core === 'frp' ? formData.frp_transport : formData.transport_type))),
+        security_type: formData.security_type,
+        cdn_mode: formData.cdn_mode,
+        ws_path: formData.ws_path,
+        keepalive_interval: formData.keepalive_interval,
         is_reverse: formData.is_reverse,
       }
       const response = await api.post('/tunnels/test-config', payload)
@@ -3737,7 +3748,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         showToast('info', 'Preset Applied', 'Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'grpc' && formData.security_type === 'utls'
+                        formData.transport_type === 'grpc' && formData.security_type === 'utls' && !formData.gaming_mode
                           ? 'bg-purple-100/80 dark:bg-purple-900/50 border-purple-400 dark:border-purple-500 ring-2 ring-purple-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-purple-50 dark:hover:bg-purple-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -3794,7 +3805,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         showToast('info', 'Preset Applied', 'Anti-Packet-Loss (WSS + TLS) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'wss'
+                        formData.transport_type === 'wss' || (formData.transport_type === 'ws' && formData.security_type === 'tls')
                           ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -3828,7 +3839,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                       options={[
                         { value: 'tcp', label: 'TCP (Standard)' },
                         { value: 'ws', label: 'WebSocket (WS)' },
+                        { value: 'wss', label: 'WebSocket Secure (WSS)' },
                         { value: 'mws', label: 'Multiplex WS (MWS)' },
+                        { value: 'mwss', label: 'Multiplex WSS' },
                         { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
                         { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
                         { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
@@ -4388,6 +4401,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         chisel_transport: formData.chisel_transport,
         chisel_backend_url: formData.chisel_backend_url,
         transport: formData.core === 'backhaul' ? backhaulState.transport : (formData.core === 'rathole' ? formData.rathole_transport : (formData.core === 'chisel' ? formData.chisel_transport : (formData.core === 'frp' ? formData.frp_transport : formData.transport_type))),
+        security_type: formData.security_type,
+        cdn_mode: formData.cdn_mode,
+        ws_path: formData.ws_path,
+        keepalive_interval: formData.keepalive_interval,
         is_reverse: formData.is_reverse,
       }
       const response = await api.post('/tunnels/test-config', payload)
@@ -6008,7 +6025,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         showToast('info', 'Preset Applied', 'Stealth Anti-DPI (gRPC + uTLS Chrome) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'grpc' && formData.security_type === 'utls'
+                        formData.transport_type === 'grpc' && formData.security_type === 'utls' && !formData.gaming_mode
                           ? 'bg-purple-100/80 dark:bg-purple-900/50 border-purple-400 dark:border-purple-500 ring-2 ring-purple-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-purple-50 dark:hover:bg-purple-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -6065,7 +6082,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         showToast('info', 'Preset Applied', 'Anti-Packet-Loss (WSS + TLS) applied');
                       }}
                       className={`group p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                        formData.transport_type === 'wss'
+                        formData.transport_type === 'wss' || (formData.transport_type === 'ws' && formData.security_type === 'tls')
                           ? 'bg-emerald-100/80 dark:bg-emerald-900/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
                           : 'bg-white/80 dark:bg-gray-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-gray-200 dark:border-gray-700'
                       }`}
@@ -6099,7 +6116,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                       options={[
                         { value: 'tcp', label: 'TCP (Standard)' },
                         { value: 'ws', label: 'WebSocket (WS)' },
+                        { value: 'wss', label: 'WebSocket Secure (WSS)' },
                         { value: 'mws', label: 'Multiplex WS (MWS)' },
+                        { value: 'mwss', label: 'Multiplex WSS' },
                         { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
                         { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
                         { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
