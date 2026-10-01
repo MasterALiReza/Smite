@@ -2280,7 +2280,11 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     custom_host: tunnel.custom_host || '',
     custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
     ws_path: tunnel.ws_path || '',
-    is_reverse: tunnel.is_reverse !== undefined ? tunnel.is_reverse : true,
+    is_reverse: tunnel.is_reverse !== undefined && tunnel.is_reverse !== null
+      ? Boolean(tunnel.is_reverse)
+      : (tunnel.spec?.is_reverse !== undefined && tunnel.spec?.is_reverse !== null
+          ? Boolean(tunnel.spec.is_reverse)
+          : !tunnel.spec?.force_direct),
     stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.spec?.custom_sni || '',
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type || 'none',
@@ -2447,6 +2451,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
         updatedSpec.remote_port = fallbackPort  // Keep for backward compatibility
         updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
+        updatedSpec.is_reverse = Boolean(formData.is_reverse)
+        updatedSpec.force_direct = !formData.is_reverse
       } else if (tunnel.core === 'chisel') {
         updatedSpec.ports = ports
         const firstPort = ports[0]
@@ -2563,7 +2569,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse !== undefined ? formData.is_reverse : true,
+          is_reverse: Boolean(formData.is_reverse),
           stealth_domain: formData.stealth_domain || null,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
@@ -4551,6 +4557,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
         spec.listen_port = fallbackPort  // Keep first port for backward compatibility
         spec.remote_port = fallbackPort  // Keep first port for backward compatibility
+        spec.is_reverse = Boolean(formData.is_reverse)
+        spec.force_direct = !formData.is_reverse
       }
       
       if (formData.core === 'rathole') {
@@ -4713,7 +4721,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           custom_host: formData.custom_host,
           custom_sni: formData.custom_sni,
           ws_path: formData.ws_path,
-          is_reverse: formData.is_reverse !== undefined ? formData.is_reverse : true,
+          is_reverse: Boolean(formData.is_reverse),
           stealth_domain: formData.stealth_domain || null,
           transport_type: formData.transport_type,
           security_type: formData.security_type,

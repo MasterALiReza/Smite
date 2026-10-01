@@ -369,3 +369,45 @@ async def test_gost_ssh_server_auth_and_cert_cleanup(tmp_path, monkeypatch):
         assert not ssh_key_file.exists()
         assert not (tmp_path / "ssh-server-test.json").exists()
 
+
+def test_build_gost_node_specs_direct_mode_persistence():
+    """
+    CRITICAL BUG REGRESSION TEST:
+    When Reverse Mode is turned off (is_reverse=False), reapplying or calling build_gost_node_specs
+    must NEVER forcibly flip is_reverse back to True.
+    """
+    tunnel = DummyTunnel(
+        spec={
+            "is_reverse": False,
+            "force_direct": True,
+            "control_port": 8443,
+            "ports": [80, 443],
+            "gost_type": "tcp",
+        }
+    )
+    tunnel.is_reverse = False
+    tunnel.foreign_node_id = "foreign-node-1"
+    tunnel.iran_node_id = "iran-node-1"
+
+    # First build / apply
+    server_spec, client_spec = build_gost_node_specs(tunnel, iran_node_ip="10.0.0.1", foreign_node_ip="20.0.0.2")
+
+    assert tunnel.is_reverse is False
+    assert tunnel.spec["is_reverse"] is False
+    assert tunnel.spec["force_direct"] is True
+    assert server_spec["mode"] == "client"  # Iran node is client
+    assert server_spec["is_reverse"] is False
+    assert server_spec["server_ip"] == "20.0.0.2"
+    assert client_spec["mode"] == "server"  # Foreign node is server
+    assert client_spec["is_reverse"] is False
+
+    # Second build / reapply (must preserve is_reverse=False)
+    server_spec2, client_spec2 = build_gost_node_specs(tunnel, iran_node_ip="10.0.0.1", foreign_node_ip="20.0.0.2")
+
+    assert tunnel.is_reverse is False
+    assert tunnel.spec["is_reverse"] is False
+    assert tunnel.spec["force_direct"] is True
+    assert server_spec2["mode"] == "client"
+    assert client_spec2["mode"] == "server"
+
+
