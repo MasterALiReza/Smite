@@ -352,6 +352,8 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
             
+            server_apply_spec = dict(server_spec)
+            server_apply_spec["force_restart"] = True
             logger.info(f"Restarting tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
             server_response = await client.send_to_node(
                 node_id=iran_node.id,
@@ -360,7 +362,7 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
                     "tunnel_id": tunnel.id,
                     "core": core,
                     "type": tunnel.type,
-                    "spec": server_spec
+                    "spec": server_apply_spec
                 }
             )
             
@@ -373,6 +375,8 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
                 foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
             
+            client_apply_spec = dict(client_spec)
+            client_apply_spec["force_restart"] = True
             logger.info(f"Restarting tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
             client_response = await client.send_to_node(
                 node_id=foreign_node.id,
@@ -381,7 +385,7 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
                     "tunnel_id": tunnel.id,
                     "core": core,
                     "type": tunnel.type,
-                    "spec": client_spec
+                    "spec": client_apply_spec
                 }
             )
             

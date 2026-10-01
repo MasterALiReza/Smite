@@ -247,6 +247,28 @@ def extract_all_tunnel_ports(spec: dict) -> Dict[str, Set[int]]:
     for p in parsed:
         if isinstance(p, int) and p > 0:
             service_ports.add(p)
+        elif isinstance(p, str):
+            p_clean = p.strip()
+            if "=" in p_clean:
+                left = p_clean.split("=", 1)[0].strip()
+                if ":" in left:
+                    left = left.rsplit(":", 1)[-1].strip()
+                if left.isdigit() and int(left) > 0:
+                    service_ports.add(int(left))
+                elif "-" in left:
+                    parts = left.split("-", 1)
+                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 0 < s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
+                            service_ports.update(range(s_p, e_p + 1))
+            elif "-" in p_clean:
+                parts = p_clean.split("-", 1)
+                if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                    s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
+                    if 0 < s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
+                        service_ports.update(range(s_p, e_p + 1))
+            elif p_clean.isdigit() and int(p_clean) > 0:
+                service_ports.add(int(p_clean))
         elif isinstance(p, dict):
             for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
                 v = p.get(k)
@@ -295,10 +317,13 @@ async def check_port_conflicts(
     foreign_node_id: Optional[str] = None,
     node_id: Optional[str] = None,
     exclude_tunnel_id: Optional[str] = None,
-    core: Optional[str] = None
+    core: Optional[str] = None,
+    is_reverse: Optional[bool] = None
 ) -> None:
     """
-    Check if any port in `spec` conflicts with an existing active/pending tunnel on the same node(s).
+    Check if any listening port in `spec` conflicts with an existing active/pending tunnel on the listening node.
+    In reverse tunnels, only the Iran node binds listening sockets (the foreign node is an outbound client).
+    In direct tunnels, the foreign node binds listening sockets.
     Raises HTTPException(status_code=400, detail=...) if a collision is found to protect node stability.
     """
     if not spec:
@@ -309,21 +334,38 @@ async def check_port_conflicts(
     if not all_new_ports:
         return
         
+    # Determine reverse tunnel mode
+    if is_reverse is not None:
+        is_rev = bool(is_reverse)
+    elif core in {"rathole", "backhaul", "chisel", "frp"}:
+        is_rev = True
+    elif core == "gost":
+        is_rev = bool((foreign_node_id or iran_node_id) and not (spec or {}).get("force_direct"))
+    else:
+        is_rev = True
+
+    # Identify which node binds listening sockets
     nodes_to_check: List[Tuple[str, str]] = []
-    if foreign_node_id and str(foreign_node_id).strip():
-        nodes_to_check.append((str(foreign_node_id).strip(), "خارج (Foreign)"))
-    if iran_node_id and str(iran_node_id).strip():
-        nodes_to_check.append((str(iran_node_id).strip(), "ایران (Iran)"))
-    if node_id and str(node_id).strip():
-        clean_nid = str(node_id).strip()
-        already_added = any(nid == clean_nid for nid, _ in nodes_to_check)
-        if not already_added:
-            nodes_to_check.append((clean_nid, "سرور"))
+    if is_rev:
+        # In reverse tunnels, the listener (server that binds sockets) is the Iran node
+        listen_nid = iran_node_id or node_id
+        if listen_nid and str(listen_nid).strip():
+            nodes_to_check.append((str(listen_nid).strip(), "ایران (Iran)"))
+    else:
+        # In direct tunnels, the listener (server that binds sockets) is the Foreign node
+        listen_nid = foreign_node_id or node_id
+        if listen_nid and str(listen_nid).strip():
+            nodes_to_check.append((str(listen_nid).strip(), "خارج (Foreign)"))
             
     if not nodes_to_check:
         return
-        
-    from sqlalchemy import or_
+
+    from sqlalchemy import or_, and_
+
+    new_type = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
+    is_new_udp = new_type == "udp"
+    is_new_tcp = new_type in {"tcp", "tcpmux", "ws", "wss", "grpc", "http", "https"}
+    is_new_dual = new_type in {"tcp+udp", "all"}
     
     for nid, node_type_label in nodes_to_check:
         # Get node name for descriptive error message
@@ -331,13 +373,35 @@ async def check_port_conflicts(
         node_obj = n_res.scalar_one_or_none()
         node_name_str = f"'{node_obj.name}'" if node_obj else f"ID {nid[:8]}"
         
-        # Query tunnels associated with this node
+        # Query tunnels that actually LISTEN (bind ports) on this node
         t_res = await db.execute(
             select(Tunnel).where(
                 or_(
-                    Tunnel.node_id == nid,
-                    Tunnel.iran_node_id == nid,
-                    Tunnel.foreign_node_id == nid
+                    # Reverse tunnel listening on this node
+                    and_(
+                        Tunnel.is_reverse == True,
+                        or_(
+                            Tunnel.iran_node_id == nid,
+                            and_(Tunnel.iran_node_id.is_(None), Tunnel.node_id == nid)
+                        )
+                    ),
+                    # Direct tunnel listening on this node
+                    and_(
+                        Tunnel.is_reverse == False,
+                        or_(
+                            Tunnel.foreign_node_id == nid,
+                            and_(Tunnel.foreign_node_id.is_(None), Tunnel.node_id == nid)
+                        )
+                    ),
+                    # Fallback for legacy tunnels where is_reverse might be None:
+                    and_(
+                        Tunnel.is_reverse.is_(None),
+                        Tunnel.core.in_(["rathole", "backhaul", "chisel", "frp"]),
+                        or_(
+                            Tunnel.iran_node_id == nid,
+                            and_(Tunnel.iran_node_id.is_(None), Tunnel.node_id == nid)
+                        )
+                    )
                 ),
                 Tunnel.status.in_(["active", "pending", "stopped", "running"])
             )
@@ -350,11 +414,30 @@ async def check_port_conflicts(
             
             ex_spec = ex.spec or {}
             ex_ports_info = extract_all_tunnel_ports(ex_spec)
-            ex_ports = ex_ports_info["all_ports"]
             
-            common = all_new_ports.intersection(ex_ports)
-            if common:
-                collided_port = sorted(list(common))[0]
+            ex_type = (ex.type or ex_spec.get("type") or ex_spec.get("tunnel_type") or "tcp").lower()
+            is_ex_udp = ex_type == "udp"
+            is_ex_tcp = ex_type in {"tcp", "tcpmux", "ws", "wss", "grpc", "http", "https"}
+            is_ex_dual = ex_type in {"tcp+udp", "all"}
+
+            # Service port collision only if protocols conflict
+            proto_conflict = (is_new_dual or is_ex_dual) or (is_new_udp and is_ex_udp) or (is_new_tcp and is_ex_tcp)
+            
+            collided_port = None
+            if proto_conflict:
+                common_service = extracted["service_ports"].intersection(ex_ports_info["service_ports"])
+                if common_service:
+                    collided_port = sorted(list(common_service))[0]
+            
+            # Control ports collision
+            if collided_port is None:
+                common_ctrl = extracted["control_ports"].intersection(ex_ports_info["all_ports"])
+                if not common_ctrl:
+                    common_ctrl = extracted["all_ports"].intersection(ex_ports_info["control_ports"])
+                if common_ctrl:
+                    collided_port = sorted(list(common_ctrl))[0]
+
+            if collided_port is not None:
                 error_msg = (
                     f"تداخل پورت: پورت {collided_port} در سرور {node_type_label} {node_name_str} "
                     f"قبلاً توسط تانل '{ex.name}' رزرو شده است. "
@@ -465,7 +548,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         iran_node_id=iran_node_id_to_store,
         foreign_node_id=foreign_node_id_to_store,
         node_id=tunnel_node_id,
-        core=tunnel.core
+        core=tunnel.core,
+        is_reverse=is_reverse_tunnel
     )
     
     db_tunnel = Tunnel(
@@ -1442,7 +1526,8 @@ async def update_tunnel(
             foreign_node_id=tunnel.foreign_node_id,
             node_id=tunnel.node_id,
             exclude_tunnel_id=tunnel.id,
-            core=tunnel.core
+            core=tunnel.core,
+            is_reverse=tunnel.is_reverse
         )
 
     tunnel.revision += 1
@@ -1505,7 +1590,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         foreign_node_id=tunnel.foreign_node_id,
         node_id=tunnel.node_id,
         exclude_tunnel_id=tunnel.id,
-        core=tunnel.core
+        core=tunnel.core,
+        is_reverse=is_reverse_tunnel
     )
     
     if is_reverse_tunnel:
@@ -1627,13 +1713,15 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     await asyncio.sleep(0.8)
                     
                     verify_ports = ports if isinstance(ports, list) else ([ports] if ports else [])
-                    verify_ctrl_port = None
-                    if assigned_control_port is not None:
-                        verify_ctrl_port = assigned_control_port
-                    elif control_port is not None:
-                        verify_ctrl_port = control_port
-                    elif tunnel.spec and (tunnel.spec.get("control_port") or tunnel.spec.get("bind_port")):
-                        verify_ctrl_port = tunnel.spec.get("control_port") or tunnel.spec.get("bind_port")
+                    verify_ctrl_port = (
+                        server_spec.get("control_port")
+                        or server_spec.get("bind_port")
+                        or server_spec.get("server_port")
+                        or (assigned_control_port if assigned_control_port is not None else None)
+                        or (control_port if control_port is not None else None)
+                        or (tunnel.spec.get("control_port") if tunnel.spec else None)
+                        or (tunnel.spec.get("bind_port") if tunnel.spec else None)
+                    )
                     
                     verify_res = {}
                     try:
@@ -2034,12 +2122,32 @@ async def test_tunnel_config(
     if raw_ports:
         for p in str(raw_ports).split(","):
             p_clean = p.strip()
+            if "=" in p_clean:
+                left = p_clean.split("=", 1)[0].strip()
+                if ":" in left:
+                    left = left.rsplit(":", 1)[-1].strip()
+                p_clean = left
             if p_clean.isdigit():
                 ports_to_check.append(int(p_clean))
             elif "-" in p_clean:
                 parts = p_clean.split("-")
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                     ports_to_check.extend(range(int(parts[0]), min(int(parts[0]) + 5, int(parts[1]) + 1)))
+
+    ranges_in_payload = payload.get("port_ranges") or spec.get("port_ranges")
+    if ranges_in_payload:
+        if isinstance(ranges_in_payload, str):
+            ranges_in_payload = [r.strip() for r in ranges_in_payload.split(",") if r.strip()]
+        for r in ranges_in_payload:
+            r_clean = str(r).split("=")[0].strip()
+            if "-" in r_clean:
+                parts = r_clean.split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    ports_to_check.extend(range(int(parts[0]), min(int(parts[0]) + 5, int(parts[1]) + 1)))
+
+    ctrl_p = payload.get("control_port") or payload.get("rathole_remote_addr") or payload.get("frp_bind_port") or payload.get("chisel_control_port") or spec.get("control_port") or spec.get("bind_port")
+    if ctrl_p and str(ctrl_p).isdigit() and int(ctrl_p) not in ports_to_check:
+        ports_to_check.append(int(ctrl_p))
 
     if iran_node_id and ports_to_check:
         # Query active tunnels on the same Iran node
@@ -2052,7 +2160,8 @@ async def test_tunnel_config(
         active_tunnels = res.scalars().all()
         conflict = None
         for at in active_tunnels:
-            at_ports = parse_ports_from_spec(at.spec or {})
+            at_extracted = extract_all_tunnel_ports(at.spec or {})
+            at_ports = at_extracted.get("all_ports", set())
             for p in ports_to_check:
                 if p in at_ports:
                     conflict = (p, at.name)

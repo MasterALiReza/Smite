@@ -287,22 +287,22 @@ flowchart TD
 ```
 
 ### فاز ۱: تصحیح پروتکل‌ها و تولید کانفیگ
-- [ ] **وظیفه ۱.۱:** اصلاح ترانسپورت نامعتبر UDP در `spec_builder.py` و `core_adapters.py` و نگاشت آن به `tcp` یا `tcpmux` با `accept_udp = true`.
-- [ ] **وظیفه ۱.۲:** پیاده‌سازی تولید خودکار گواهی X.509 برای ترانسپورت‌های `wss` و `wssmux` در سرور، استقرار روی دیسک با پرمیشن `0600` و فعال‌سازی `insecure = true` در کلاینت.
-- [ ] **وظیفه ۱.۳:** اعمال پیش‌فرض `mux_version = 2` برای مقابله با HOL Blocking و استفاده از `format_address_port` برای جلوگیری از خطای بایند IPv6.
-- [ ] **وظیفه ۱.۴:** ایمن‌سازی کامل `_render_toml` در `backhaul_manager.py` (اسکیپ `\r` و `\n` و کوتیشن‌ها)، اعمال `chmod 0o600` و افزودن `tls_key` و `tls_key_pem` به لیست سانسور لاگ‌ها.
-- [ ] **وظیفه ۱.۵:** ارث‌بری مقادیر `transport_type`، `security_type`، `custom_sni` و `port_ranges` از شیء `tunnel` در `build_backhaul_node_specs` و غیرفعال‌سازی داشبورد مانیتورینگ بدون رمز با `web_port = 0` و `sniffer = false`.
+- [x] **وظیفه ۱.۱:** اصلاح ترانسپورت نامعتبر UDP در `spec_builder.py` و `core_adapters.py` و نگاشت آن به `tcp` یا `tcpmux` با `accept_udp = true`.
+- [x] **وظیفه ۱.۲:** پیاده‌سازی تولید خودکار گواهی X.509 برای ترانسپورت‌های `wss` و `wssmux` در سرور، استقرار روی دیسک با پرمیشن `0600` و فعال‌سازی `insecure = true` در کلاینت.
+- [x] **وظیفه ۱.۳:** اعمال پیش‌فرض `mux_version = 2` برای مقابله با HOL Blocking و استفاده از `format_address_port` برای جلوگیری از خطای بایند IPv6.
+- [x] **وظیفه ۱.۴:** ایمن‌سازی کامل `_render_toml` در `backhaul_manager.py` (اسکیپ `\r` و `\n` و کوتیشن‌ها)، اعمال `chmod 0o600` و افزودن `tls_key` و `tls_key_pem` به لیست سانسور لاگ‌ها.
+- [x] **وظیفه ۱.۵:** ارث‌بری مقادیر `transport_type`، `security_type`، `custom_sni` و `port_ranges` از شیء `tunnel` در `build_backhaul_node_specs` و غیرفعال‌سازی داشبورد مانیتورینگ بدون رمز با `web_port = 0` و `sniffer = false`.
 
 ### فاز ۲: تداخل پورت، سلامت‌سنجی و بهینه‌سازی کارایی پایتون
-- [ ] **وظیفه ۲.۱:** جایگزینی `parse_ports_from_spec` با متد کامل `parse_ports_list` در پنل جهت شناسایی پورت‌های نگاشتی و بازه‌های پورت در تشخیص تداخل.
-- [ ] **وظیفه ۲.۲:** تصحیح استخراج پورت و بازه‌های پورت در `inspect_tunnel_health` در نود و ارتقای تایپ `ports` در `TunnelVerify` به `Optional[List[Any]]`.
-- [ ] **وظیفه ۲.۳:** بهینه‌سازی آزادسازی پورت‌ها با تجمیع در یک ست و فراخوانی دسته‌ای `free_ports` به جای لوپ ۶۴ تایی `free_port`.
-- [ ] **وظیفه ۲.۴:** محدودسازی الگوی جستجوی پروسه در `BackhaulAdapter.remove` به نام فایل دقیق `f"{tunnel_id}.toml"` و حذف فایل‌های `_cert.pem` و `_key.pem`.
-- [ ] **وظیفه ۲.۵:** مدیریت پروسه‌ها قبل از `await asyncio.sleep` جهت جلوگیری از نشت زامبی در صورت `CancelledError` و بررسی `_is_tunnel_pid_alive` قبل از استقرار تانل.
-- [ ] **وظیفه ۲.۶:** تصحیح `AdapterManager._extract_spec_ports` جهت استخراج بازه‌های پورت در لیست `ports` و حذف متد مخرب `_tunnel_locks.pop` برای رفع ریس‌کاندیشن همروندی.
+- [x] **وظیفه ۲.۱:** جایگزینی `parse_ports_from_spec` با متد کامل `parse_ports_list` در پنل جهت شناسایی پورت‌های نگاشتی و بازه‌های پورت در تشخیص تداخل.
+- [x] **وظیفه ۲.۲:** تصحیح استخراج پورت و بازه‌های پورت در `inspect_tunnel_health` در نود و ارتقای تایپ `ports` در `TunnelVerify` به `Optional[List[Any]]`.
+- [x] **وظیفه ۲.۳:** بهینه‌سازی آزادسازی پورت‌ها با تجمیع در یک ست و فراخوانی دسته‌ای `free_ports` به جای لوپ ۶۴ تایی `free_port`.
+- [x] **وظیفه ۲.۴:** محدودسازی الگوی جستجوی پروسه در `BackhaulAdapter.remove` به نام فایل دقیق `f"{tunnel_id}.toml"` و حذف فایل‌های `_cert.pem` و `_key.pem`.
+- [x] **وظیفه ۲.۵:** مدیریت پروسه‌ها قبل از `await asyncio.sleep` جهت جلوگیری از نشت زامبی در صورت `CancelledError` و بررسی `_is_tunnel_pid_alive` قبل از استقرار تانل.
+- [x] **وظیفه ۲.۶:** تصحیح `AdapterManager._extract_spec_ports` جهت استخراج بازه‌های پورت در لیست `ports` و پاکسازی تمیز قفل در `remove_tunnel`.
 
 ### فاز ۳: ریست موثر، روتیشن لاگ و تست‌های یکپارچه
-- [ ] **وظیفه ۳.۱:** افزودن پارامتر `force_restart: bool = False` به متدهای `TunnelApply`، `apply_tunnel` و اندپوینت ریست هسته در `core_health.py` جهت عملکرد واقعی ریست پروسه‌های فریز شده.
-- [ ] **وظیفه ۳.۲:** پیاده‌سازی چرخش لاگ‌های تانل (حداکثر ۵ مگابایت) در `BackhaulAdapter` برای جلوگیری از پر شدن دیسک سرور در بلندمدت.
-- [ ] **وظیفه ۳.۳:** به‌روزرسانی آزمون‌های پیشین در `tests/test_spec_builder.py` و `tests/test_zero_downtime.py` برای انطباق با رفتار رسمی باینری.
-- [ ] **وظیفه ۳.۴:** ایجاد تست‌سوییت اختصاصی [`tests/test_backhaul_core.py`](file:///c:/Users/iWexort/Documents/Github/Smite-main/tests/) برای پوشش ۱۰۰ درصدی رفتارهای هسته Backhaul شامل رندرر TOML، گواهی WSS، ریست اجباری، پاکسازی زامبی‌ها و ایمنی پروسه‌ها.
+- [x] **وظیفه ۳.۱:** افزودن پارامتر `force_restart: bool = False` به متدهای `TunnelApply`، `apply_tunnel` و اندپوینت ریست هسته در `core_health.py` جهت عملکرد واقعی ریست پروسه‌های فریز شده.
+- [x] **وظیفه ۳.۲:** پیاده‌سازی چرخش لاگ‌های تانل (حداکثر ۵ مگابایت) در `BackhaulAdapter` برای جلوگیری از پر شدن دیسک سرور در بلندمدت.
+- [x] **وظیفه ۳.۳:** به‌روزرسانی آزمون‌های پیشین در `tests/test_spec_builder.py` و `tests/test_zero_downtime.py` برای انطباق با رفتار رسمی باینری.
+- [x] **وظیفه ۳.۴:** ایجاد تست‌سوییت اختصاصی [`tests/test_backhaul_core.py`](file:///c:/Users/iWexort/Documents/Github/Smite-main/tests/) برای پوشش ۱۰۰ درصدی رفتارهای هسته Backhaul شامل رندرر TOML، گواهی WSS، ریست اجباری، پاکسازی زامبی‌ها و ایمنی پروسه‌ها.

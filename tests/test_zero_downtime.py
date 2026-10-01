@@ -297,11 +297,12 @@ async def test_backhaul_adapter_ports_formatting(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_backhaul_adapter_pure_udp_client_and_server(monkeypatch, tmp_path):
-    """Test BackhaulAdapter retains transport = 'udp' in both server and client modes for zero HoL blocking, and enforces client nodelay."""
+    """Test BackhaulAdapter maps requested udp transport to transport = 'tcp' with accept_udp = true for zero crashes, and enforces client nodelay."""
     adapter = BackhaulAdapter()
     adapter.config_dir = tmp_path
     
     monkeypatch.setattr("node.app.core_adapters.free_port", lambda *args, **kwargs: asyncio.sleep(0.001))
+    monkeypatch.setattr("node.app.core_adapters.free_ports", lambda *args, **kwargs: asyncio.sleep(0.001))
     monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
     monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
     
@@ -330,7 +331,8 @@ async def test_backhaul_adapter_pure_udp_client_and_server(monkeypatch, tmp_path
     }
     await adapter.apply("bh-srv-udp", server_spec)
     srv_cfg = (tmp_path / "bh-srv-udp.toml").read_text(encoding="utf-8")
-    assert 'transport = "udp"' in srv_cfg
+    assert 'transport = "tcp"' in srv_cfg
+    assert 'accept_udp = true' in srv_cfg
     assert 'mss = 1380' in srv_cfg
     assert 'skip_optz = true' in srv_cfg
     assert 'proxy_protocol = true' in srv_cfg
@@ -351,7 +353,8 @@ async def test_backhaul_adapter_pure_udp_client_and_server(monkeypatch, tmp_path
     }
     await adapter.apply("bh-cli-udp", client_spec)
     cli_cfg = (tmp_path / "bh-cli-udp.toml").read_text(encoding="utf-8")
-    assert 'transport = "udp"' in cli_cfg
+    assert 'transport = "tcp"' in cli_cfg
+    assert 'accept_udp = true' in cli_cfg
     assert 'nodelay = true' in cli_cfg
     assert 'mss = 1380' in cli_cfg
     assert 'skip_optz = true' in cli_cfg
@@ -368,8 +371,12 @@ async def test_backhaul_adapter_port_range_freeing(monkeypatch, tmp_path):
     freed_ports = []
     async def mock_free_port(p):
         freed_ports.append(p)
+    async def mock_free_ports(ports):
+        for p in ports:
+            freed_ports.append(p)
         
     monkeypatch.setattr("node.app.core_adapters.free_port", mock_free_port)
+    monkeypatch.setattr("node.app.core_adapters.free_ports", mock_free_ports)
     monkeypatch.setattr("node.app.core_adapters.safe_stop_subprocess", lambda *args, **kwargs: asyncio.sleep(0.001))
     monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
     

@@ -30,7 +30,8 @@ def sanitize_spec_for_log(spec: Any) -> Any:
     sensitive_keys = {
         "token", "auth_token", "password", "key", "auth",
         "server_private_key", "client_private_key", "noise_key",
-        "server_key", "client_key"
+        "server_key", "client_key", "tls_key", "tls_key_pem",
+        "tls_pkcs12_password"
     }
     sanitized = {}
     for k, v in spec.items():
@@ -501,6 +502,23 @@ def parse_address_port(address_str: str):
     return (address_str, None, False)
 
 
+def format_address_port(host: str, port: Optional[int] = None) -> str:
+    """Format host and port into address:port string, handling IPv6 addresses."""
+    if not host:
+        return ""
+    import ipaddress
+    clean_host = host.strip("[]")
+    try:
+        ipaddress.IPv6Address(clean_host)
+        if port is not None:
+            return f"[{clean_host}]:{port}"
+        return f"[{clean_host}]"
+    except (ValueError, ipaddress.AddressValueError):
+        if port is not None:
+            return f"{host}:{port}"
+        return host
+
+
 class CoreAdapter(Protocol):
     """Protocol for core adapters"""
     name: str
@@ -920,6 +938,7 @@ class BackhaulAdapter:
         "accept_udp",
         "heartbeat",
         "channel_size",
+        "insecure",
     ]
 
     BACKHAUL_NUMERIC_KEYS = {
@@ -930,7 +949,7 @@ class BackhaulAdapter:
     }
 
     BACKHAUL_BOOLEAN_KEYS = {
-        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp"
+        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp", "insecure"
     }
 
     def __init__(
@@ -958,43 +977,42 @@ class BackhaulAdapter:
 
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply Backhaul tunnel - supports both server and client modes"""
-        if tunnel_id in self.processes:
-            logger.info(f"Backhaul tunnel {tunnel_id} already exists, removing it first")
+        if tunnel_id in self.processes or _is_tunnel_pid_alive(tunnel_id, "backhaul"):
+            logger.info(f"Backhaul tunnel {tunnel_id} already exists or running via PID, removing it first")
             await self.remove(tunnel_id)
-        
+
         mode = spec.get('mode', 'client')
-        
+
         if mode == 'server':
             raw_transport = (spec.get("transport") or spec.get("type") or "tcpmux").lower()
             is_pure_udp = raw_transport == "udp"
             is_udp_over_tcp = (
                 spec.get("accept_udp") is True
-                or (spec.get("type") in ("udp", "tcp+udp") and not is_pure_udp)
-                or (spec.get("tunnel_type") in ("udp", "tcp+udp") and not is_pure_udp)
+                or (spec.get("type") in ("udp", "tcp+udp"))
+                or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
+                or is_pure_udp
             )
-            if is_pure_udp:
-                transport = "udp"
-            elif is_udp_over_tcp:
+            if is_pure_udp or is_udp_over_tcp:
                 transport = "tcp"
             elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
                 transport = raw_transport
             else:
                 transport = "tcpmux"
-            
+
             server_options = dict(spec.get("server_options") or {})
             bind_addr = spec.get("bind_addr")
             if not bind_addr:
                 control_port = spec.get("control_port") or spec.get("listen_port") or 3080
                 bind_ip = spec.get("bind_ip", "0.0.0.0")
-                bind_addr = f"{bind_ip}:{control_port}"
-            
-            bind_host, bind_port_num, _ = parse_address_port(bind_addr)
-            if bind_port_num:
-                await free_port(bind_port_num)
-            
+                bind_addr = format_address_port(bind_ip, control_port)
+            else:
+                bind_h, bind_p, _ = parse_address_port(bind_addr)
+                if bind_h and bind_p:
+                    bind_addr = format_address_port(bind_h, bind_p)
+
             ports = spec.get("ports")
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: received ports from spec: {ports} (type: {type(ports)})")
-            
+
             if not ports or (isinstance(ports, list) and len(ports) == 0):
                 listen_port = spec.get("public_port") or spec.get("listen_port")
                 target_addr = spec.get("target_addr")
@@ -1009,7 +1027,7 @@ class BackhaulAdapter:
                     ports = [str(listen_port)]
                 else:
                     ports = []
-            
+
             target_host = spec.get("target_host", "127.0.0.1")
             if isinstance(ports, list):
                 processed_ports = []
@@ -1023,11 +1041,8 @@ class BackhaulAdapter:
                         elif p_clean.isdigit():
                             processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
                         elif '-' in p_clean:
-                            # Port range
-                            if target_host in ("127.0.0.1", "localhost"):
-                                processed_ports.append(p_clean)
-                            else:
-                                processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
+                            # Port range: Backhaul Go binary forwards range directly without host prefix
+                            processed_ports.append(p_clean)
                         else:
                             processed_ports.append(p_clean)
                     elif isinstance(p, (int, float)):
@@ -1044,13 +1059,18 @@ class BackhaulAdapter:
                 ports = processed_ports
             else:
                 ports = [str(ports).strip()] if ports else []
-            
-            # Free all service ports on the server node to prevent port conflicts (including ranges)
+
+            # Batch port freeing on server node
+            ports_to_free: Set[int] = set()
+            _, bind_port_num, _ = parse_address_port(bind_addr)
+            if bind_port_num:
+                ports_to_free.add(bind_port_num)
+
             for p_entry in ports:
                 p_str = str(p_entry).strip()
                 lp = p_str.split("=")[0].strip() if "=" in p_str else p_str
                 if lp.isdigit():
-                    await free_port(int(lp))
+                    ports_to_free.add(int(lp))
                 elif "-" in lp:
                     parts = lp.split("-")
                     if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
@@ -1058,20 +1078,23 @@ class BackhaulAdapter:
                         if s_p <= e_p:
                             check_count = min(e_p - s_p + 1, 64)
                             for port_num in range(s_p, s_p + check_count):
-                                await free_port(port_num)
-            
+                                ports_to_free.add(port_num)
+
+            if ports_to_free:
+                await free_ports(ports_to_free)
+
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: processed ports: {ports} (count: {len(ports)})")
-            
+
             server_config: Dict[str, Any] = {
                 "bind_addr": bind_addr,
                 "transport": transport,
                 "ports": ports,
             }
-            
+
             token = spec.get("token") or server_options.get("token")
             if token:
                 server_config["token"] = token
-            
+
             SERVER_OPTION_KEYS = [
                 "nodelay", "keepalive_period", "channel_size", "log_level",
                 "heartbeat", "mux_con", "accept_udp", "skip_optz",
@@ -1098,7 +1121,7 @@ class BackhaulAdapter:
 
             if is_udp_over_tcp:
                 server_config["accept_udp"] = True
-            
+
             kp = server_options.get("keepalive_period") or spec.get("keepalive_period")
             if not kp or not isinstance(kp, (int, float)) or kp > 25:
                 server_config["keepalive_period"] = 20
@@ -1112,9 +1135,23 @@ class BackhaulAdapter:
                 server_config["heartbeat"] = int(hb)
 
             server_config.setdefault("nodelay", True)
-            
+
+            # Write TLS certificates if provided as in-memory PEM
+            if spec.get("tls_cert_pem") and spec.get("tls_key_pem"):
+                cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
+                key_path = self.config_dir / f"{tunnel_id}_key.pem"
+                await asyncio.to_thread(cert_path.write_text, spec["tls_cert_pem"], "utf-8")
+                await asyncio.to_thread(key_path.write_text, spec["tls_key_pem"], "utf-8")
+                try:
+                    os.chmod(key_path, 0o600)
+                except Exception:
+                    pass
+                server_config["tls_cert"] = str(cert_path)
+                server_config["tls_key"] = str(key_path)
+
             config_path = self.config_dir / f"{tunnel_id}.toml"
-            config_path.write_text(self._render_toml({"server": server_config}), encoding="utf-8")
+            rendered_cfg = self._render_toml({"server": server_config})
+            await asyncio.to_thread(config_path.write_text, rendered_cfg, "utf-8")
             try:
                 os.chmod(config_path, 0o600)
             except Exception:
@@ -1122,11 +1159,16 @@ class BackhaulAdapter:
 
             binary_path = self._resolve_binary_path()
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
+            if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
+                try:
+                    log_path.write_text("", encoding="utf-8")
+                except Exception:
+                    pass
             log_fh = log_path.open("w", buffering=1)
             log_fh.write(f"Starting Backhaul server for tunnel {tunnel_id}\n")
             log_fh.write(self._render_toml(sanitize_spec_for_log({"server": server_config})))
             log_fh.flush()
-            
+
             try:
                 proc = await _spawn_core_subprocess(
                     [str(binary_path), "-c", str(config_path)],
@@ -1150,12 +1192,11 @@ class BackhaulAdapter:
             is_pure_udp = raw_transport == "udp"
             is_udp_over_tcp = (
                 spec.get("accept_udp") is True
-                or (spec.get("type") in ("udp", "tcp+udp") and not is_pure_udp)
-                or (spec.get("tunnel_type") in ("udp", "tcp+udp") and not is_pure_udp)
+                or (spec.get("type") in ("udp", "tcp+udp"))
+                or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
+                or is_pure_udp
             )
-            if is_pure_udp:
-                transport = "udp"
-            elif is_udp_over_tcp:
+            if is_pure_udp or is_udp_over_tcp:
                 transport = "tcp"
             elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
                 transport = raw_transport
@@ -1193,6 +1234,9 @@ class BackhaulAdapter:
             if is_udp_over_tcp:
                 config_dict["accept_udp"] = True
 
+            if transport in ("wss", "wssmux") or spec.get("insecure") or client_options.get("insecure"):
+                config_dict.setdefault("insecure", True)
+
             config_dict.setdefault("nodelay", True)
 
             if "connection_pool" not in config_dict:
@@ -1218,7 +1262,8 @@ class BackhaulAdapter:
                 config_dict["aggressive_pool"] = True
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
-            config_path.write_text(self._render_toml({"client": config_dict}), encoding="utf-8")
+            rendered_cfg = self._render_toml({"client": config_dict})
+            await asyncio.to_thread(config_path.write_text, rendered_cfg, "utf-8")
             try:
                 os.chmod(config_path, 0o600)
             except Exception:
@@ -1227,6 +1272,11 @@ class BackhaulAdapter:
             binary_path = self._resolve_binary_path()
 
             log_path = self.config_dir / f"backhaul_{tunnel_id}.log"
+            if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
+                try:
+                    log_path.write_text("", encoding="utf-8")
+                except Exception:
+                    pass
             log_fh = log_path.open("w", buffering=1)
             log_fh.write(f"Starting Backhaul client for tunnel {tunnel_id}\n")
             log_fh.write(self._render_toml({"client": sanitize_spec_for_log(config_dict)}))
@@ -1242,24 +1292,29 @@ class BackhaulAdapter:
                 log_fh.close()
                 raise
 
-        await asyncio.sleep(0.5)
-        if proc.returncode is not None:
-            error_output = ""
-            try:
-                error_output = log_path.read_text(encoding="utf-8")[-1000:]
-            except Exception:
-                pass
-            log_fh.close()
-            _remove_tunnel_pid(tunnel_id)
-            raise RuntimeError(f"backhaul failed to start: {error_output}")
-
+        # Track process and PID immediately to prevent zombie leak on cancellation
         self.processes[tunnel_id] = proc
         _save_tunnel_pid(tunnel_id, proc.pid)
         self.log_handles[tunnel_id] = log_fh
 
+        try:
+            await asyncio.sleep(0.5)
+            if proc.returncode is not None:
+                error_output = ""
+                try:
+                    error_output = log_path.read_text(encoding="utf-8")[-1000:]
+                except Exception:
+                    pass
+                raise RuntimeError(f"backhaul failed to start: {error_output}")
+        except BaseException:
+            await self.remove(tunnel_id)
+            raise
+
     async def remove(self, tunnel_id: str):
         pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
+        cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
+        key_path = self.config_dir / f"{tunnel_id}_key.pem"
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1268,14 +1323,15 @@ class BackhaulAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"], pid=pid)
+        await safe_stop_subprocess(proc, patterns=[f"{tunnel_id}.toml"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
-        if config_path.exists():
-            try:
-                config_path.unlink()
-            except Exception:
-                pass
+        for p in (config_path, cert_path, key_path):
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         config_path = self.config_dir / f"{tunnel_id}.toml"
@@ -3242,6 +3298,18 @@ class AdapterManager:
                     lhs = p.split("=", 1)[0].strip()
                     if lhs.isdigit() and int(lhs) > 0:
                         ports.add(int(lhs))
+                    elif "-" in lhs:
+                        parts = lhs.split("-", 1)
+                        if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                            start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                            if 0 <= end_p - start_p <= 500:
+                                ports.update(range(start_p, end_p + 1))
+                elif isinstance(p, str) and "-" in p:
+                    parts = p.split("-", 1)
+                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 0 <= end_p - start_p <= 500:
+                            ports.update(range(start_p, end_p + 1))
                 elif isinstance(p, dict):
                     for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
                         v = p.get(k)
@@ -3254,6 +3322,12 @@ class AdapterManager:
                     p = p.split("=", 1)[0].strip()
                 if p.isdigit() and int(p) > 0:
                     ports.add(int(p))
+                elif "-" in p:
+                    parts = p.split("-", 1)
+                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 0 <= end_p - start_p <= 500:
+                            ports.update(range(start_p, end_p + 1))
 
         # Also extract port_ranges
         raw_ranges = spec.get("port_ranges")
@@ -3404,7 +3478,8 @@ class AdapterManager:
                 raise ValueError(error_msg)
             
             # Check if already running with exact same configuration (Idempotent Apply)
-            if tunnel_id in self.active_tunnels:
+            force_restart = bool(spec.get("force_restart", False))
+            if tunnel_id in self.active_tunnels and not force_restart:
                 existing_config = self.tunnel_configs.get(tunnel_id, {})
                 if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
                     t_status = adapter.status(tunnel_id)
@@ -3524,6 +3599,14 @@ class AdapterManager:
                             left = p.split("=", 1)[0].strip()
                             if left.isdigit():
                                 p_num = int(left)
+                            elif "-" in left:
+                                parts = left.split("-", 1)
+                                if parts[0].strip().isdigit():
+                                    p_num = int(parts[0].strip())
+                        elif isinstance(p, str) and "-" in p:
+                            parts = p.split("-", 1)
+                            if parts[0].strip().isdigit():
+                                p_num = int(parts[0].strip())
                         elif isinstance(p, dict):
                             p_val = p.get("remote") or p.get("remote_port") or p.get("port") or p.get("listen_port") or p.get("local_port")
                             if p_val and str(p_val).isdigit():
@@ -3548,6 +3631,14 @@ class AdapterManager:
                         left = p.split("=", 1)[0].strip()
                         if left.isdigit():
                             p_num = int(left)
+                        elif "-" in left:
+                            parts = left.split("-", 1)
+                            if parts[0].strip().isdigit():
+                                p_num = int(parts[0].strip())
+                    elif isinstance(p, str) and "-" in p:
+                        parts = p.split("-", 1)
+                        if parts[0].strip().isdigit():
+                            p_num = int(parts[0].strip())
                     elif isinstance(p, dict):
                         p_val = p.get("local_port") or p.get("local") or p.get("port") or p.get("listen_port") or p.get("remote") or p.get("remote_port")
                         if p_val and str(p_val).isdigit():

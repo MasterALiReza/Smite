@@ -21,14 +21,24 @@ from typing import Dict, Any, Tuple, Optional, List
 logger = logging.getLogger(__name__)
 
 try:
-    from app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle
+    from app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port
 except ImportError:
     try:
-        from panel.app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle
+        from panel.app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port
     except ImportError:
         generate_token = None
         generate_noise_keypair = None
         generate_rathole_tls_bundle = None
+        format_address_port = None
+
+if format_address_port is None:
+    def format_address_port(host: str, port: Optional[int] = None) -> str:
+        if not host:
+            return ""
+        clean = host.strip("[]")
+        if ":" in clean:
+            return f"[{clean}]:{port}" if port is not None else f"[{clean}]"
+        return f"{host}:{port}" if port is not None else host
 
 
 
@@ -69,6 +79,8 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
                     clean_ports.append(port_num)
         elif isinstance(p, str) and "=" in p:
             left = p.split("=", 1)[0].strip()
+            if ":" in left:
+                left = left.rsplit(":", 1)[-1].strip()
             if left.isdigit():
                 port_num = int(left)
                 if 1 <= port_num <= 65535 and port_num not in clean_ports:
@@ -249,33 +261,63 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
-    tunnel_type = (getattr(tunnel, "type", "tcp") or "tcp").lower()
+    # Model attributes inheritance
+    tunnel_type = (
+        getattr(tunnel, "type", None)
+        or getattr(tunnel, "tunnel_type", None)
+        or server_spec.get("type")
+        or server_spec.get("tunnel_type")
+        or "tcp"
+    ).lower()
+
     raw_transport = (
-        server_spec.get("transport")
+        getattr(tunnel, "transport_type", None)
+        or server_spec.get("transport")
         or server_spec.get("transport_type")
         or server_spec.get("type")
         or "tcpmux"
     )
     raw_transport_str = str(raw_transport).lower()
 
+    security_type = (
+        getattr(tunnel, "security_type", None)
+        or server_spec.get("security_type")
+        or "none"
+    ).lower()
+
+    custom_sni = (
+        getattr(tunnel, "custom_sni", None)
+        or getattr(tunnel, "stealth_domain", None)
+        or server_spec.get("custom_sni")
+        or server_spec.get("stealth_domain")
+    )
+    if custom_sni:
+        server_spec["custom_sni"] = custom_sni
+        client_spec["custom_sni"] = custom_sni
+
+    server_spec["security_type"] = security_type
+    client_spec["security_type"] = security_type
+
+    port_ranges = getattr(tunnel, "port_ranges", None) or server_spec.get("port_ranges")
+    if port_ranges:
+        server_spec["port_ranges"] = port_ranges
+        client_spec["port_ranges"] = port_ranges
+
     # Differentiate between:
-    # 1. Pure UDP transport (raw_transport == "udp" -> transport = "udp", lowest jitter / no HOL blocking)
+    # 1. Pure UDP request (raw_transport == "udp"): Upstream Musixal/Backhaul has no "udp" transport
+    #    and crashes with exit code 1 if transport="udp". It must be mapped to transport="tcp" with accept_udp=True.
     # 2. UDP-over-TCP encapsulation (accept_udp = True with transport = "tcp")
     is_pure_udp = raw_transport_str == "udp"
     is_udp_over_tcp = (
         server_spec.get("accept_udp") is True
-        or (tunnel_type in ("udp", "tcp+udp") and not is_pure_udp)
-        or (server_spec.get("type") in ("udp", "tcp+udp") and not is_pure_udp)
+        or (tunnel_type in ("udp", "tcp+udp"))
+        or (server_spec.get("type") in ("udp", "tcp+udp"))
+        or is_pure_udp
     )
 
-    if is_pure_udp:
-        transport = "udp"
-        server_spec["transport"] = "udp"
-        client_spec["transport"] = "udp"
-        if getattr(tunnel, "spec", None) is not None:
-            tunnel.spec["transport"] = "udp"
-    elif is_udp_over_tcp:
-        # Musixal/Backhaul requires transport = "tcp" for accept_udp = true encapsulation
+    if is_pure_udp or is_udp_over_tcp:
+        # Musixal/Backhaul encapsulates UDP traffic via accept_udp = true over TCP/TCPMUX.
+        # Raw transport = "udp" is invalid in upstream Backhaul and causes exit code 1.
         transport = "tcp"
         server_spec["accept_udp"] = True
         client_spec["accept_udp"] = True
@@ -283,11 +325,92 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         client_spec["transport"] = "tcp"
         if getattr(tunnel, "spec", None) is not None:
             tunnel.spec["accept_udp"] = True
-            tunnel.spec["transport"] = transport
+            tunnel.spec["transport"] = "tcp"
     elif raw_transport_str in {"tcp", "tcpmux", "ws", "wss", "wsmux", "wssmux"}:
         transport = raw_transport_str
     else:
         transport = "tcpmux"
+
+    # WSS and TLS resolution
+    use_tls = (
+        transport in ("wss", "wssmux")
+        or security_type == "tls"
+        or bool(server_spec.get("tls"))
+    )
+    if use_tls:
+        if transport == "ws":
+            transport = "wss"
+        elif transport == "wsmux":
+            transport = "wssmux"
+        server_spec["transport"] = transport
+        client_spec["transport"] = transport
+
+        tls_cert_pem = server_spec.get("tls_cert_pem")
+        tls_key_pem = server_spec.get("tls_key_pem")
+        if not (tls_cert_pem and tls_key_pem):
+            try:
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+                import datetime
+                import ipaddress
+
+                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                subject = issuer = x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, custom_sni or iran_node_ip or "backhaul-tunnel"),
+                ])
+                alt_names = []
+                if custom_sni:
+                    alt_names.append(x509.DNSName(custom_sni))
+                if iran_node_ip:
+                    clean_ip = iran_node_ip.strip("[]")
+                    try:
+                        alt_names.append(x509.IPAddress(ipaddress.ip_address(clean_ip)))
+                    except ValueError:
+                        alt_names.append(x509.DNSName(clean_ip))
+
+                builder = x509.CertificateBuilder().subject_name(
+                    subject
+                ).issuer_name(
+                    issuer
+                ).public_key(
+                    key.public_key()
+                ).serial_number(
+                    x509.random_serial_number()
+                ).not_valid_before(
+                    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+                ).not_valid_after(
+                    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
+                )
+                if alt_names:
+                    builder = builder.add_extension(
+                        x509.SubjectAlternativeName(alt_names),
+                        critical=False,
+                    )
+                cert = builder.sign(key, hashes.SHA256())
+
+                tls_key_pem = key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode('utf-8')
+                tls_cert_pem = cert.public_bytes(
+                    encoding=serialization.Encoding.PEM
+                ).decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Could not generate in-memory cert for backhaul: {e}")
+
+        if tls_cert_pem and tls_key_pem:
+            server_spec["tls_cert_pem"] = tls_cert_pem
+            server_spec["tls_key_pem"] = tls_key_pem
+            client_spec["tls_cert_pem"] = tls_cert_pem
+            if getattr(tunnel, "spec", None) is not None:
+                tunnel.spec["tls_cert_pem"] = tls_cert_pem
+                tunnel.spec["tls_key_pem"] = tls_key_pem
+
+        client_spec["insecure"] = True
+        server_spec["insecure"] = True
 
     token = server_spec.get("token")
     if not token:
@@ -299,6 +422,19 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     target_host = server_spec.get("target_host", "127.0.0.1")
 
     ports = server_spec.get("ports", [])
+    if port_ranges:
+        ranges_list = []
+        if isinstance(port_ranges, str):
+            ranges_list = [r.strip() for r in port_ranges.split(",") if r.strip()]
+        elif isinstance(port_ranges, list):
+            ranges_list = [str(r).strip() for r in port_ranges if str(r).strip()]
+        for r_entry in ranges_list:
+            if r_entry not in ports:
+                if isinstance(ports, list):
+                    ports.append(r_entry)
+                else:
+                    ports = [ports, r_entry]
+
     if not ports or len(ports) == 0:
         public_port = server_spec.get("public_port") or server_spec.get("remote_port") or server_spec.get("listen_port")
         target_port = server_spec.get("target_port") or public_port
@@ -308,7 +444,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
                 ports = [f"{p_str}={target_host}:{target_port}"]
             elif '-' in p_str:
                 # Port range like 27000-27050
-                ports = [p_str] if target_host in ("127.0.0.1", "localhost") else [f"{p_str}={target_host}:{p_str}"]
+                ports = [p_str]
             else:
                 ports = [f"{p_str}={target_host}:{p_str}"] if p_str.isdigit() else [p_str]
     else:
@@ -324,10 +460,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
                     processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
                 elif '-' in p_clean:
                     # Native Backhaul port range (e.g. 27000-27050)
-                    if target_host in ("127.0.0.1", "localhost"):
-                        processed_ports.append(p_clean)
-                    else:
-                        processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
+                    processed_ports.append(p_clean)
                 else:
                     processed_ports.append(p_clean)
             elif isinstance(p, (int, float)):
@@ -382,7 +515,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         control_port = int(assigned_control)
 
     bind_ip = server_spec.get("bind_ip") or server_spec.get("listen_ip") or "0.0.0.0"
-    server_spec["bind_addr"] = f"{bind_ip}:{control_port}"
+    server_spec["bind_addr"] = format_address_port(bind_ip, control_port)
     server_spec["control_port"] = control_port
     server_spec["transport"] = transport
     server_spec["type"] = transport
@@ -422,6 +555,17 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         client_options.setdefault("mss", 1380)
         client_options.setdefault("aggressive_pool", True)
 
+    # Use SMUX v2 by default for multiplexed transports to avoid HOL blocking
+    if transport in ("tcpmux", "wsmux", "wssmux"):
+        server_options.setdefault("mux_version", 2)
+        client_options.setdefault("mux_version", 2)
+
+    # Secure defaults: disable unauthenticated web dashboard and sniffer
+    server_options.setdefault("web_port", 0)
+    server_options.setdefault("sniffer", False)
+    client_options.setdefault("web_port", 0)
+    client_options.setdefault("sniffer", False)
+
     for opts in (server_options, client_options):
         kp = opts.get("keepalive_period")
         if kp is None or not isinstance(kp, (int, float)) or kp > 25:
@@ -440,7 +584,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         "dial_timeout"
     }
     backhaul_boolean_keys = {
-        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp"
+        "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp", "insecure"
     }
     for opts in (server_options, client_options):
         for nk in backhaul_numeric_keys:
@@ -481,10 +625,10 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
 
     transport_lower = transport.lower()
     host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
-    if transport_lower in ("ws", "wsmux"):
-        use_tls = bool(server_spec.get("tls_cert") or server_options.get("tls_cert"))
-        proto = "wss://" if use_tls else "ws://"
-        client_spec["remote_addr"] = f"{proto}{host_part}:{control_port}"
+    if transport_lower in ("wss", "wssmux") or use_tls:
+        client_spec["remote_addr"] = f"wss://{host_part}:{control_port}"
+    elif transport_lower in ("ws", "wsmux"):
+        client_spec["remote_addr"] = f"ws://{host_part}:{control_port}"
     else:
         client_spec["remote_addr"] = f"{host_part}:{control_port}"
 

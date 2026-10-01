@@ -2311,7 +2311,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         core: tunnel.core,
         iran_node_id: tunnel.iran_node_id || tunnel.node_id,
         foreign_node_id: tunnel.foreign_node_id,
-        ports: tunnel.core === 'backhaul' ? backhaulState.public_port : formData.ports,
+        ports: tunnel.core === 'backhaul' ? (backhaulAdvanced.port_ranges ? `${backhaulState.public_port},${backhaulAdvanced.port_ranges}` : backhaulState.public_port) : formData.ports,
+        control_port: tunnel.core === 'backhaul' ? (backhaulAdvanced.control_port || backhaulState.bind_port) : (tunnel.core === 'rathole' ? formData.rathole_remote_addr : (tunnel.core === 'frp' ? formData.frp_bind_port : (tunnel.core === 'chisel' ? formData.chisel_control_port : undefined))),
         rathole_token: formData.rathole_token,
         rathole_transport: formData.rathole_transport,
         rathole_remote_addr: formData.rathole_remote_addr,
@@ -2385,6 +2386,15 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         ports = parsed.ports
         port_ranges = parsed.port_ranges
         if (ports.length === 0 && port_ranges.length === 0) {
+          showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
+          return
+        }
+      } else if (tunnel.core === 'backhaul') {
+        const rawBhPorts = backhaulState.public_port || formData.ports || '8080'
+        const parsed = parsePortsAndRanges(rawBhPorts)
+        ports = parsed.ports
+        port_ranges = parsed.port_ranges
+        if (ports.length === 0 && port_ranges.length === 0 && !backhaulAdvanced.customPorts && !backhaulAdvanced.port_ranges) {
           showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
           return
         }
@@ -2509,7 +2519,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           delete updatedSpec.custom_domains
         }
       } else if (tunnel.core === 'backhaul') {
-        updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, tunnel.type as BackhaulTransport)
+        updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, backhaulState.transport)
         if ((!updatedSpec.ports || updatedSpec.ports.length === 0) && ports.length > 0) {
           const targetHost = updatedSpec.target_host || '127.0.0.1'
           updatedSpec.ports = ports.map(p => `${p}=${targetHost}:${p}`)
@@ -2525,7 +2535,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         name: formData.name,
         category: formData.category ? formData.category.trim() : null,
         spec: updatedSpec,
-        transport_type: tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type)),
+        transport_type: tunnel.core === 'backhaul'
+          ? (backhaulState.transport || 'tcp')
+          : (tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type))),
+        ...(tunnel.core === 'backhaul' && {
+          security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
+          custom_sni: backhaulAdvanced.client.edge_ip || formData.custom_sni || null,
+          gaming_mode: Boolean(backhaulState.gaming_mode),
+          is_reverse: true,
+          port_ranges: port_ranges.length > 0 ? port_ranges : null,
+        }),
         ...(tunnel.core === 'frp' && {
           security_type: formData.frp_security || 'tls',
           custom_sni: formData.frp_sni || null,
@@ -2562,9 +2581,18 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
       })
       showToast('success', 'Configuration Saved', `${formData.name} was saved safely. Active tunnel remains live until you click Reapply.`)
       onSuccess()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update tunnel:', error)
-      showToast('error', 'Error', 'Failed to update tunnel')
+      const detail = error.response?.data?.detail
+      let errorMsg = 'Failed to update tunnel'
+      if (typeof detail === 'string') {
+        errorMsg = detail
+      } else if (Array.isArray(detail)) {
+        errorMsg = detail.map((d: any) => d.msg || (typeof d === 'string' ? d : JSON.stringify(d))).join(', ')
+      } else if (error.message) {
+        errorMsg = error.message
+      }
+      showToast('error', 'Error', errorMsg)
     }
   }
 
@@ -2716,6 +2744,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               state={backhaulState}
               onChange={(partial) => {
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
+                if (partial.transport) {
+                  setFormData((prev: any) => ({ ...prev, transport_type: partial.transport as string, type: partial.transport as string }))
+                }
                 if (partial.gaming_mode !== undefined) {
                   setFormData((prev) => ({ ...prev, gaming_mode: partial.gaming_mode }))
                   if (partial.gaming_mode) {
@@ -2750,7 +2781,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               }}
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
               acceptUdpVisible={
-                backhaulState.transport === 'tcp' || backhaulState.transport === 'tcpmux'
+                backhaulState.transport === 'tcp' || backhaulState.transport === 'tcpmux' || backhaulState.transport === 'udp'
               }
             />
           )}
@@ -4388,7 +4419,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         core: formData.core,
         iran_node_id: formData.iran_node_id || formData.node_id,
         foreign_node_id: formData.foreign_node_id,
-        ports: formData.core === 'backhaul' ? backhaulState.public_port : formData.ports,
+        ports: formData.core === 'backhaul' ? (backhaulAdvanced.port_ranges ? `${backhaulState.public_port},${backhaulAdvanced.port_ranges}` : backhaulState.public_port) : formData.ports,
+        control_port: formData.core === 'backhaul' ? (backhaulAdvanced.control_port || backhaulState.bind_port) : (formData.core === 'rathole' ? formData.rathole_remote_addr : (formData.core === 'frp' ? formData.frp_bind_port : (formData.core === 'chisel' ? formData.chisel_control_port : undefined))),
         rathole_token: formData.rathole_token,
         rathole_transport: formData.rathole_transport,
         rathole_remote_addr: formData.rathole_remote_addr,
@@ -4476,6 +4508,15 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         ports = parsed.ports
         port_ranges = parsed.port_ranges
         if (ports.length === 0 && port_ranges.length === 0) {
+          showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
+          return
+        }
+      } else if (formData.core === 'backhaul') {
+        const rawBhPorts = backhaulState.public_port || formData.ports || '8080'
+        const parsed = parsePortsAndRanges(rawBhPorts)
+        ports = parsed.ports
+        port_ranges = parsed.port_ranges
+        if (ports.length === 0 && port_ranges.length === 0 && !backhaulAdvanced.customPorts && !backhaulAdvanced.port_ranges) {
           showToast('warning', 'Invalid Ports', 'Please enter at least one valid port or port range')
           return
         }
@@ -4694,6 +4735,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         }),
         ...(formData.core === 'backhaul' && {
           transport_type: backhaulState.transport || 'tcpmux',
+          security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
+          custom_sni: backhaulAdvanced.sni || null,
+          gaming_mode: backhaulAdvanced.nodelay || false,
+          port_ranges: (backhaulAdvanced.port_ranges && backhaulAdvanced.port_ranges.trim())
+            ? backhaulAdvanced.port_ranges.split(',').map(s => s.trim()).filter(Boolean)
+            : (port_ranges.length > 0 ? port_ranges : null),
           is_reverse: true,
         }),
         node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || formData.node_id) : formData.node_id,
@@ -4704,9 +4751,18 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
       await api.post('/tunnels', payload)
       showToast('success', 'Tunnel Created', `${formData.name} was created successfully`)
       onSuccess()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create tunnel:', error)
-      showToast('error', 'Error', 'Failed to create tunnel')
+      const detail = error.response?.data?.detail
+      let errorMsg = 'Failed to create tunnel'
+      if (typeof detail === 'string') {
+        errorMsg = detail
+      } else if (Array.isArray(detail)) {
+        errorMsg = detail.map((d: any) => d.msg || (typeof d === 'string' ? d : JSON.stringify(d))).join(', ')
+      } else if (error.message) {
+        errorMsg = error.message
+      }
+      showToast('error', 'Error', errorMsg)
     }
   }
 
@@ -5069,7 +5125,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               }}
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
               acceptUdpVisible={
-                backhaulState.transport === 'tcp' || backhaulState.transport === 'tcpmux'
+                backhaulState.transport === 'tcp' || backhaulState.transport === 'tcpmux' || backhaulState.transport === 'udp'
               }
             />
           )}
@@ -6646,9 +6702,34 @@ function BackhaulForm({
         <div className="w-10 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600 shrink-0 relative"></div>
       </label>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 h-5">
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+              <Network size={14} className="text-blue-500" />
+              Transport
+            </label>
+          </div>
+          <CustomSelect
+            value={state.transport}
+            onChange={(val) => onChange({ transport: val as BackhaulTransport })}
+            options={[
+              { value: 'tcp', label: 'TCP' },
+              { value: 'tcpmux', label: 'TCPMux (SMUX)' },
+              { value: 'ws', label: 'WebSocket (WS)' },
+              { value: 'wsmux', label: 'WS Mux' },
+              { value: 'wss', label: 'WSS (TLS Secure)' },
+              { value: 'wssmux', label: 'WSS Mux (TLS)' },
+              { value: 'udp', label: 'UDP (UDP-over-TCP)' },
+            ]}
+          />
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+            Tunnel transport stream.
+          </p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5 h-5">
             <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
               <Server size={14} className="text-emerald-500" />
               Control Port
@@ -6673,15 +6754,15 @@ function BackhaulForm({
             max={65535}
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Port where the foreign node connects back to the Iran server.
+            Port connecting to Iran server.
           </p>
         </div>
 
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 h-5">
             <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
               <Radio size={14} className="text-teal-500" />
-              Forwarded Ports & Ranges
+              Forwarded Ports
             </label>
             <span className="text-[11px] text-gray-400">Public & Target</span>
           </div>
@@ -6695,7 +6776,7 @@ function BackhaulForm({
             placeholder="8080,8081 or 27000-27050"
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Single ports (8080), comma list (8080,8081), or ranges (27000-27050).
+            Ports (8080) or ranges (27000-27050).
           </p>
         </div>
       </div>
@@ -7136,8 +7217,8 @@ function buildBackhaulSpec(
 ): Record<string, any> {
   const transport = transportOverride ?? base.transport
   const isPureUdp = transport === 'udp'
-  const isUdpOverTcp = !isPureUdp && (base.accept_udp || transport === 'tcp' && base.accept_udp || transport === 'tcpmux' && base.accept_udp)
-  const normalizedTransport = transport
+  const isUdpOverTcp = isPureUdp || Boolean(base.accept_udp)
+  const normalizedTransport = isPureUdp ? 'tcp' : transport
   const controlPort = parseInt(base.control_port, 10)
   const publicPort = parseInt(base.public_port, 10)
   const targetPort = parseInt(base.target_port, 10)
@@ -7310,8 +7391,9 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
   const state = createDefaultBackhaulState()
   const advanced = createDefaultBackhaulAdvancedState()
 
-  if (BACKHAUL_TRANSPORTS.includes(currentType as BackhaulTransport)) {
-    state.transport = currentType as BackhaulTransport
+  const candidateTransport = (spec?.transport || spec?.transport_type || currentType || '') as BackhaulTransport
+  if (BACKHAUL_TRANSPORTS.includes(candidateTransport)) {
+    state.transport = candidateTransport
   }
 
   if (!spec) {
@@ -7328,12 +7410,26 @@ function parseBackhaulSpec(spec: Record<string, any>, currentType: string): {
 
   state.listen_ip = spec.listen_ip ?? state.listen_ip
 
-  const publicPortCandidate =
-    spec.public_port ??
-    spec.listen_port ??
-    derivePortFromPorts(spec.ports)
-  if (publicPortCandidate) {
-    state.public_port = String(publicPortCandidate)
+  if (Array.isArray(spec.ports) && spec.ports.length > 0) {
+    const extracted = spec.ports.map(p => {
+      if (typeof p === 'string') {
+        const left = p.includes('=') ? p.split('=')[0].trim() : p.trim()
+        return left.includes(':') ? left.split(':')[1] : left
+      }
+      return String(p)
+    }).filter(Boolean)
+    if (extracted.length > 0) {
+      state.public_port = extracted.join(',')
+      state.target_port = extracted.join(',')
+    }
+  } else {
+    const publicPortCandidate =
+      spec.public_port ??
+      spec.listen_port ??
+      derivePortFromPorts(spec.ports)
+    if (publicPortCandidate) {
+      state.public_port = String(publicPortCandidate)
+    }
   }
 
   if (spec.target_host) {

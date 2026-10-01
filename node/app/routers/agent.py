@@ -62,7 +62,7 @@ class TunnelVerify(BaseModel):
     tunnel_id: str
     core: Optional[str] = None
     mode: Optional[str] = "server"
-    ports: Optional[List[int]] = None
+    ports: Optional[List[Any]] = None
     control_port: Optional[int] = None
     proto: Optional[str] = "udp"
 

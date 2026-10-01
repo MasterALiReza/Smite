@@ -82,6 +82,10 @@ class BackhaulManager:
 
         def write_config():
             config_path.write_text(config_content, encoding="utf-8")
+            try:
+                os.chmod(config_path, 0o600)
+            except Exception:
+                pass
 
         await asyncio.to_thread(write_config)
 
@@ -93,7 +97,8 @@ class BackhaulManager:
 
         log_fh = log_path.open("w", buffering=1)
         log_fh.write(f"Starting Backhaul server for tunnel {tunnel_id}\n")
-        log_fh.write(config_content)
+        sanitized_content = self._build_server_config(spec or {}, sanitize=True)
+        log_fh.write(sanitized_content)
         log_fh.flush()
 
         cmd = [str(binary_path), "-c", str(config_path)]
@@ -161,13 +166,16 @@ class BackhaulManager:
                 pass
             del self.log_handles[tunnel_id]
 
-    def _build_server_config(self, spec: dict) -> str:
+    def _build_server_config(self, spec: dict, sanitize: bool = False) -> str:
         transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
         server_options = dict(spec.get("server_options") or {})
 
-        # UDP over TCP helper toggle
+        # UDP over TCP encapsulation (Backhaul has no raw "udp" transport)
         accept_udp = spec.get("accept_udp", server_options.get("accept_udp", False))
-        if transport in {"tcp", "tcpmux"} and accept_udp:
+        if transport == "udp":
+            transport = "tcp"
+            server_options["accept_udp"] = True
+        elif transport in {"tcp", "tcpmux"} and accept_udp:
             server_options["accept_udp"] = True
 
         bind_addr = spec.get("bind_addr")
@@ -180,9 +188,8 @@ class BackhaulManager:
             except (TypeError, ValueError):
                 control_port = 3080
             bind_ip = spec.get("bind_ip", "0.0.0.0")
-            if bind_ip == "::":
-                bind_ip = "0.0.0.0"
-            bind_addr = f"{bind_ip}:{control_port}"
+            from app.utils import format_address_port
+            bind_addr = format_address_port(bind_ip, control_port)
 
         ports = self._build_ports(spec)
 
@@ -195,7 +202,7 @@ class BackhaulManager:
         # Token persisted at top-level or inside server_options
         token = spec.get("token") or server_options.get("token")
         if token:
-            server_config["token"] = token
+            server_config["token"] = "***REDACTED***" if sanitize else token
 
         for key in self.SERVER_OPTION_KEYS:
             value = server_options.get(key)
@@ -218,7 +225,7 @@ class BackhaulManager:
             server_config["tls_cert"] = tls_cert
         tls_key = spec.get("tls_key") or spec.get("tls_key_path")
         if tls_key:
-            server_config["tls_key"] = tls_key
+            server_config["tls_key"] = "***REDACTED***" if sanitize else tls_key
 
         server_config.setdefault("keepalive_period", 20)
         server_config.setdefault("heartbeat", 20)
@@ -242,10 +249,7 @@ class BackhaulManager:
                 return []
             from app.utils import format_address_port
             target_addr = format_address_port(target_host, target_port)
-        use_ipv6 = spec.get("use_ipv6", False)
         listen_ip = spec.get("listen_ip", spec.get("public_ip", "0.0.0.0"))
-        if listen_ip == "::":
-            listen_ip = "0.0.0.0"
 
         if listen_port is None:
             return []
@@ -256,7 +260,8 @@ class BackhaulManager:
             return []
 
         if listen_ip and listen_ip not in {"0.0.0.0", "::", ""}:
-            listen_part = f"{listen_ip}:{listen_port}"
+            from app.utils import format_address_port
+            listen_part = format_address_port(listen_ip, listen_port)
         else:
             listen_part = str(listen_port)
 
@@ -274,11 +279,14 @@ class BackhaulManager:
             if isinstance(value, list):
                 if not value:
                     return "[]"
-                rendered = ",\n  ".join(f"\"{str(item)}\"" for item in value)
+                escaped_items = []
+                for item in value:
+                    item_str = str(item).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '\\r').replace('\n', '\\n')
+                    escaped_items.append(f'"{item_str}"')
+                rendered = ",\n  ".join(escaped_items)
                 return "[\n  " + rendered + "\n]"
-            value_str = str(value)
-            value_str = value_str.replace("\\", "\\\\").replace('"', '\\"')
-            return f"\"{value_str}\""
+            value_str = str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '\\r').replace('\n', '\\n')
+            return f'"{value_str}"'
 
         for section, values in data.items():
             lines.append(f"[{section}]")

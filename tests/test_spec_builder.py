@@ -111,7 +111,7 @@ def test_spec_builder_backhaul():
 
 
 def test_spec_builder_backhaul_pure_udp():
-    """Verify Pure UDP transport is preserved for low-jitter competitive gaming without forcing TCP."""
+    """Verify UDP transport request is safely mapped to TCP with accept_udp=True (preventing upstream crash)."""
     tunnel = DummyTunnel(
         id="t-backhaul-pure-udp",
         core="backhaul",
@@ -120,9 +120,31 @@ def test_spec_builder_backhaul_pure_udp():
     )
     server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     
-    assert server_spec["transport"] == "udp"
-    assert client_spec["transport"] == "udp"
-    assert server_spec.get("accept_udp") is not True
+    assert server_spec["transport"] == "tcp"
+    assert client_spec["transport"] == "tcp"
+    assert server_spec.get("accept_udp") is True
+    assert client_spec.get("accept_udp") is True
+
+
+def test_spec_builder_backhaul_wss_tls_certs():
+    """Verify Backhaul WSS/TLS auto-generates self-signed certificates and sets insecure=True on client."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-wss",
+        core="backhaul",
+        type="tcp",
+        transport_type="wss",
+        security_type="tls",
+        custom_sni="vpn.example.com",
+        spec={"ports": [8080], "token": "sec-token"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    
+    assert server_spec["transport"] == "wss"
+    assert client_spec["transport"] == "wss"
+    assert "tls_cert_pem" in server_spec and "BEGIN CERTIFICATE" in server_spec["tls_cert_pem"]
+    assert "tls_key_pem" in server_spec and ("BEGIN RSA PRIVATE KEY" in server_spec["tls_key_pem"] or "BEGIN PRIVATE KEY" in server_spec["tls_key_pem"])
+    assert client_spec["insecure"] is True
+    assert client_spec["remote_addr"].startswith("wss://")
 
 
 def test_spec_builder_backhaul_udp_over_tcp():
