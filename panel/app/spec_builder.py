@@ -21,15 +21,16 @@ from typing import Dict, Any, Tuple, Optional, List
 logger = logging.getLogger(__name__)
 
 try:
-    from app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port
+    from app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port, is_safe_backend_url
 except ImportError:
     try:
-        from panel.app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port
+        from panel.app.utils import generate_token, generate_noise_keypair, generate_rathole_tls_bundle, format_address_port, is_safe_backend_url
     except ImportError:
         generate_token = None
         generate_noise_keypair = None
         generate_rathole_tls_bundle = None
         format_address_port = None
+        is_safe_backend_url = None
 
 if format_address_port is None:
     def format_address_port(host: str, port: Optional[int] = None) -> str:
@@ -39,6 +40,33 @@ if format_address_port is None:
         if ":" in clean:
             return f"[{clean}]:{port}" if port is not None else f"[{clean}]"
         return f"{host}:{port}" if port is not None else host
+
+if is_safe_backend_url is None:
+    def is_safe_backend_url(url: Optional[str]) -> bool:
+        if not url or not isinstance(url, str):
+            return False
+        clean_url = url.strip()
+        lower_url = clean_url.lower()
+        if not (lower_url.startswith("http://") or lower_url.startswith("https://")):
+            return False
+        import urllib.parse
+        import ipaddress
+        try:
+            parsed = urllib.parse.urlparse(clean_url)
+            hostname = parsed.hostname
+            if not hostname:
+                return False
+            if hostname.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+                return False
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+                    return False
+            except ValueError:
+                pass
+            return True
+        except Exception:
+            return False
 
 
 
@@ -641,208 +669,284 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
 
 
 def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Generate server (Iran) and client (Foreign) specs for Chisel core with WSS, UDP, and Anti-DPI Camouflage"""
-    spec = tunnel.spec.copy() if tunnel.spec else {}
-    server_spec = spec.copy()
-    server_spec["mode"] = "server"
-    client_spec = spec.copy()
-    client_spec["mode"] = "client"
+    """Generate server and client specs for Chisel core with WSS, UDP, and Anti-DPI Camouflage.
+    Returns (iran_spec, foreign_spec):
+    - Reverse tunnel (is_reverse=True): Iran is server (reverse_only=True), Foreign is client.
+    - Direct tunnel (is_reverse=False): Foreign is server (reverse_only=False), Iran is client.
+    """
+    spec = tunnel.spec.copy() if (hasattr(tunnel, "spec") and tunnel.spec) else {}
+
+    # 0. Directionality (Reverse vs Direct)
+    is_reverse = getattr(tunnel, "is_reverse", None)
+    if is_reverse is None:
+        is_reverse = spec.get("is_reverse", True)
+    is_reverse = bool(is_reverse)
 
     # 1. Transport & TLS Resolution
     transport = (
         getattr(tunnel, "transport_type", None)
-        or server_spec.get("transport")
-        or server_spec.get("transport_type")
+        or spec.get("transport")
+        or spec.get("transport_type")
         or "ws"
     ).lower()
     use_tls = (transport in ("wss", "https", "tls")) or bool(
-        server_spec.get("websocket_tls") or server_spec.get("tls")
+        spec.get("websocket_tls") or spec.get("tls")
     )
-    
-    server_spec["transport"] = "wss" if use_tls else "ws"
-    server_spec["transport_type"] = "wss" if use_tls else "ws"
-    client_spec["transport"] = "wss" if use_tls else "ws"
-    client_spec["transport_type"] = "wss" if use_tls else "ws"
-    server_spec["websocket_tls"] = use_tls
-    client_spec["websocket_tls"] = use_tls
+    effective_transport = "wss" if use_tls else "ws"
 
-    # 2. Tunnel Type (tcp, udp, tcp+udp, socks5)
+    # 2. Tunnel Type (tcp, udp, tcp+udp, all, socks5)
     tunnel_type = (
         getattr(tunnel, "type", None)
         or getattr(tunnel, "tunnel_type", None)
-        or server_spec.get("type")
-        or server_spec.get("tunnel_type")
+        or spec.get("type")
+        or spec.get("tunnel_type")
         or "tcp"
     ).lower()
-    if tunnel_type not in ["tcp", "udp", "tcp+udp", "socks5"]:
+    if tunnel_type not in ["tcp", "udp", "tcp+udp", "all", "socks5"]:
         tunnel_type = "tcp"
-    server_spec["type"] = tunnel_type
-    server_spec["tunnel_type"] = tunnel_type
-    client_spec["type"] = tunnel_type
-    client_spec["tunnel_type"] = tunnel_type
 
-    # 3. Port parsing and Control Port allocation
+    # 3. Port parsing, Port Ranges, and Control Port allocation
     ports = parse_ports_list(spec)
+    port_ranges = getattr(tunnel, "port_ranges", None) or spec.get("port_ranges")
+    if port_ranges:
+        ranges_ports = parse_ports_list(port_ranges)
+        for rp in ranges_ports:
+            if rp not in ports:
+                ports.append(rp)
     if not ports:
-        listen_port = server_spec.get("listen_port") or server_spec.get("remote_port")
+        listen_port = spec.get("listen_port") or spec.get("remote_port")
         if listen_port and str(listen_port).isdigit():
             ports = [int(listen_port)]
         else:
             ports = [8080]
 
-    port_hash = int(hashlib.sha256(tunnel.id.encode()).hexdigest()[:8], 16)
+    tunnel_id_str = str(getattr(tunnel, "id", "") or "default-chisel")
+    port_hash = int(hashlib.sha256(tunnel_id_str.encode()).hexdigest()[:8], 16)
     first_port = ports[0] if ports else 8080
-    raw_control_port = server_spec.get("control_port")
+    raw_control_port = spec.get("control_port")
     try:
         ctrl_p = int(raw_control_port) if raw_control_port else 0
     except (ValueError, TypeError):
         ctrl_p = 0
     if ctrl_p < 1024 or ctrl_p > 65535 or ctrl_p in ports:
-        server_control_port = int(first_port) + 10000 + (port_hash % 1000)
+        server_control_port = 25000 + (port_hash % 25000)
         while server_control_port in ports:
             server_control_port += 1
     else:
         server_control_port = ctrl_p
-    server_spec["server_port"] = server_control_port
-    server_spec["control_port"] = server_control_port
-    server_spec["reverse_port"] = first_port
-    server_spec["ports"] = ports
-    client_spec["server_port"] = server_control_port
-    client_spec["control_port"] = server_control_port
-    client_spec["reverse_port"] = first_port
-    client_spec["ports"] = ports
 
-    # 4. Authentication (Token)
-    auth = server_spec.get("auth") or server_spec.get("token") or server_spec.get("auth_token")
+    # 4. Authentication (Normalized to user:pass for Chisel binary compatibility)
+    auth = spec.get("auth") or spec.get("token") or spec.get("auth_token")
     if not auth:
         auth = generate_token() if generate_token else "default-auth"
-    server_spec["auth"] = auth
-    server_spec["auth_token"] = auth
-    server_spec["token"] = auth
-    client_spec["auth"] = auth
-    client_spec["auth_token"] = auth
-    client_spec["token"] = auth
+    if ":" not in auth:
+        auth = f"smite:{auth}"
 
     # 5. Anti-DPI & Stealth (Custom SNI, Host Header, Decoy Backend)
     custom_sni = (
         getattr(tunnel, "custom_sni", None)
         or getattr(tunnel, "stealth_domain", None)
-        or server_spec.get("custom_sni")
-        or server_spec.get("stealth_domain")
+        or spec.get("custom_sni")
+        or spec.get("stealth_domain")
     )
     custom_host = (
         getattr(tunnel, "custom_host", None)
-        or server_spec.get("custom_host")
-        or server_spec.get("hostname")
+        or spec.get("custom_host")
+        or spec.get("hostname")
     )
-    backend_url = (
+    raw_backend = (
         getattr(tunnel, "backend_url", None)
-        or server_spec.get("backend_url")
-        or server_spec.get("backend")
-        or server_spec.get("decoy_url")
+        or spec.get("backend_url")
+        or spec.get("backend")
+        or spec.get("decoy_url")
     )
-    user_agent = getattr(tunnel, "user_agent", None) or server_spec.get("user_agent")
+    backend_url = raw_backend if is_safe_backend_url(raw_backend) else None
+    user_agent = getattr(tunnel, "user_agent", None) or spec.get("user_agent")
+    custom_headers = getattr(tunnel, "custom_headers", None) or spec.get("custom_headers")
 
-    if custom_sni:
-        server_spec["custom_sni"] = custom_sni
-        client_spec["custom_sni"] = custom_sni
-    if custom_host:
-        server_spec["custom_host"] = custom_host
-        client_spec["custom_host"] = custom_host
-    if backend_url:
-        server_spec["backend_url"] = backend_url
-    if user_agent:
-        client_spec["user_agent"] = user_agent
+    # 6. Stability Tuning (Keepalive, Max Retry Interval, Proxy, Key)
+    keepalive = getattr(tunnel, "keepalive", None) or spec.get("keepalive") or "15s"
+    max_retry_interval = spec.get("max_retry_interval") or "10s"
+    max_retry_count = spec.get("max_retry_count")
+    proxy = spec.get("proxy") or spec.get("upstream_proxy")
+    key = spec.get("key")
+    fingerprint = spec.get("fingerprint")
 
-    # 6. Stability Tuning (Keepalive, Max Retry Interval, Proxy)
-    keepalive = getattr(tunnel, "keepalive", None) or server_spec.get("keepalive") or "10s"
-    max_retry_interval = server_spec.get("max_retry_interval") or "10s"
-    server_spec["keepalive"] = keepalive
-    client_spec["keepalive"] = keepalive
-    client_spec["max_retry_interval"] = max_retry_interval
-    if "proxy" in server_spec:
-        client_spec["proxy"] = server_spec["proxy"]
+    # 7. TLS Certificate Generation with SAN
+    tls_cert_pem = spec.get("tls_cert_pem")
+    tls_key_pem = spec.get("tls_key_pem")
+    if use_tls and not (tls_cert_pem and tls_key_pem):
+        try:
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            import datetime
+            import ipaddress
 
-    # 7. TLS Certificate generation and propagation
-    if use_tls:
-        tls_cert_pem = server_spec.get("tls_cert_pem")
-        tls_key_pem = server_spec.get("tls_key_pem")
-        if not (tls_cert_pem and tls_key_pem):
+            server_target_ip = iran_node_ip if is_reverse else foreign_node_ip
+            key_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            cn_val = custom_sni or server_target_ip or "chisel-tunnel"
+            subject = issuer = x509.Name([
+                x509.NameAttribute(NameOID.COMMON_NAME, cn_val),
+            ])
+
+            san_list = []
+            if custom_sni:
+                san_list.append(x509.DNSName(custom_sni))
+            if server_target_ip:
+                try:
+                    san_list.append(x509.IPAddress(ipaddress.ip_address(server_target_ip)))
+                except ValueError:
+                    san_list.append(x509.DNSName(server_target_ip))
+            san_list.append(x509.DNSName("chisel-tunnel"))
+            san_list.append(x509.DNSName("localhost"))
             try:
-                from cryptography import x509
-                from cryptography.x509.oid import NameOID
-                from cryptography.hazmat.primitives import hashes, serialization
-                from cryptography.hazmat.primitives.asymmetric import rsa
-                import datetime
+                san_list.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
+            except Exception:
+                pass
 
-                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-                subject = issuer = x509.Name([
-                    x509.NameAttribute(NameOID.COMMON_NAME, custom_sni or iran_node_ip or "chisel-tunnel"),
-                ])
-                cert = x509.CertificateBuilder().subject_name(
-                    subject
-                ).issuer_name(
-                    issuer
-                ).public_key(
-                    key.public_key()
-                ).serial_number(
-                    x509.random_serial_number()
-                ).not_valid_before(
-                    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
-                ).not_valid_after(
-                    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
-                ).sign(key, hashes.SHA256())
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .public_key(key_obj.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1))
+                .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650))
+                .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+                .sign(key_obj, hashes.SHA256())
+            )
 
-                tls_key_pem = key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.TraditionalOpenSSL,
-                    encryption_algorithm=serialization.NoEncryption()
-                ).decode('utf-8')
-                tls_cert_pem = cert.public_bytes(
-                    encoding=serialization.Encoding.PEM
-                ).decode('utf-8')
-            except Exception as e:
-                logger.warning(f"Could not generate in-memory cert for chisel: {e}")
+            tls_key_pem = key_obj.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode('utf-8')
+            tls_cert_pem = cert.public_bytes(
+                encoding=serialization.Encoding.PEM
+            ).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"Could not generate in-memory cert with SAN for chisel: {e}")
 
-        if tls_cert_pem and tls_key_pem:
-            server_spec["tls_cert_pem"] = tls_cert_pem
-            server_spec["tls_key_pem"] = tls_key_pem
-            if tunnel.spec is not None:
-                tunnel.spec["tls_cert_pem"] = tls_cert_pem
-                tunnel.spec["tls_key_pem"] = tls_key_pem
+    # Build server spec
+    server_spec_dict = spec.copy()
+    server_spec_dict["mode"] = "server"
+    server_spec_dict["server_port"] = server_control_port
+    server_spec_dict["control_port"] = server_control_port
+    server_spec_dict["reverse_port"] = first_port
+    server_spec_dict["ports"] = ports
+    if port_ranges:
+        server_spec_dict["port_ranges"] = port_ranges
+    server_spec_dict["transport"] = effective_transport
+    server_spec_dict["transport_type"] = effective_transport
+    server_spec_dict["websocket_tls"] = use_tls
+    server_spec_dict["type"] = tunnel_type
+    server_spec_dict["tunnel_type"] = tunnel_type
+    server_spec_dict["auth"] = auth
+    server_spec_dict["auth_token"] = auth
+    server_spec_dict["token"] = auth
+    server_spec_dict["reverse_only"] = is_reverse
+    server_spec_dict["is_reverse"] = is_reverse
+    server_spec_dict["keepalive"] = keepalive
+    if key:
+        server_spec_dict["key"] = key
+    if backend_url:
+        server_spec_dict["backend_url"] = backend_url
+    else:
+        server_spec_dict.pop("backend_url", None)
+        server_spec_dict.pop("backend", None)
+        server_spec_dict.pop("decoy_url", None)
+    if custom_sni:
+        server_spec_dict["custom_sni"] = custom_sni
+    if custom_host:
+        server_spec_dict["custom_host"] = custom_host
+    if use_tls and tls_cert_pem and tls_key_pem:
+        server_spec_dict["tls_cert_pem"] = tls_cert_pem
+        server_spec_dict["tls_key_pem"] = tls_key_pem
 
-        client_spec["tls_skip_verify"] = server_spec.get("tls_skip_verify", True)
-
-    fingerprint = server_spec.get("fingerprint")
+    # Build client spec
+    client_spec_dict = spec.copy()
+    client_spec_dict["mode"] = "client"
+    client_spec_dict["server_port"] = server_control_port
+    client_spec_dict["control_port"] = server_control_port
+    client_spec_dict["reverse_port"] = first_port
+    client_spec_dict["ports"] = ports
+    if port_ranges:
+        client_spec_dict["port_ranges"] = port_ranges
+    client_spec_dict["transport"] = effective_transport
+    client_spec_dict["transport_type"] = effective_transport
+    client_spec_dict["websocket_tls"] = use_tls
+    client_spec_dict["type"] = tunnel_type
+    client_spec_dict["tunnel_type"] = tunnel_type
+    client_spec_dict["auth"] = auth
+    client_spec_dict["auth_token"] = auth
+    client_spec_dict["token"] = auth
+    client_spec_dict["is_reverse"] = is_reverse
+    client_spec_dict["keepalive"] = keepalive
+    client_spec_dict["max_retry_interval"] = max_retry_interval
+    if max_retry_count is not None:
+        client_spec_dict["max_retry_count"] = max_retry_count
+    if key:
+        client_spec_dict["key"] = key
+    if proxy:
+        client_spec_dict["proxy"] = proxy
     if fingerprint:
-        server_spec["fingerprint"] = fingerprint
-        client_spec["fingerprint"] = fingerprint
+        client_spec_dict["fingerprint"] = fingerprint
+    if custom_sni:
+        client_spec_dict["custom_sni"] = custom_sni
+    if custom_host:
+        client_spec_dict["custom_host"] = custom_host
+    if user_agent:
+        client_spec_dict["user_agent"] = user_agent
+    if custom_headers:
+        client_spec_dict["custom_headers"] = custom_headers
+    if use_tls:
+        client_spec_dict["tls_skip_verify"] = spec.get("tls_skip_verify", True)
+        if tls_cert_pem:
+            client_spec_dict["tls_ca_cert_pem"] = tls_cert_pem
 
-    host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
+    # Resolve server_url for client
+    target_ip = iran_node_ip if is_reverse else foreign_node_ip
+    host_part = f"[{target_ip}]" if is_valid_ipv6(target_ip) else target_ip
     proto = "https://" if use_tls else "http://"
-    client_spec["server_url"] = f"{proto}{host_part}:{server_control_port}"
+    client_spec_dict["server_url"] = f"{proto}{host_part}:{server_control_port}"
 
     # 8. Sync state back to tunnel.spec for persistent DB storage
-    if tunnel.spec is not None:
+    if hasattr(tunnel, "spec") and tunnel.spec is not None:
         tunnel.spec["auth"] = auth
         tunnel.spec["auth_token"] = auth
         tunnel.spec["token"] = auth
         tunnel.spec["control_port"] = server_control_port
         tunnel.spec["ports"] = ports
-        tunnel.spec["transport"] = "wss" if use_tls else "ws"
-        tunnel.spec["transport_type"] = "wss" if use_tls else "ws"
+        if port_ranges:
+            tunnel.spec["port_ranges"] = port_ranges
+        tunnel.spec["transport"] = effective_transport
+        tunnel.spec["transport_type"] = effective_transport
         tunnel.spec["type"] = tunnel_type
         tunnel.spec["tunnel_type"] = tunnel_type
+        tunnel.spec["is_reverse"] = is_reverse
         if custom_sni:
             tunnel.spec["custom_sni"] = custom_sni
         if custom_host:
             tunnel.spec["custom_host"] = custom_host
         if backend_url:
             tunnel.spec["backend_url"] = backend_url
+        else:
+            tunnel.spec.pop("backend_url", None)
+            tunnel.spec.pop("backend", None)
+            tunnel.spec.pop("decoy_url", None)
         if keepalive:
             tunnel.spec["keepalive"] = keepalive
+        if use_tls and tls_cert_pem and tls_key_pem:
+            tunnel.spec["tls_cert_pem"] = tls_cert_pem
+            tunnel.spec["tls_key_pem"] = tls_key_pem
 
-    return server_spec, client_spec
+    # Return (iran_spec, foreign_spec)
+    if is_reverse:
+        return server_spec_dict, client_spec_dict
+    else:
+        return client_spec_dict, server_spec_dict
 
 
 def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:

@@ -42,7 +42,15 @@ RUN set -eux; \
         install -Dm755 "$GOST_BIN" /usr/local/bin/gost; \
     fi; \
     rm -rf "$GOST_TMP"; \
-    /usr/local/bin/gost -V || true
+    /usr/local/bin/gost -V || true; \
+    echo "Fetching chisel release"; \
+    CHISEL_URL="https://github.com/jpillora/chisel/releases/download/v1.11.3/chisel_1.11.3_linux_${ARCH}.gz"; \
+    CHISEL_TMP="$(mktemp -d)"; \
+    curl -fsSL "$CHISEL_URL" -o "$CHISEL_TMP/chisel.gz"; \
+    gunzip "$CHISEL_TMP/chisel.gz"; \
+    install -Dm755 "$CHISEL_TMP/chisel" /usr/local/bin/chisel; \
+    rm -rf "$CHISEL_TMP"; \
+    /usr/local/bin/chisel --version || true
 
 FROM node:18-alpine AS frontend-build
 WORKDIR /app
@@ -70,9 +78,10 @@ LABEL smite.version="${SMITE_VERSION}"
 ENV SMITE_VERSION="${SMITE_VERSION}"
 RUN echo "${SMITE_VERSION}" > /app/VERSION
 
-# Copy FRP and GOST binaries from core-bins stage
+# Copy FRP, GOST, and Chisel binaries from core-bins stage
 COPY --from=core-bins /usr/local/bin/frps /usr/local/bin/frps
 COPY --from=core-bins /usr/local/bin/gost /usr/local/bin/gost
+COPY --from=core-bins /usr/local/bin/chisel /usr/local/bin/chisel
 
 COPY --from=deps /usr/local /usr/local
 COPY --from=frontend-build /app/dist ./static

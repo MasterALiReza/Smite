@@ -481,13 +481,17 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             or tunnel.is_reverse is not None
         )
     )
-    is_reverse = (
-        True if (
-            tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
-            or (tunnel.core == "gost" and tunnel.is_reverse is True)
-            or (tunnel.core == "gost" and tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_val or iran_node_id_val))
-        ) else False
-    )
+    if tunnel.core in {"rathole", "backhaul", "frp"}:
+        is_reverse = True
+    elif tunnel.core in {"gost", "chisel"}:
+        if tunnel.is_reverse is not None:
+            is_reverse = bool(tunnel.is_reverse)
+        elif not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_val or iran_node_id_val):
+            is_reverse = True
+        else:
+            is_reverse = False
+    else:
+        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
     foreign_node = None
     iran_node = None
     
@@ -608,7 +612,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         needs_gost_forwarding = db_tunnel.type in ["tcp", "udp", "ws", "grpc", "tcpmux", "tcp+udp"] and db_tunnel.core == "gost" and is_panel_tunnel
         needs_rathole_server = False
         needs_backhaul_server = False
-        needs_chisel_server = False
+        needs_chisel_server = (db_tunnel.core == "chisel" and is_panel_tunnel)
         needs_frp_server = False
         needs_node_apply = single_node_id is not None
         
@@ -978,10 +982,13 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         panel_host = request.url.hostname or "localhost"
                     
                     from app.utils import is_valid_ipv6_address
+                    chisel_transport = (spec_for_node.get("transport_type") or spec_for_node.get("transport") or "").lower()
+                    chisel_tls = (chisel_transport in ("wss", "https", "tls")) or bool(spec_for_node.get("websocket_tls") or spec_for_node.get("tls"))
+                    proto = "https://" if chisel_tls else "http://"
                     if is_valid_ipv6_address(panel_host):
-                        server_url = f"http://[{panel_host}]:{server_control_port}"
+                        server_url = f"{proto}[{panel_host}]:{server_control_port}"
                     else:
-                        server_url = f"http://{panel_host}:{server_control_port}"
+                        server_url = f"{proto}{panel_host}:{server_control_port}"
                     spec_for_node["server_url"] = server_url
                     spec_for_node["reverse_port"] = reverse_port
                     spec_for_node["remote_port"] = int(listen_port)
@@ -1601,13 +1608,17 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             or tunnel.is_reverse is not None
         )
     )
-    is_reverse = (
-        True if (
-            tunnel.core in {"rathole", "backhaul", "chisel", "frp"}
-            or (tunnel.core == "gost" and tunnel.is_reverse is True)
-            or (tunnel.core == "gost" and tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)))
-        ) else False
-    )
+    if tunnel.core in {"rathole", "backhaul", "frp"}:
+        is_reverse = True
+    elif tunnel.core in {"gost", "chisel"}:
+        if tunnel.is_reverse is not None:
+            is_reverse = bool(tunnel.is_reverse)
+        elif not (tunnel.spec or {}).get("force_direct") and (getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)):
+            is_reverse = True
+        else:
+            is_reverse = False
+    else:
+        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
     foreign_node = None
     iran_node = None
     assigned_control_port: Optional[int] = None

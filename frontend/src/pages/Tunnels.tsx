@@ -4806,7 +4806,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     let newType = formData.type
     const updated = { ...formData, core }
     if (core === 'chisel') {
-      newType = 'chisel'
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp' || formData.type === 'socks5') ? formData.type : 'tcp'
       if (!updated.chisel_control_port) {
         updated.chisel_control_port = generateRandomControlPort()
       }

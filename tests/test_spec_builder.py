@@ -834,6 +834,125 @@ def test_spec_builder_frp_san_cert():
 
 
 
+
+def test_spec_builder_chisel_auth_normalization():
+    """Verify Chisel auth token is automatically formatted as user:pass (smite:token) if no colon is present"""
+    tunnel = DummyTunnel(
+        id="t-chisel-auth-norm",
+        core="chisel",
+        spec={"ports": [8080], "auth": "singletoken12345"}
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["auth"] == "smite:singletoken12345"
+    assert c["auth"] == "smite:singletoken12345"
+
+    tunnel_colon = DummyTunnel(
+        id="t-chisel-auth-colon",
+        core="chisel",
+        spec={"ports": [8080], "auth": "customuser:custompass"}
+    )
+    s2, c2 = build_tunnel_node_specs(tunnel_colon, "1.1.1.1", "2.2.2.2")
+    assert s2["auth"] == "customuser:custompass"
+    assert c2["auth"] == "customuser:custompass"
+
+
+def test_spec_builder_chisel_san_certificate():
+    """Verify in-memory TLS certificate for Chisel includes SubjectAlternativeName with DNS and IP"""
+    from cryptography import x509
+    tunnel = DummyTunnel(
+        id="t-chisel-san",
+        core="chisel",
+        type="tcp",
+        spec={"ports": [8080], "transport": "wss", "custom_sni": "stealth.example.com"}
+    )
+    s_spec, c_spec = build_tunnel_node_specs(tunnel, "203.0.113.10", "198.51.100.20")
+    cert_pem = s_spec.get("tls_cert_pem")
+    assert cert_pem and "BEGIN CERTIFICATE" in cert_pem
+    assert c_spec.get("tls_ca_cert_pem") == cert_pem
+
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    san_ext = cert.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+    dns_names = san_ext.value.get_values_for_type(x509.DNSName)
+    ip_addrs = [str(ip) for ip in san_ext.value.get_values_for_type(x509.IPAddress)]
+
+    assert "stealth.example.com" in dns_names
+    assert "chisel-tunnel" in dns_names
+    assert "203.0.113.10" in ip_addrs
+
+
+def test_spec_builder_chisel_direct_vs_reverse_directionality():
+    """Verify Chisel produces correct node assignments for both reverse and direct tunnels"""
+    # 1. Reverse tunnel (default)
+    t_rev = DummyTunnel(
+        id="t-chisel-rev",
+        core="chisel",
+        is_reverse=True,
+        spec={"ports": [8080], "transport": "ws"}
+    )
+    iran_rev, foreign_rev = build_tunnel_node_specs(t_rev, "100.1.1.1", "200.2.2.2")
+    assert iran_rev["mode"] == "server"
+    assert iran_rev["reverse_only"] is True
+    assert foreign_rev["mode"] == "client"
+    assert foreign_rev["server_url"].startswith("http://100.1.1.1:")
+
+    # 2. Direct tunnel (is_reverse=False)
+    t_dir = DummyTunnel(
+        id="t-chisel-dir",
+        core="chisel",
+        is_reverse=False,
+        spec={"ports": [8080], "transport": "ws"}
+    )
+    iran_dir, foreign_dir = build_tunnel_node_specs(t_dir, "100.1.1.1", "200.2.2.2")
+    assert iran_dir["mode"] == "client"
+    assert iran_dir["server_url"].startswith("http://200.2.2.2:")  # Connects to Foreign server!
+    assert foreign_dir["mode"] == "server"
+    assert foreign_dir["reverse_only"] is False
+
+
+def test_spec_builder_chisel_backend_ssrf_protection():
+    """Verify private/loopback backend decoy URLs are stripped to protect against SSRF"""
+    tunnel_malicious = DummyTunnel(
+        id="t-chisel-ssrf",
+        core="chisel",
+        spec={"ports": [8080], "backend_url": "http://127.0.0.1:8000"}
+    )
+    s_mal, _ = build_tunnel_node_specs(tunnel_malicious, "1.1.1.1", "2.2.2.2")
+    assert "backend_url" not in s_mal
+
+    tunnel_cloud_meta = DummyTunnel(
+        id="t-chisel-meta",
+        core="chisel",
+        spec={"ports": [8080], "backend_url": "http://169.254.169.254/latest/meta-data"}
+    )
+    s_meta, _ = build_tunnel_node_specs(tunnel_cloud_meta, "1.1.1.1", "2.2.2.2")
+    assert "backend_url" not in s_meta
+
+    tunnel_safe = DummyTunnel(
+        id="t-chisel-safe",
+        core="chisel",
+        spec={"ports": [8080], "backend_url": "https://speedtest.net"}
+    )
+    s_safe, _ = build_tunnel_node_specs(tunnel_safe, "1.1.1.1", "2.2.2.2")
+    assert s_safe.get("backend_url") == "https://speedtest.net"
+
+
+def test_spec_builder_chisel_port_ranges_expansion():
+    """Verify port_ranges are parsed and expanded into discrete integer ports for Chisel"""
+    tunnel = DummyTunnel(
+        id="t-chisel-ranges",
+        core="chisel",
+        port_ranges="9000-9003",
+        spec={"ports": [8080]}
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert 8080 in s["ports"]
+    assert 9000 in s["ports"]
+    assert 9001 in s["ports"]
+    assert 9002 in s["ports"]
+    assert 9003 in s["ports"]
+    assert len(s["ports"]) == 5
+
+
 if __name__ == "__main__":
     import inspect
     current_module = sys.modules[__name__]

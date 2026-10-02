@@ -1426,34 +1426,61 @@ class ChiselAdapter:
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply Chisel tunnel - supports both server and client modes with TLS, UDP, Camouflage and Persistent Keys"""
-        if tunnel_id in self.processes:
-            logger.info(f"Chisel tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
-        
         mode = spec.get('mode', 'client')
         binary_path = self._resolve_binary_path()
         transport = (spec.get('transport_type') or spec.get('transport') or 'ws').lower()
         use_tls = (transport in ['wss', 'https', 'tls']) or bool(spec.get('websocket_tls', False) or spec.get('tls', False))
         tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
+        is_reverse = spec.get('is_reverse', True)
+        if is_reverse is None:
+            is_reverse = True
+        else:
+            is_reverse = bool(is_reverse)
+
+        # Early validation BEFORE removing running process
+        if mode == 'client':
+            server_url = spec.get('server_url') or spec.get('remote_addr') or spec.get('server_addr')
+            if not server_url:
+                raise ValueError("Chisel client requires 'server_url' or 'remote_addr' in spec")
+            ports = spec.get('ports') or []
+            local_port = spec.get('local_port') or spec.get('port')
+            remote_port = spec.get('remote_port')
+            if not ports and not local_port and tunnel_proto != 'socks5':
+                raise ValueError("Chisel client requires at least one port mapping")
+
+        if tunnel_id in self.processes:
+            logger.info(f"Chisel tunnel {tunnel_id} already exists, removing it first")
+            await self.remove(tunnel_id)
         
         if mode == 'server':
             control_port = spec.get('control_port') or spec.get('server_port') or spec.get('listen_port') or 8080
-            # Free all service reverse ports and control port that server will bind
+            # Free control port and any reverse service ports server will bind
             ports_to_free = [int(control_port)]
-            for p in spec.get('ports') or []:
-                if isinstance(p, (int, str)) and str(p).isdigit():
-                    ports_to_free.append(int(p))
-                elif isinstance(p, dict):
-                    p_num = p.get('remote_port') or p.get('remote') or p.get('port')
-                    if p_num and str(p_num).isdigit():
-                        ports_to_free.append(int(p_num))
+            if is_reverse:
+                for p in spec.get('ports') or []:
+                    if isinstance(p, (int, str)) and str(p).isdigit():
+                        ports_to_free.append(int(p))
+                    elif isinstance(p, dict):
+                        p_num = p.get('remote_port') or p.get('remote') or p.get('port')
+                        if p_num and str(p_num).isdigit():
+                            ports_to_free.append(int(p_num))
             await free_ports(ports_to_free)
 
             auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             key = spec.get('key')
-            reverse_only = spec.get('reverse_only', True)
+            reverse_only = spec.get('reverse_only')
+            if reverse_only is None:
+                reverse_only = is_reverse
             
             cmd = [str(binary_path), "server", "--port", str(control_port)]
+            
+            host = spec.get('host') or spec.get('bind_ip') or spec.get('listen_ip')
+            use_ipv6 = spec.get('use_ipv6', False)
+            if host:
+                cmd.extend(["--host", str(host).strip()])
+            elif use_ipv6:
+                cmd.extend(["--host", "::"])
+
             if auth_token:
                 cmd.extend(["--auth", auth_token])
             
@@ -1475,14 +1502,16 @@ class ChiselAdapter:
             else:
                 if not keyfile_path.exists():
                     try:
-                        subprocess.run(
-                            [str(binary_path), "server", "--keygen", str(keyfile_path)],
-                            check=True,
-                            timeout=5,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
+                        kproc = await asyncio.create_subprocess_exec(
+                            str(binary_path), "server", "--keygen", str(keyfile_path),
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL
                         )
-                        os.chmod(keyfile_path, 0o600)
+                        await asyncio.wait_for(kproc.wait(), timeout=5.0)
+                        try:
+                            os.chmod(keyfile_path, 0o600)
+                        except Exception:
+                            pass
                     except Exception as e:
                         logger.warning(f"Could not auto-generate persistent SSH key for chisel: {e}")
                 if keyfile_path.exists():
@@ -1507,16 +1536,18 @@ class ChiselAdapter:
                         pass
                 elif not cert_path.exists() or not key_path.exists():
                     try:
-                        subprocess.run(
-                            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                             "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
-                             "-subj", "/CN=chisel-tunnel"],
-                            check=True,
-                            timeout=5,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
+                        cproc = await asyncio.create_subprocess_exec(
+                            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                            "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
+                            "-subj", "/CN=chisel-tunnel",
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL
                         )
-                        os.chmod(key_path, 0o600)
+                        await asyncio.wait_for(cproc.wait(), timeout=5.0)
+                        try:
+                            os.chmod(key_path, 0o600)
+                        except Exception:
+                            pass
                     except Exception as e:
                         logger.warning(f"Could not auto-generate self-signed cert for chisel: {e}")
                 
@@ -1540,6 +1571,15 @@ class ChiselAdapter:
                 cmd.extend(["--keepalive", str(keepalive)])
             
             log_file = self.config_dir / f"{tunnel_id}.log"
+            try:
+                if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+                    old_log = self.config_dir / f"{tunnel_id}.log.old"
+                    if old_log.exists():
+                        old_log.unlink()
+                    log_file.rename(old_log)
+            except Exception:
+                pass
+
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
@@ -1576,36 +1616,67 @@ class ChiselAdapter:
             
             auth_token = spec.get('token') or spec.get('auth_token') or spec.get('auth')
             fingerprint = spec.get('fingerprint')
+            key = spec.get('key')
             keepalive = spec.get('keepalive', '10s')
             max_retry_count = spec.get('max_retry_count')
             max_retry_interval = spec.get('max_retry_interval') or '10s'
             
             target_host = spec.get("target_host") or spec.get("local_host") or "127.0.0.1"
-            reverse_specs = []
+            remotes = []
             ports = spec.get('ports') or []
+
+            # In direct mode (not is_reverse), client binds local service ports
+            if not is_reverse:
+                client_ports_to_free = []
+                if tunnel_proto == 'socks5':
+                    sp = spec.get('local_port') or (ports[0] if ports else 1080)
+                    if str(sp).isdigit():
+                        client_ports_to_free.append(int(sp))
+                elif not ports:
+                    lp = spec.get('local_port') or spec.get('port')
+                    if lp and str(lp).isdigit():
+                        client_ports_to_free.append(int(lp))
+                else:
+                    for port_item in ports:
+                        if isinstance(port_item, dict):
+                            lp = port_item.get('local_port') or port_item.get('port')
+                            if lp and str(lp).isdigit():
+                                client_ports_to_free.append(int(lp))
+                        elif isinstance(port_item, str) and ":" in port_item:
+                            parts = port_item.split(":")
+                            if len(parts) == 2 and parts[0].isdigit():
+                                client_ports_to_free.append(int(parts[0]))
+                        elif isinstance(port_item, (int, str)) and str(port_item).isdigit():
+                            client_ports_to_free.append(int(port_item))
+                if client_ports_to_free:
+                    await free_ports(client_ports_to_free)
+
+            def _build_remote_entries(local_p, remote_p, is_rev: bool, proto: str) -> List[str]:
+                entries = []
+                # In reverse mode: R:<remote_p>:<target_host>:<local_p>
+                # In direct mode:  <local_p>:<target_host>:<remote_p>
+                if is_rev:
+                    prefix = f"R:{remote_p}:{target_host}:{local_p}"
+                else:
+                    prefix = f"{local_p}:{target_host}:{remote_p}"
+                
+                if proto == 'udp':
+                    entries.append(f"{prefix}/udp")
+                elif proto in ['tcp+udp', 'all']:
+                    entries.append(prefix)
+                    entries.append(f"{prefix}/udp")
+                else:
+                    entries.append(prefix)
+                return entries
             
             if tunnel_proto == 'socks5':
                 socks_port = spec.get('local_port') or (ports[0] if ports else 1080)
-                reverse_specs.append(f"R:{socks_port}:socks")
+                remotes.append(f"R:{socks_port}:socks" if is_reverse else f"{socks_port}:socks")
             elif not ports:
                 local_port = spec.get('local_port') or spec.get('port')
-                remote_port = spec.get('remote_port')
+                remote_port = spec.get('remote_port') or local_port
                 if local_port and remote_port:
-                    if tunnel_proto == 'udp':
-                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}/udp")
-                    elif tunnel_proto == 'tcp+udp':
-                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}")
-                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}/udp")
-                    else:
-                        reverse_specs.append(f"R:{remote_port}:{target_host}:{local_port}")
-                elif local_port:
-                    if tunnel_proto == 'udp':
-                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}/udp")
-                    elif tunnel_proto == 'tcp+udp':
-                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}")
-                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}/udp")
-                    else:
-                        reverse_specs.append(f"R:{local_port}:{target_host}:{local_port}")
+                    remotes.extend(_build_remote_entries(local_port, remote_port, is_reverse, tunnel_proto))
             else:
                 for port_item in ports:
                     remote_p = None
@@ -1616,28 +1687,27 @@ class ChiselAdapter:
                     elif isinstance(port_item, str) and ":" in port_item:
                         parts = port_item.split(":")
                         if len(parts) == 2:
-                            remote_p, local_p = parts
+                            if is_reverse:
+                                remote_p, local_p = parts
+                            else:
+                                local_p, remote_p = parts
                     else:
                         port_num = int(port_item) if isinstance(port_item, (int, str)) and str(port_item).isdigit() else port_item
                         remote_p = local_p = port_num
 
                     if remote_p and local_p:
-                        if tunnel_proto == 'udp':
-                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}/udp")
-                        elif tunnel_proto == 'tcp+udp':
-                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}")
-                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}/udp")
-                        else:
-                            reverse_specs.append(f"R:{remote_p}:{target_host}:{local_p}")
+                        remotes.extend(_build_remote_entries(local_p, remote_p, is_reverse, tunnel_proto))
             
-            if not reverse_specs:
-                raise ValueError("Chisel client requires at least one port mapping (R:remote:local)")
+            if not remotes:
+                raise ValueError("Chisel client requires at least one port mapping")
             
             cmd = [str(binary_path), "client"]
             if auth_token:
                 cmd.extend(["--auth", auth_token])
             if fingerprint:
                 cmd.extend(["--fingerprint", fingerprint.strip()])
+            if key:
+                cmd.extend(["--key", str(key).strip()])
             if keepalive:
                 cmd.extend(["--keepalive", str(keepalive)])
             if max_retry_count is not None:
@@ -1688,9 +1758,18 @@ class ChiselAdapter:
                 cmd.extend(["--proxy", str(proxy).strip()])
             
             cmd.append(server_url)
-            cmd.extend(reverse_specs)
+            cmd.extend(remotes)
             
             log_file = self.config_dir / f"{tunnel_id}.log"
+            try:
+                if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+                    old_log = self.config_dir / f"{tunnel_id}.log.old"
+                    if old_log.exists():
+                        old_log.unlink()
+                    log_file.rename(old_log)
+            except Exception:
+                pass
+
             log_f = open(log_file, 'w', buffering=1)
             try:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
@@ -1723,7 +1802,7 @@ class ChiselAdapter:
             _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"chisel failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
-    async def remove(self, tunnel_id: str):
+    async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove Chisel tunnel and clean up associated key/cert files"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
@@ -1738,7 +1817,10 @@ class ChiselAdapter:
         _remove_tunnel_pid(tunnel_id)
 
         # Clean up temporary certificate/key files
-        for suffix in ["_cert.pem", "_key.pem", "_ca.pem", "_ssh.key"]:
+        suffixes = ["_cert.pem", "_key.pem", "_ca.pem"]
+        if purge:
+            suffixes.append("_ssh.key")
+        for suffix in suffixes:
             fpath = self.config_dir / f"{tunnel_id}{suffix}"
             if fpath.exists():
                 try:
@@ -3586,9 +3668,9 @@ class AdapterManager:
                 else:
                     missing_ports.append({"port": int(ctrl_port), "type": f"control_{ctrl_proto}"})
                     
-            # In direct GOST server mode, the server only terminates control_port.
+            # In direct GOST/Chisel server mode, the server only terminates control_port.
             # Service ports listen on the Iran client side.
-            skip_service_ports = (core == "gost" and not spec.get("is_reverse", False))
+            skip_service_ports = (core in ["gost", "chisel"] and not spec.get("is_reverse", False))
             if not skip_service_ports:
                 for p in checked_ports:
                     try:
@@ -3620,8 +3702,8 @@ class AdapterManager:
                                 missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                     except Exception:
                         pass
-        elif actual_mode == "client" and core == "gost" and not spec.get("is_reverse", False):
-            # Direct GOST tunnel: Iran client node listens locally on service ports
+        elif actual_mode == "client" and core in ["gost", "chisel"] and not spec.get("is_reverse", False):
+            # Direct GOST / Chisel tunnel: Iran client node listens locally on service ports
             for p in checked_ports:
                 try:
                     p_num = None

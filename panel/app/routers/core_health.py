@@ -342,8 +342,16 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
             foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
             
             from app.spec_builder import build_tunnel_node_specs
+            is_reverse = getattr(tunnel, "is_reverse", None)
+            if is_reverse is None and isinstance(tunnel.spec, dict):
+                is_reverse = tunnel.spec.get("is_reverse")
+            if is_reverse is None:
+                is_reverse = True
+            else:
+                is_reverse = bool(is_reverse)
+
             try:
-                server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
+                iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
             except Exception as e:
                 logger.error(f"Spec builder failed for tunnel {tunnel.id} during reset: {e}")
                 continue
@@ -351,47 +359,52 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
-            
-            server_apply_spec = dict(server_spec)
-            server_apply_spec["force_restart"] = True
-            logger.info(f"Restarting tunnel {tunnel.id}: applying server config to iran node {iran_node.id}")
-            server_response = await client.send_to_node(
-                node_id=iran_node.id,
-                endpoint="/api/agent/tunnels/apply",
-                data={
-                    "tunnel_id": tunnel.id,
-                    "core": core,
-                    "type": tunnel.type,
-                    "spec": server_apply_spec
-                }
-            )
-            
-            if server_response.get("status") == "error":
-                error_msg = server_response.get("message", "Unknown error from iran node")
-                logger.error(f"Failed to restart tunnel {tunnel.id} on iran node {iran_node.id}: {error_msg}")
-                continue
-            
+
             if not foreign_node.node_metadata.get("api_address"):
                 foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
+
+            if is_reverse:
+                first_node, first_spec, first_role = iran_node, dict(iran_spec), f"iran node {iran_node.id} (server)"
+                second_node, second_spec, second_role = foreign_node, dict(foreign_spec), f"foreign node {foreign_node.id} (client)"
+            else:
+                first_node, first_spec, first_role = foreign_node, dict(foreign_spec), f"foreign node {foreign_node.id} (server)"
+                second_node, second_spec, second_role = iran_node, dict(iran_spec), f"iran node {iran_node.id} (client)"
             
-            client_apply_spec = dict(client_spec)
-            client_apply_spec["force_restart"] = True
-            logger.info(f"Restarting tunnel {tunnel.id}: applying client config to foreign node {foreign_node.id}")
-            client_response = await client.send_to_node(
-                node_id=foreign_node.id,
+            first_spec["force_restart"] = True
+            logger.info(f"Restarting tunnel {tunnel.id}: applying config to {first_role}")
+            first_response = await client.send_to_node(
+                node_id=first_node.id,
                 endpoint="/api/agent/tunnels/apply",
                 data={
                     "tunnel_id": tunnel.id,
                     "core": core,
                     "type": tunnel.type,
-                    "spec": client_apply_spec
+                    "spec": first_spec
                 }
             )
             
-            if client_response.get("status") == "error":
-                error_msg = client_response.get("message", "Unknown error from foreign node")
-                logger.error(f"Failed to restart tunnel {tunnel.id} on foreign node {foreign_node.id}: {error_msg}")
+            if first_response.get("status") == "error":
+                error_msg = first_response.get("message", f"Unknown error from {first_role}")
+                logger.error(f"Failed to restart tunnel {tunnel.id} on {first_role}: {error_msg}")
+                continue
+
+            second_spec["force_restart"] = True
+            logger.info(f"Restarting tunnel {tunnel.id}: applying config to {second_role}")
+            second_response = await client.send_to_node(
+                node_id=second_node.id,
+                endpoint="/api/agent/tunnels/apply",
+                data={
+                    "tunnel_id": tunnel.id,
+                    "core": core,
+                    "type": tunnel.type,
+                    "spec": second_spec
+                }
+            )
+            
+            if second_response.get("status") == "error":
+                error_msg = second_response.get("message", f"Unknown error from {second_role}")
+                logger.error(f"Failed to restart tunnel {tunnel.id} on {second_role}: {error_msg}")
             else:
                 logger.info(f"Successfully restarted tunnel {tunnel.id} on both nodes")
             

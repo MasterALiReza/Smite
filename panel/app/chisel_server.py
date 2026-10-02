@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
-from app.utils import parse_address_port, format_address_port
+from app.utils import parse_address_port, format_address_port, sanitize_cmd_for_log, is_safe_backend_url
 from app.process_manager import start_async_process, stop_async_process, wait_for_port, read_log_tail
 
 logger = logging.getLogger(__name__)
@@ -68,13 +68,12 @@ class ChiselServerManager:
             keyfile_path = self.config_dir / f"{tunnel_id}_ssh.key"
             if not keyfile_path.exists():
                 try:
-                    subprocess.run(
-                        [chisel_binary, "server", "--keygen", str(keyfile_path)],
-                        check=True,
-                        timeout=5,
+                    keygen_proc = await asyncio.create_subprocess_exec(
+                        chisel_binary, "server", "--keygen", str(keyfile_path),
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL
                     )
+                    await keygen_proc.wait()
                     os.chmod(keyfile_path, 0o600)
                 except Exception as e:
                     logger.warning(f"Could not auto-generate persistent SSH key for chisel server {tunnel_id}: {e}")
@@ -95,15 +94,14 @@ class ChiselServerManager:
                     pass
             elif not cert_path.exists() and not key_path.exists() and (tls_cert_pem or tls_key_pem):
                 try:
-                    subprocess.run(
-                        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                         "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
-                         "-subj", "/CN=chisel-tunnel"],
-                        check=True,
-                        timeout=5,
+                    ssl_proc = await asyncio.create_subprocess_exec(
+                        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", str(key_path), "-out", str(cert_path), "-days", "3650",
+                        "-subj", "/CN=chisel-tunnel",
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL
                     )
+                    await ssl_proc.wait()
                     os.chmod(key_path, 0o600)
                 except Exception as e:
                     logger.warning(f"Could not auto-generate self-signed cert for chisel server: {e}")
@@ -111,8 +109,8 @@ class ChiselServerManager:
             if cert_path.exists() and key_path.exists():
                 cmd.extend(["--tls-cert", str(cert_path), "--tls-key", str(key_path)])
 
-            # Active Probing Defense / Camouflage
-            if backend_url:
+            # Active Probing Defense / Camouflage (SSRF Safe)
+            if backend_url and is_safe_backend_url(backend_url):
                 cmd.extend(["--backend", str(backend_url).strip()])
 
             # SOCKS5 dynamic proxy support
@@ -134,12 +132,16 @@ class ChiselServerManager:
             
             log_file = self.config_dir / f"chisel_{tunnel_id}.log"
             log_f = open(log_file, 'w', buffering=1)
-            log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
-            log_f.write(f"Config: server_port={server_port}, auth={auth is not None}, wss={cert_path.exists()}\n")
-            log_f.write(f"Command: {' '.join(cmd)}\n")
-            log_f.flush()
-            
-            proc = await start_async_process(cmd, str(self.config_dir), log_f)
+            try:
+                log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
+                log_f.write(f"Config: server_port={server_port}, auth={auth is not None}, wss={cert_path.exists()}\n")
+                log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
+                log_f.flush()
+                
+                proc = await start_async_process(cmd, str(self.config_dir), log_f)
+            except Exception:
+                log_f.close()
+                raise
             
             self.log_files[tunnel_id] = log_f
             self.active_servers[tunnel_id] = proc
@@ -172,8 +174,8 @@ class ChiselServerManager:
                 await self.stop_server(tunnel_id)
             raise
     
-    async def stop_server(self, tunnel_id: str):
-        """Stop Chisel server for a tunnel and cleanup key/cert files"""
+    async def stop_server(self, tunnel_id: str, purge: bool = False):
+        """Stop Chisel server for a tunnel and cleanup key/cert files (preserves host key unless purge=True)"""
         if tunnel_id in self.active_servers:
             proc = self.active_servers[tunnel_id]
             await stop_async_process(proc)
@@ -191,8 +193,11 @@ class ChiselServerManager:
         if tunnel_id in self.server_configs:
             del self.server_configs[tunnel_id]
 
-        # Cleanup temporary keys & certificates
-        for suffix in ["_cert.pem", "_key.pem", "_ssh.key"]:
+        # Cleanup temporary keys & certificates; preserve _ssh.key for fingerprint continuity unless purge=True
+        cleanup_suffixes = ["_cert.pem", "_key.pem"]
+        if purge:
+            cleanup_suffixes.append("_ssh.key")
+        for suffix in cleanup_suffixes:
             fpath = self.config_dir / f"{tunnel_id}{suffix}"
             if fpath.exists():
                 try:

@@ -395,8 +395,16 @@ async def _restore_node_tunnels():
                     foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
                     
                     from app.spec_builder import build_tunnel_node_specs
+                    is_reverse = getattr(tunnel, "is_reverse", None)
+                    if is_reverse is None and isinstance(tunnel.spec, dict):
+                        is_reverse = tunnel.spec.get("is_reverse")
+                    if is_reverse is None:
+                        is_reverse = True
+                    else:
+                        is_reverse = bool(is_reverse)
+
                     try:
-                        server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
+                        iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
                     except Exception as e:
                         logger.error(f"Spec builder failed for tunnel {tunnel.id} during sync: {e}")
                         skipped_count += 1
@@ -406,59 +414,66 @@ async def _restore_node_tunnels():
                         iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
                     
-                    try:
-                        ir_status = await client.get_tunnel_status(iran_node.id, tunnel.id)
-                        if ir_status and ir_status.get("status") == "success" and ir_status.get("data", {}).get("active"):
-                            server_response = {"status": "success", "message": "Already active"}
-                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on Iran node {iran_node.id}, skipping disruptive apply")
-                        else:
-                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying server config to iran node {iran_node.id}")
-                            server_response = await client.send_to_node(
-                                node_id=iran_node.id,
-                                endpoint="/api/agent/tunnels/apply",
-                                data={
-                                    "tunnel_id": tunnel.id,
-                                    "core": tunnel.core,
-                                    "type": tunnel.type,
-                                    "spec": server_spec
-                                }
-                            )
-                    except Exception as e:
-                        server_response = {"status": "error", "message": str(e)}
-                    
-                    if server_response.get("status") == "error":
-                        error_msg = server_response.get("message", "Unknown error from iran node")
-                        logger.error(f"Failed to restore tunnel {tunnel.id} on iran node {iran_node.id}: {error_msg}")
-                        failed_count += 1
-                        continue
-                    
                     if not foreign_node.node_metadata.get("api_address"):
                         foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
-                    
+
+                    if is_reverse:
+                        first_node, first_spec, first_role = iran_node, iran_spec, f"iran node {iran_node.id} (server)"
+                        second_node, second_spec, second_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (client)"
+                    else:
+                        first_node, first_spec, first_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (server)"
+                        second_node, second_spec, second_role = iran_node, iran_spec, f"iran node {iran_node.id} (client)"
+
                     try:
-                        fn_status = await client.get_tunnel_status(foreign_node.id, tunnel.id)
-                        if fn_status and fn_status.get("status") == "success" and fn_status.get("data", {}).get("active"):
-                            client_response = {"status": "success", "message": "Already active"}
-                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on foreign node {foreign_node.id}, skipping disruptive apply")
+                        first_status = await client.get_tunnel_status(first_node.id, tunnel.id)
+                        if first_status and first_status.get("status") == "success" and first_status.get("data", {}).get("active"):
+                            first_response = {"status": "success", "message": "Already active"}
+                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on {first_role}, skipping disruptive apply")
                         else:
-                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying client config to foreign node {foreign_node.id}")
-                            client_response = await client.send_to_node(
-                                node_id=foreign_node.id,
+                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying config to {first_role}")
+                            first_response = await client.send_to_node(
+                                node_id=first_node.id,
                                 endpoint="/api/agent/tunnels/apply",
                                 data={
                                     "tunnel_id": tunnel.id,
                                     "core": tunnel.core,
                                     "type": tunnel.type,
-                                    "spec": client_spec
+                                    "spec": first_spec
                                 }
                             )
                     except Exception as e:
-                        client_response = {"status": "error", "message": str(e)}
+                        first_response = {"status": "error", "message": str(e)}
                     
-                    if client_response.get("status") == "error":
-                        error_msg = client_response.get("message", "Unknown error from foreign node")
-                        logger.error(f"Failed to restore tunnel {tunnel.id} on foreign node {foreign_node.id}: {error_msg}")
+                    if first_response.get("status") == "error":
+                        error_msg = first_response.get("message", f"Unknown error from {first_role}")
+                        logger.error(f"Failed to restore tunnel {tunnel.id} on {first_role}: {error_msg}")
+                        failed_count += 1
+                        continue
+                    
+                    try:
+                        second_status = await client.get_tunnel_status(second_node.id, tunnel.id)
+                        if second_status and second_status.get("status") == "success" and second_status.get("data", {}).get("active"):
+                            second_response = {"status": "success", "message": "Already active"}
+                            logger.info(f"Tunnel {tunnel.id} is ALREADY active on {second_role}, skipping disruptive apply")
+                        else:
+                            logger.info(f"Restoring tunnel {tunnel.id} ({tunnel.core}): applying config to {second_role}")
+                            second_response = await client.send_to_node(
+                                node_id=second_node.id,
+                                endpoint="/api/agent/tunnels/apply",
+                                data={
+                                    "tunnel_id": tunnel.id,
+                                    "core": tunnel.core,
+                                    "type": tunnel.type,
+                                    "spec": second_spec
+                                }
+                            )
+                    except Exception as e:
+                        second_response = {"status": "error", "message": str(e)}
+                    
+                    if second_response.get("status") == "error":
+                        error_msg = second_response.get("message", f"Unknown error from {second_role}")
+                        logger.error(f"Failed to restore tunnel {tunnel.id} on {second_role}: {error_msg}")
                         failed_count += 1
                     else:
                         logger.info(f"Successfully restored/confirmed tunnel {tunnel.id} on both nodes")

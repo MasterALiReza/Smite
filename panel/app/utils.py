@@ -354,3 +354,51 @@ async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Option
     return None
 
 
+def sanitize_cmd_for_log(cmd: list) -> str:
+    """Mask credential flags in command argument lists before logging."""
+    sanitized = []
+    skip_next = False
+    for i, arg in enumerate(cmd):
+        if skip_next:
+            sanitized.append("***REDACTED***")
+            skip_next = False
+            continue
+        if arg in ("--auth", "--key", "-token", "--token", "-k", "-secret"):
+            sanitized.append(arg)
+            skip_next = True
+        elif ":" in arg and (i > 0 and cmd[i - 1] in ("--auth", "-u")):
+            sanitized.append("***REDACTED***")
+        else:
+            sanitized.append(arg)
+    return " ".join(sanitized)
+
+
+def is_safe_backend_url(url: Optional[str]) -> bool:
+    """Validate backend decoy URL against SSRF and private/loopback destination risks"""
+    if not url or not isinstance(url, str):
+        return False
+    clean_url = url.strip()
+    lower_url = clean_url.lower()
+    if not (lower_url.startswith("http://") or lower_url.startswith("https://")):
+        return False
+    import urllib.parse
+    import ipaddress
+    try:
+        parsed = urllib.parse.urlparse(clean_url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+                return False
+        except ValueError:
+            # Domain name (e.g. speedtest.net)
+            pass
+        return True
+    except Exception:
+        return False
+
+
