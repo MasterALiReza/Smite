@@ -47,17 +47,17 @@ class GostForwarder:
             services = []
             if tunnel_type == "tcp+udp":
                 for proto in ["tcp", "udp"]:
-                    h_meta = {"keepAlive": True, "bufferSize": 65536}
-                    l_meta = {"keepAlive": True, "keepAliveInterval": "15s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
+                    h_meta = {"keepAlive": True, "bufferSize": 65536, "retryDelay": "1s"}
+                    l_meta = {"keepAlive": True, "keepAliveInterval": "10s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
                     if proto == "udp":
-                        h_meta["ttl"] = "300s"
-                        h_meta["readTimeout"] = "120s"
-                        l_meta["readTimeout"] = "120s"
+                        h_meta["ttl"] = "30s"
+                        h_meta["readTimeout"] = "60s"
+                        l_meta["readTimeout"] = "60s"
 
                     services.append({
                         "name": f"forward-{tunnel_id}-{proto}",
                         "addr": listen_addr,
-                        "handler": {"type": proto, "metadata": h_meta},
+                        "handler": {"type": proto, "retries": 3, "metadata": h_meta},
                         "listener": {"type": proto, "metadata": l_meta},
                         "forwarder": {
                             "nodes": [
@@ -69,12 +69,12 @@ class GostForwarder:
                 listener_type = tunnel_type if tunnel_type in ["tcp", "udp", "ws", "grpc", "tcpmux", "quic", "kcp"] else "tcp"
                 handler_type = "udp" if tunnel_type in ["udp", "kcp"] else "tcp"
                 
-                listener_metadata = {"keepAlive": True, "keepAliveInterval": "15s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
-                handler_metadata = {"keepAlive": True, "bufferSize": 65536}
+                listener_metadata = {"keepAlive": True, "keepAliveInterval": "10s", "keepAliveTimeout": "30s", "idleTimeout": "120s", "nodelay": True, "bufferSize": 65536}
+                handler_metadata = {"keepAlive": True, "bufferSize": 65536, "retryDelay": "1s"}
                 if handler_type == "udp":
-                    handler_metadata["ttl"] = "300s"
-                    handler_metadata["readTimeout"] = "120s"
-                    listener_metadata["readTimeout"] = "120s"
+                    handler_metadata["ttl"] = "30s"
+                    handler_metadata["readTimeout"] = "60s"
+                    listener_metadata["readTimeout"] = "60s"
 
                 if path and tunnel_type == "ws":
                     listener_metadata["path"] = path
@@ -84,7 +84,7 @@ class GostForwarder:
                 services.append({
                     "name": f"forward-{tunnel_id}",
                     "addr": listen_addr,
-                    "handler": {"type": handler_type, "metadata": handler_metadata},
+                    "handler": {"type": handler_type, "retries": 3, "metadata": handler_metadata},
                     "listener": listener_obj,
                     "forwarder": {
                         "nodes": [
@@ -94,7 +94,10 @@ class GostForwarder:
                 })
             
             config = {
-                "services": services
+                "services": services,
+                "log": {
+                    "level": "warn"
+                }
             }
             
             config_file = self.config_dir / f"gost_{tunnel_id}.json"
@@ -118,6 +121,14 @@ class GostForwarder:
             
             log_file = self.config_dir / f"gost_{tunnel_id}.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
+            if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+                try:
+                    old_log = self.config_dir / f"gost_{tunnel_id}.log.old"
+                    if old_log.exists():
+                        old_log.unlink()
+                    log_file.rename(old_log)
+                except Exception:
+                    pass
             log_f = open(log_file, 'w', buffering=1)
             log_f.write(f"Starting gost with command: {' '.join(cmd)}\n")
             log_f.write(f"Tunnel ID: {tunnel_id}\n")
@@ -254,7 +265,16 @@ class GostForwarder:
                 await asyncio.sleep(30)
                 for tunnel_id in list(self.forward_configs.keys()):
                     try:
-                        await self.is_forwarding(tunnel_id)
+                        is_act = await self.is_forwarding(tunnel_id)
+                        if not is_act and tunnel_id in self.forward_configs:
+                            f_cfg = self.forward_configs[tunnel_id]
+                            logger.warning(f"GostForwarder health monitor: Tunnel {tunnel_id} process died. Auto-recovering...")
+                            await self.start_forward(
+                                tunnel_id=tunnel_id,
+                                local_port=f_cfg["local_port"],
+                                forward_to=f_cfg["forward_to"],
+                                tunnel_type=f_cfg.get("tunnel_type", "tcp")
+                            )
                     except Exception as e:
                         logger.error(f"Error in GostForwarder health check for tunnel {tunnel_id}: {e}")
             except asyncio.CancelledError:
