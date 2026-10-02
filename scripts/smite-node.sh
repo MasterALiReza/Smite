@@ -420,6 +420,10 @@ services:
         max-file: "3"
     security_opt:
       - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
 
 volumes:
   ${v_name}:

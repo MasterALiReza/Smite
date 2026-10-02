@@ -3001,17 +3001,27 @@ class GostAdapter:
                             "metadata": {
                                 "keepAlive": True,
                                 "ttl": "10s",
+                                "keepalive.idle": "10s",
+                                "keepalive.interval": "10s",
                                 "bufferSize": 65536
                             }
                         }
                         handler_tcp = {
-                            "type": "tcp"
+                            "type": "tcp",
+                            "retries": 3,
+                            "metadata": {
+                                "retryDelay": "1s"
+                            }
                         }
                     else:
                         listener_tcp = {"type": "tcp"}
                         handler_tcp = {
                             "type": "tcp",
-                            "chain": f"chain-{tunnel_id}"
+                            "chain": f"chain-{tunnel_id}",
+                            "retries": 3,
+                            "metadata": {
+                                "retryDelay": "1s"
+                            }
                         }
                     
                     service_tcp = {
@@ -3032,9 +3042,10 @@ class GostAdapter:
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
                     udp_handler_metadata = {
-                        "ttl": "300s",
-                        "readTimeout": "120s",
-                        "bufferSize": 65536
+                        "ttl": "30s",
+                        "readTimeout": "60s",
+                        "bufferSize": 65536,
+                        "retryDelay": "1s"
                     }
                     if is_reverse:
                         listener_udp = {
@@ -3043,25 +3054,29 @@ class GostAdapter:
                             "metadata": {
                                 "keepAlive": True,
                                 "ttl": "10s",
-                                "readTimeout": "120s",
+                                "keepalive.idle": "10s",
+                                "keepalive.interval": "10s",
+                                "readTimeout": "60s",
                                 "bufferSize": 65536
                             }
                         }
                         handler_udp = {
                             "type": "udp",
+                            "retries": 3,
                             "metadata": udp_handler_metadata
                         }
                     else:
                         listener_udp = {
                             "type": "udp",
                             "metadata": {
-                                "readTimeout": "120s",
+                                "readTimeout": "60s",
                                 "bufferSize": 65536
                             }
                         }
                         handler_udp = {
                             "type": "udp",
                             "chain": f"chain-{tunnel_id}",
+                            "retries": 3,
                             "metadata": udp_handler_metadata
                         }
                     
@@ -3097,6 +3112,17 @@ class GostAdapter:
         cmd = [str(binary_path), "-C", str(config_file)]
         
         log_file = self.config_dir / f"{tunnel_id}.log"
+        if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+            try:
+                old_log = self.config_dir / f"{tunnel_id}.log.old"
+                if old_log.exists():
+                    old_log.unlink()
+                log_file.rename(old_log)
+            except Exception:
+                try:
+                    log_file.write_text("")
+                except Exception:
+                    pass
         log_f = open(log_file, 'w', buffering=1)
         try:
             log_f.write(f"Starting GOST v3 forwarding for tunnel {tunnel_id} (Mode: {mode})\n")
@@ -3305,6 +3331,7 @@ class AdapterManager:
         logger.info(f"Tunnels file exists: {self.tunnels_file.exists()}")
         
         self._load_tunnels()
+        self.start_watchdog()
         
         if not self.tunnel_configs:
             logger.info("No persisted tunnels to restore")
@@ -3439,11 +3466,35 @@ class AdapterManager:
         logger.info("AdapterManager self-healing watchdog loop started (interval: 15s)")
         backoff_delay: Dict[str, int] = {}
         next_retry_at: Dict[str, float] = {}
+        last_log_sweep: float = 0.0
         
         while True:
             try:
                 await asyncio.sleep(15)
                 now = time.time()
+
+                # Periodic log truncation check (every 5 minutes / 300s) to prevent VPS disk exhaustion
+                if now - last_log_sweep >= 300:
+                    last_log_sweep = now
+                    try:
+                        log_patterns = list(self.config_dir.glob("*.log")) + list(self.config_dir.glob("*/*.log"))
+                        for log_p in log_patterns:
+                            if log_p.is_file():
+                                try:
+                                    if log_p.stat().st_size > 10 * 1024 * 1024:
+                                        with open(log_p, "r+", encoding="utf-8", errors="ignore") as lf:
+                                            lf.seek(-256 * 1024, os.SEEK_END)
+                                            tail = lf.read()
+                                            lf.seek(0)
+                                            lf.write(f"[LOG ROTATED BY SMITE WATCHDOG AT {time.ctime()}]\n" + tail)
+                                            lf.truncate()
+                                            lf.flush()
+                                        logger.info(f"Watchdog: Rotated oversized log file {log_p} to last 256KB")
+                                except Exception as e_rot:
+                                    logger.debug(f"Watchdog: Could not rotate log file {log_p}: {e_rot}")
+                    except Exception as e_sweep:
+                        logger.debug(f"Watchdog: Error during log sweep: {e_sweep}")
+
                 for tunnel_id in list(self.tunnel_configs.keys()):
                     # Respect exponential backoff window
                     if tunnel_id in next_retry_at and now < next_retry_at[tunnel_id]:
