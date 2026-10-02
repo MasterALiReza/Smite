@@ -3535,12 +3535,19 @@ class AdapterManager:
         if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
     
-    async def _remove_tunnel_unlocked(self, tunnel_id: str):
+    async def _remove_tunnel_unlocked(self, tunnel_id: str, purge: bool = False):
         """Internal unlocked tunnel removal helper"""
-        if tunnel_id in self.active_tunnels:
-            adapter = self.active_tunnels[tunnel_id]
-            await adapter.remove(tunnel_id)
-            del self.active_tunnels[tunnel_id]
+        adapter = self.active_tunnels.pop(tunnel_id, None)
+        if not adapter and tunnel_id in self.tunnel_configs:
+            tunnel_core = self.tunnel_configs[tunnel_id].get("core")
+            if tunnel_core:
+                adapter = self.get_adapter(tunnel_core)
+        
+        if adapter:
+            try:
+                await adapter.remove(tunnel_id, purge=purge)
+            except TypeError:
+                await adapter.remove(tunnel_id)
         
         if tunnel_id in self.tunnel_configs:
             del self.tunnel_configs[tunnel_id]
@@ -3592,10 +3599,10 @@ class AdapterManager:
             self.start_watchdog()
             logger.info(f"Tunnel {tunnel_id} applied and saved successfully (core={tunnel_core}, mode={spec.get('mode', 'N/A')}, total_saved={len(self.tunnel_configs)})")
     
-    async def remove_tunnel(self, tunnel_id: str):
+    async def remove_tunnel(self, tunnel_id: str, purge: bool = False):
         """Remove tunnel"""
         async with self._get_tunnel_lock(tunnel_id):
-            await self._remove_tunnel_unlocked(tunnel_id)
+            await self._remove_tunnel_unlocked(tunnel_id, purge=purge)
         self._tunnel_locks.pop(tunnel_id, None)
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:

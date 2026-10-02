@@ -34,7 +34,8 @@ class ChiselServerManager:
         tls_key_pem: Optional[str] = None,
         backend_url: Optional[str] = None,
         socks5: bool = False,
-        keepalive: Optional[str] = None
+        keepalive: Optional[str] = None,
+        reverse_only: bool = True
     ) -> bool:
         """
         Start a Chisel server for a tunnel with WSS, decoy backend camouflage, and persistent SSH host key
@@ -58,8 +59,9 @@ class ChiselServerManager:
                 "server",
                 "--host", host,
                 "--port", str(server_port),
-                "--reverse"
             ]
+            if reverse_only:
+                cmd.append("--reverse")
             
             if auth:
                 cmd.extend(["--auth", auth])
@@ -127,7 +129,8 @@ class ChiselServerManager:
                 "use_ipv6": use_ipv6,
                 "backend_url": backend_url,
                 "socks5": socks5,
-                "keepalive": keepalive
+                "keepalive": keepalive,
+                "reverse_only": reverse_only
             }
             
             log_file = self.config_dir / f"chisel_{tunnel_id}.log"

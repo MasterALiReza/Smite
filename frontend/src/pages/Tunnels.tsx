@@ -2455,6 +2455,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.force_direct = !formData.is_reverse
       } else if (tunnel.core === 'chisel') {
         updatedSpec.ports = ports
+        updatedSpec.port_ranges = port_ranges
+        updatedSpec.is_reverse = Boolean(formData.is_reverse)
+        updatedSpec.force_direct = !formData.is_reverse
         const firstPort = ports[0]
         updatedSpec.listen_port = firstPort
         updatedSpec.remote_port = firstPort
@@ -2561,7 +2564,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
           custom_sni: formData.chisel_custom_sni || null,
           custom_host: formData.chisel_custom_host || null,
-          is_reverse: true,
+          is_reverse: Boolean(formData.is_reverse),
+          port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(tunnel.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
@@ -4583,6 +4587,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
       if (formData.core === 'chisel') {
         // For Chisel, ports are equal (reverse_port = local_port)
         spec.ports = ports  // Store multiple ports
+        spec.port_ranges = port_ranges
+        spec.is_reverse = formData.is_reverse !== false
+        spec.force_direct = formData.is_reverse === false
         const firstPort = ports[0]
         spec.listen_port = firstPort
         spec.remote_port = firstPort
@@ -4746,7 +4753,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
           custom_sni: formData.chisel_custom_sni || null,
           custom_host: formData.chisel_custom_host || null,
-          is_reverse: true,
+          is_reverse: formData.is_reverse !== false,
+          port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(formData.core === 'rathole' && {
           transport_type: formData.rathole_transport || 'tcp',

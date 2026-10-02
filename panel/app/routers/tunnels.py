@@ -813,7 +813,9 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                     return db_tunnel
         
         if needs_chisel_server:
-            listen_port = db_tunnel.spec.get("listen_port") or db_tunnel.spec.get("remote_port") or db_tunnel.spec.get("server_port")
+            ports = db_tunnel.spec.get("ports")
+            first_port = ports[0] if (isinstance(ports, list) and len(ports) > 0) else None
+            listen_port = db_tunnel.spec.get("listen_port") or db_tunnel.spec.get("remote_port") or db_tunnel.spec.get("server_port") or first_port
             auth = db_tunnel.spec.get("auth")
             fingerprint = db_tunnel.spec.get("fingerprint")
             use_ipv6 = db_tunnel.spec.get("use_ipv6", False)
@@ -837,7 +839,10 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         server_control_port = int(server_control_port)
                     else:
                         server_control_port = int(listen_port) + 10000
-                    logger.info(f"Starting Chisel server for tunnel {db_tunnel.id}: server_control_port={server_control_port}, reverse_port={listen_port}, auth={auth is not None}, fingerprint={fingerprint is not None}, use_ipv6={use_ipv6}")
+                    chisel_is_reverse = getattr(db_tunnel, "is_reverse", True)
+                    if chisel_is_reverse is None:
+                        chisel_is_reverse = db_tunnel.spec.get("is_reverse", True)
+                    logger.info(f"Starting Chisel server for tunnel {db_tunnel.id}: server_control_port={server_control_port}, reverse_port={listen_port}, auth={auth is not None}, fingerprint={fingerprint is not None}, use_ipv6={use_ipv6}, reverse_only={chisel_is_reverse}")
                     await request.app.state.chisel_server_manager.start_server(
                         tunnel_id=db_tunnel.id,
                         server_port=server_control_port,
@@ -849,6 +854,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                         backend_url=db_tunnel.spec.get("backend_url"),
                         socks5=db_tunnel.type == "socks5" or db_tunnel.spec.get("socks5", False),
                         keepalive=db_tunnel.spec.get("keepalive"),
+                        reverse_only=bool(chisel_is_reverse),
                     )
                     await asyncio.sleep(1.0)
                     if not await request.app.state.chisel_server_manager.is_running(db_tunnel.id):
@@ -1879,7 +1885,37 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 error_msg = f"Failed to prepare FRP spec: {str(e)}"
                 logger.error(f"Tunnel {tunnel.id}: {error_msg}", exc_info=True)
                 raise HTTPException(status_code=500, detail=error_msg)
-        
+
+        if tunnel.core == "chisel":
+            ports = spec_for_node.get("ports")
+            first_port = ports[0] if (isinstance(ports, list) and len(ports) > 0) else None
+            listen_port = spec_for_node.get("listen_port") or spec_for_node.get("remote_port") or spec_for_node.get("server_port") or first_port
+            if listen_port and hasattr(request.app.state, 'chisel_server_manager'):
+                try:
+                    server_control_port = spec_for_node.get("control_port")
+                    if server_control_port:
+                        server_control_port = int(server_control_port)
+                    else:
+                        server_control_port = int(listen_port) + 10000
+                    chisel_is_reverse = getattr(tunnel, "is_reverse", True)
+                    if chisel_is_reverse is None:
+                        chisel_is_reverse = tunnel.spec.get("is_reverse", True)
+                    await request.app.state.chisel_server_manager.start_server(
+                        tunnel_id=tunnel.id,
+                        server_port=server_control_port,
+                        auth=spec_for_node.get("auth"),
+                        fingerprint=spec_for_node.get("fingerprint"),
+                        use_ipv6=bool(spec_for_node.get("use_ipv6", False)),
+                        tls_cert_pem=spec_for_node.get("tls_cert_pem"),
+                        tls_key_pem=spec_for_node.get("tls_key_pem"),
+                        backend_url=spec_for_node.get("backend_url"),
+                        socks5=tunnel.type == "socks5" or spec_for_node.get("socks5", False),
+                        keepalive=spec_for_node.get("keepalive"),
+                        reverse_only=bool(chisel_is_reverse),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to restart panel Chisel server on reapply: {e}")
+
         logger.info(f"Sending tunnel {tunnel.id} to node {node.id}: spec={spec_for_node}")
         response = await client.send_to_node(
             node_id=node.id,
@@ -1995,7 +2031,7 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     elif needs_chisel_server:
         if hasattr(request.app.state, 'chisel_server_manager'):
             try:
-                await request.app.state.chisel_server_manager.stop_server(tunnel.id)
+                await request.app.state.chisel_server_manager.stop_server(tunnel.id, purge=True)
             except Exception as e:
                 import logging
                 logging.error(f"Failed to stop Chisel server: {e}")
@@ -2022,7 +2058,7 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
                 client.send_to_node(
                     node_id=n_id,
                     endpoint="/api/agent/tunnels/remove",
-                    data={"tunnel_id": tunnel.id}
+                    data={"tunnel_id": tunnel.id, "purge": True}
                 ),
                 timeout=4.0
             )

@@ -251,7 +251,9 @@ async def _restore_chisel_servers():
                 if tunnel.core != "chisel" or tunnel.node_id or getattr(tunnel, "iran_node_id", None) or getattr(tunnel, "foreign_node_id", None):
                     continue
                 
-                listen_port = tunnel.spec.get("listen_port") or tunnel.spec.get("remote_port") or tunnel.spec.get("server_port")
+                ports = tunnel.spec.get("ports")
+                first_port = ports[0] if (isinstance(ports, list) and len(ports) > 0) else None
+                listen_port = tunnel.spec.get("listen_port") or tunnel.spec.get("remote_port") or tunnel.spec.get("server_port") or first_port
                 auth = tunnel.spec.get("auth")
                 fingerprint = tunnel.spec.get("fingerprint")
                 
@@ -265,6 +267,9 @@ async def _restore_chisel_servers():
                         server_control_port = int(server_control_port)
                     else:
                         server_control_port = int(listen_port) + 10000
+                    is_reverse = getattr(tunnel, "is_reverse", True)
+                    if is_reverse is None:
+                        is_reverse = tunnel.spec.get("is_reverse", True)
                     await chisel_server_manager.start_server(
                         tunnel_id=tunnel.id,
                         server_port=server_control_port,
@@ -276,6 +281,7 @@ async def _restore_chisel_servers():
                         backend_url=tunnel.spec.get("backend_url"),
                         socks5=tunnel.type == "socks5" or tunnel.spec.get("socks5", False),
                         keepalive=tunnel.spec.get("keepalive"),
+                        reverse_only=bool(is_reverse),
                     )
                 except Exception as exc:
                     logger.error(

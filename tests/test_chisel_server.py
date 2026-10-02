@@ -59,8 +59,29 @@ def test_chisel_server_manager_command_assembly():
         assert "15s" in cmd
         assert "--tls-cert" in cmd
         assert "--tls-key" in cmd
+        assert "--reverse" in cmd  # reverse_only=True by default
         # Crucial check: verify --fingerprint is NEVER in server command
         assert "--fingerprint" not in cmd
+
+        # Test direct tunnel: reverse_only=False must omit --reverse
+        captured_cmds.clear()
+        with patch(f"{target_mod}.start_async_process", side_effect=fake_start_process), \
+             patch(f"{target_mod}.wait_for_port", return_value=True), \
+             patch("shutil.which", return_value="/usr/local/bin/chisel"), \
+             patch("os.path.exists", return_value=True), \
+             patch("subprocess.run"):
+            asyncio.run(manager.start_server(
+                tunnel_id="test-chisel-direct",
+                server_port=18081,
+                reverse_only=False
+            ))
+        assert len(captured_cmds) == 1
+        cmd_dir = captured_cmds[0]
+        assert "server" in cmd_dir
+        assert "--port" in cmd_dir
+        assert "18081" in cmd_dir
+        assert "--reverse" not in cmd_dir
+        asyncio.run(manager.stop_server("test-chisel-direct", purge=True))
 
         # Verify log file masked sensitive --auth
         log_file = manager.config_dir / "chisel_test-chisel-srv.log"
@@ -186,8 +207,50 @@ def test_chisel_adapter_client_reverse_and_direct():
             asyncio.run(adapter.remove("tun-rev", purge=True))
 
 
+def test_node_adapter_manager_remove_purge():
+    """Verify AdapterManager passes purge=True to adapters and supports offline adapter resolution"""
+    from node.app.core_adapters import AdapterManager, ChiselAdapter
+
+    manager = AdapterManager()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manager.storage_path = Path(tmpdir) / "tunnels.json"
+        mock_chisel = MagicMock(spec=ChiselAdapter)
+        mock_chisel.remove = AsyncMock()
+        manager.adapters["chisel"] = mock_chisel
+
+        # Case 1: active tunnel removed with purge=True
+        manager.active_tunnels["tun-active"] = mock_chisel
+        manager.tunnel_configs["tun-active"] = {"core": "chisel", "spec": {}}
+        asyncio.run(manager.remove_tunnel("tun-active", purge=True))
+
+        mock_chisel.remove.assert_called_with("tun-active", purge=True)
+        assert "tun-active" not in manager.active_tunnels
+        assert "tun-active" not in manager.tunnel_configs
+
+        # Case 2: inactive / offline tunnel removed with purge=True
+        mock_chisel.remove.reset_mock()
+        manager.tunnel_configs["tun-offline"] = {"core": "chisel", "spec": {}}
+        asyncio.run(manager.remove_tunnel("tun-offline", purge=True))
+
+        mock_chisel.remove.assert_called_with("tun-offline", purge=True)
+        assert "tun-offline" not in manager.tunnel_configs
+
+
+def test_tunnel_remove_schema():
+    """Verify TunnelRemove schema accepts and validates purge flag"""
+    from node.app.routers.agent import TunnelRemove
+
+    req_default = TunnelRemove(tunnel_id="abc-123")
+    assert req_default.purge is False
+
+    req_purged = TunnelRemove(tunnel_id="abc-123", purge=True)
+    assert req_purged.purge is True
+
+
 if __name__ == "__main__":
     import sys
     test_chisel_server_manager_command_assembly()
     test_chisel_adapter_client_reverse_and_direct()
+    test_node_adapter_manager_remove_purge()
+    test_tunnel_remove_schema()
     print("ALL TESTS PASSED")
