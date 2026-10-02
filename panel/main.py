@@ -401,13 +401,20 @@ async def _restore_node_tunnels():
                     foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
                     
                     from app.spec_builder import build_tunnel_node_specs
-                    is_reverse = getattr(tunnel, "is_reverse", None)
-                    if is_reverse is None and isinstance(tunnel.spec, dict):
-                        is_reverse = tunnel.spec.get("is_reverse")
-                    if is_reverse is None:
-                        is_reverse = True
+                    force_direct = bool((tunnel.spec or {}).get("force_direct", False)) if isinstance(tunnel.spec, dict) else False
+                    if force_direct:
+                        is_reverse = False
+                    elif tunnel.core in {"gost", "chisel"}:
+                        if tunnel.is_reverse is not None:
+                            is_reverse = bool(tunnel.is_reverse)
+                        elif isinstance(tunnel.spec, dict) and tunnel.spec.get("is_reverse") is not None:
+                            is_reverse = bool(tunnel.spec.get("is_reverse"))
+                        elif getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
+                            is_reverse = True
+                        else:
+                            is_reverse = False
                     else:
-                        is_reverse = bool(is_reverse)
+                        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else True
 
                     try:
                         iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
@@ -424,7 +431,7 @@ async def _restore_node_tunnels():
                         foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                         await db.commit()
 
-                    if is_reverse:
+                    if iran_spec.get("mode") == "server":
                         first_node, first_spec, first_role = iran_node, iran_spec, f"iran node {iran_node.id} (server)"
                         second_node, second_spec, second_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (client)"
                     else:

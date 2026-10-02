@@ -527,7 +527,7 @@ class CoreAdapter(Protocol):
         """Apply tunnel configuration"""
         ...
     
-    async def remove(self, tunnel_id: str) -> None:
+    async def remove(self, tunnel_id: str, purge: bool = False) -> None:
         """Remove tunnel"""
         ...
     
@@ -856,7 +856,7 @@ nodelay = true
                 del self.log_handles[tunnel_id]
             raise RuntimeError(f"rathole failed to start: {error_output}")
     
-    async def remove(self, tunnel_id: str):
+    async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove Rathole tunnel"""
         pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
@@ -1310,7 +1310,7 @@ class BackhaulAdapter:
             await self.remove(tunnel_id)
             raise
 
-    async def remove(self, tunnel_id: str):
+    async def remove(self, tunnel_id: str, purge: bool = False):
         pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
@@ -2327,7 +2327,7 @@ transport:
             _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"FRP failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
-    async def remove(self, tunnel_id: str):
+    async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove FRP tunnel (handles both server and client modes)"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
@@ -3159,7 +3159,7 @@ class GostAdapter:
         
         logger.info(f"GOST v3 forwarding started for tunnel {tunnel_id} (Mode: {mode})")
     
-    async def remove(self, tunnel_id: str):
+    async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove GOST tunnel"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
@@ -3181,12 +3181,14 @@ class GostAdapter:
             except Exception:
                 pass
 
-        log_file = self.config_dir / f"{tunnel_id}.log"
-        if log_file.exists():
-            try:
-                log_file.unlink()
-            except Exception:
-                pass
+        if purge:
+            for lf_name in [f"{tunnel_id}.log", f"{tunnel_id}.log.old"]:
+                log_file = self.config_dir / lf_name
+                if log_file.exists():
+                    try:
+                        log_file.unlink()
+                    except Exception:
+                        pass
 
         for extra in [
             self.config_dir / f"cert_{tunnel_id}.pem",
