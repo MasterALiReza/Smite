@@ -74,6 +74,12 @@ class FrpCommClient:
             
             config_content = f"""serverAddr: {server_addr}
 serverPort: {server_port}
+loginFailExit: false
+transport:
+  heartbeatInterval: 10
+  heartbeatTimeout: 30
+  dialServerTimeout: 15
+  tcpMux: true
 """
             if token:
                 config_content += f"""auth:
