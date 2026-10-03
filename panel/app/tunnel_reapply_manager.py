@@ -268,17 +268,17 @@ class TunnelReapplyManager:
             
             from app.spec_builder import build_tunnel_node_specs
             try:
-                server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
+                iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
             except Exception as e:
                 logger.error(f"Spec builder failed for tunnel {tunnel.id}: {e}")
                 return False
             
-            if is_reverse:
-                first_node, first_spec, first_role = iran_node, server_spec, "iran node"
-                second_node, second_spec, second_role = foreign_node, client_spec, "foreign node"
+            if iran_spec.get("mode") == "server":
+                first_node, first_spec, first_role = iran_node, iran_spec, "iran node"
+                second_node, second_spec, second_role = foreign_node, foreign_spec, "foreign node"
             else:
-                first_node, first_spec, first_role = foreign_node, client_spec, "foreign node"
-                second_node, second_spec, second_role = iran_node, server_spec, "iran node"
+                first_node, first_spec, first_role = foreign_node, foreign_spec, "foreign node"
+                second_node, second_spec, second_role = iran_node, iran_spec, "iran node"
 
             first_response = await client.send_to_node(
                 node_id=first_node.id,

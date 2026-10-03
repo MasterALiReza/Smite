@@ -2461,7 +2461,9 @@ class GostAdapter:
             tunnel_proto = "tcp"
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
-        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "udp", "rudp", "kcp", "quic", "grpc"]
+        is_reverse_mode = bool(is_reverse)
+        # For reverse tunnels (rtcp), multiplexing (yamux) is mandatory to prevent socket closure after the first connection
+        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode or is_reverse_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
 
         config = {
             "services": [],
@@ -2533,6 +2535,10 @@ class GostAdapter:
                 listener_metadata = {}
                 if is_reverse:
                     listener_metadata["bind"] = True
+                if enable_mux and gost_type not in ["udp", "rudp"]:
+                    listener_metadata["mux.type"] = mux_type
+                    listener_metadata["mux"] = True
+                    listener_metadata["nodelay"] = True
                 if gost_type == "kcp":
                     listener_metadata["nodelay"] = True
                     listener_metadata["interval"] = "20ms"
@@ -2636,6 +2642,7 @@ class GostAdapter:
                 handler_metadata["bind"] = True
             if enable_mux:
                 handler_metadata["mux.type"] = mux_type
+                handler_metadata["mux"] = True
                 handler_metadata["nodelay"] = True
                 
             handler = {
@@ -2822,6 +2829,10 @@ class GostAdapter:
                     kcp_key = spec.get("kcp_key") or auth_token or "smite-kcp-secure"
                     dialer_metadata["crypt"] = spec.get("kcp_crypt") or "aes"
                     dialer_metadata["key"] = kcp_key
+                if enable_mux and gost_type not in ["udp", "rudp"]:
+                    dialer_metadata["mux.type"] = mux_type
+                    dialer_metadata["mux"] = True
+                    dialer_metadata["nodelay"] = True
             else:
                 keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
                 dialer_metadata["keepAlive"] = True

@@ -411,3 +411,63 @@ def test_build_gost_node_specs_direct_mode_persistence():
     assert client_spec2["mode"] == "server"
 
 
+@pytest.mark.asyncio
+async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
+    """Verify reverse KCP tunnels generate Yamux multiplexer metadata on both listener and dialer"""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    # 1. Reverse Server (Iran)
+    server_spec = {
+        "mode": "server",
+        "is_reverse": True,
+        "control_port": 8443,
+        "ports": [8080],
+        "gost_type": "kcp",
+        "auth_token": "kcp-token-123"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=333, returncode=None)
+        await adapter.apply("kcp-rev-server", server_spec)
+
+        cfg_server = json.loads((tmp_path / "kcp-rev-server.json").read_text())
+        svc = cfg_server["services"][0]
+        # Listener metadata must have Yamux mux enabled
+        assert svc["listener"]["metadata"].get("mux") is True
+        assert svc["listener"]["metadata"].get("mux.type") == "yamux"
+        assert svc["listener"]["metadata"].get("bind") is True
+        # Handler metadata must have Yamux mux enabled
+        assert svc["handler"]["metadata"].get("mux") is True
+        assert svc["handler"]["metadata"].get("mux.type") == "yamux"
+
+    # 2. Reverse Client (Foreign)
+    client_spec = {
+        "mode": "client",
+        "is_reverse": True,
+        "control_port": 8443,
+        "server_ip": "1.1.1.1",
+        "ports": [8080],
+        "gost_type": "kcp",
+        "auth_token": "kcp-token-123"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=444, returncode=None)
+        await adapter.apply("kcp-rev-client", client_spec)
+
+        cfg_client = json.loads((tmp_path / "kcp-rev-client.json").read_text())
+        node0 = cfg_client["chains"][0]["hops"][0]["nodes"][0]
+        # Dialer metadata must have Yamux mux enabled
+        assert node0["dialer"]["metadata"].get("mux") is True
+        assert node0["dialer"]["metadata"].get("mux.type") == "yamux"
+        # Connector metadata must have Yamux mux enabled
+        assert node0["connector"]["metadata"].get("mux") is True
+        assert node0["connector"]["metadata"].get("mux.type") == "yamux"
+
+
+

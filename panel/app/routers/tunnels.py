@@ -645,7 +645,7 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 await db.refresh(db_tunnel)
                 return db_tunnel
 
-            server_spec, client_spec = build_tunnel_node_specs(db_tunnel, iran_node_ip, foreign_node_ip)
+            iran_spec, foreign_spec = build_tunnel_node_specs(db_tunnel, iran_node_ip, foreign_node_ip)
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(db_tunnel, "spec")
             await db.commit()
@@ -658,12 +658,12 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                 await db.commit()
 
-            if is_reverse:
-                first_node, first_spec, first_role = iran_node, server_spec, f"iran node {iran_node.id} (server)"
-                second_node, second_spec, second_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (client)"
+            if iran_spec.get("mode") == "server":
+                first_node, first_spec, first_role = iran_node, iran_spec, f"iran node {iran_node.id} (server)"
+                second_node, second_spec, second_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (client)"
             else:
-                first_node, first_spec, first_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (server)"
-                second_node, second_spec, second_role = iran_node, server_spec, f"iran node {iran_node.id} (client)"
+                first_node, first_spec, first_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (server)"
+                second_node, second_spec, second_role = iran_node, iran_spec, f"iran node {iran_node.id} (client)"
 
             logger.info(f"Applying config to {first_role} for tunnel {db_tunnel.id}")
             first_response = await client.send_to_node(
@@ -1231,8 +1231,6 @@ async def _probe_tunnel_latency(client, iran_id: str, iran_ip: Optional[str], fo
             res = await measure_precise_ping(foreign_ip, fallback_ports=candidate_ports)
         else:
             res = await client.probe_ping(iran_id, foreign_ip, port)
-            if res is None:
-                res = await measure_precise_ping(foreign_ip, fallback_ports=candidate_ports)
         _ping_cache[cache_key] = (time.time(), res)
     except Exception as e:
         logger.debug(f"Probe latency failed for {cache_key}: {e}")
@@ -1701,7 +1699,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     raise HTTPException(status_code=400, detail="Foreign node has no IP address")
 
                 from app.spec_builder import build_tunnel_node_specs, parse_ports_list
-                server_spec, client_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+                iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
                 ports = parse_ports_list(tunnel.spec)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
@@ -1715,14 +1713,16 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     foreign_node.node_metadata["api_address"] = f"http://{foreign_node.node_metadata.get('ip_address', foreign_node.fingerprint)}:{foreign_node.node_metadata.get('api_port', 8888)}"
                     await db.commit()
 
-                if is_reverse:
-                    first_node, first_spec, first_role = iran_node, server_spec, f"iran node {iran_node.id} (server)"
-                    second_node, second_spec, second_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (client)"
+                if iran_spec.get("mode") == "server":
+                    first_node, first_spec, first_role = iran_node, iran_spec, f"iran node {iran_node.id} (server)"
+                    second_node, second_spec, second_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (client)"
                     verify_mode = "server"
+                    server_spec = iran_spec
                 else:
-                    first_node, first_spec, first_role = foreign_node, client_spec, f"foreign node {foreign_node.id} (server)"
-                    second_node, second_spec, second_role = iran_node, server_spec, f"iran node {iran_node.id} (client)"
+                    first_node, first_spec, first_role = foreign_node, foreign_spec, f"foreign node {foreign_node.id} (server)"
+                    second_node, second_spec, second_role = iran_node, iran_spec, f"iran node {iran_node.id} (client)"
                     verify_mode = "client"
+                    server_spec = foreign_spec
 
                 logger.info(f"Reapplying tunnel {tunnel.id}: applying config to {first_role}")
                 first_response = await client.send_to_node(
@@ -2461,14 +2461,22 @@ async def test_active_tunnel(
             "message": f"Foreign node unreachable: {msg2}"
         }
     
-    # Priority: foreign node ping (wire ICMP/TCP) -> t2 -> t1
     latency_ms = None
-    if fn_ip:
+    if iran_node_id and fn_ip:
+        latency_ms = await client.probe_ping(iran_node_id, fn_ip)
+    elif fn_ip:
         from app.utils import measure_precise_ping
         latency_ms = await measure_precise_ping(fn_ip)
         
     if latency_ms is None:
-        latency_ms = t2 if (foreign_node_id and t2 > 0) else (t1 if t1 > 0 else 40)
+        if foreign_node_id:
+            return {
+                "tunnel_id": tunnel.id,
+                "status": "error",
+                "latency_ms": None,
+                "message": f"Iran node cannot reach Foreign node at {fn_ip}"
+            }
+        latency_ms = t1 if t1 > 0 else None
     
     # Cache latency in tunnel spec
     if not tunnel.spec:
