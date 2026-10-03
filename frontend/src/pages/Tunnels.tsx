@@ -2527,6 +2527,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         } else {
           delete updatedSpec.custom_domains
         }
+        updatedSpec.is_reverse = formData.is_reverse !== false
+        updatedSpec.force_direct = formData.is_reverse === false
       } else if (tunnel.core === 'backhaul') {
         updatedSpec = buildBackhaulSpec(backhaulState, backhaulAdvanced, backhaulState.transport)
         if ((!updatedSpec.ports || updatedSpec.ports.length === 0) && ports.length > 0) {
@@ -2558,7 +2560,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         ...(tunnel.core === 'frp' && {
           security_type: formData.frp_security || 'tls',
           custom_sni: formData.frp_sni || null,
-          is_reverse: true,
+          is_reverse: Boolean(formData.is_reverse),
         }),
         ...(tunnel.core === 'chisel' && {
           security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
@@ -3665,8 +3667,27 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                 </p>
               </div>
 
-              {/* Reliability & Shaping */}
+              {/* Mode & Reliability */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                  <div className="pr-2">
+                    <div className="flex items-center gap-1.5">
+                      <ArrowLeftRight size={15} className="text-blue-600 dark:text-blue-400" />
+                      <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                      {formData.is_reverse ? 'Foreign connects to Iran (Recommended)' : 'Iran connects to Foreign (Direct STCP)'}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={formData.is_reverse}
+                    onChange={(e) => setFormData({ ...formData, is_reverse: e.target.checked })}
+                  />
+                  <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                </label>
+
                 <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
                   <div className="pr-2">
                     <div className="flex items-center gap-1.5">
@@ -3685,24 +3706,24 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                   />
                   <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 shrink-0 relative"></div>
                 </label>
+              </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                      <Network size={14} className="text-blue-500" />
-                      Proxy Protocol Version
-                    </label>
-                  </div>
-                  <CustomSelect
-                    value={formData.frp_proxy_protocol || 'none'}
-                    onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
-                    options={[
-                      { value: 'none', label: 'Disabled (Direct)' },
-                      { value: 'v1', label: 'v1 (ASCII Text)' },
-                      { value: 'v2', label: 'v2 (Binary Fast)' },
-                    ]}
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Network size={14} className="text-blue-500" />
+                    Proxy Protocol Version
+                  </label>
                 </div>
+                <CustomSelect
+                  value={formData.frp_proxy_protocol || 'none'}
+                  onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
+                  options={[
+                    { value: 'none', label: 'Disabled (Direct)' },
+                    { value: 'v1', label: 'v1 (ASCII Text)' },
+                    { value: 'v2', label: 'v2 (Binary Fast)' },
+                  ]}
+                />
               </div>
 
               {/* Bandwidth Limit & Custom Domains */}
@@ -4709,6 +4730,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         if (formData.frp_custom_domains) {
           spec.custom_domains = formData.frp_custom_domains.split(',').map((d: string) => d.trim()).filter(Boolean)
         }
+        spec.is_reverse = formData.is_reverse !== false
+        spec.force_direct = formData.is_reverse === false
       }
       
       if (formData.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
@@ -4746,7 +4769,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           transport_type: formData.frp_transport || 'tcp',
           security_type: formData.frp_security || 'tls',
           custom_sni: formData.frp_sni || null,
-          is_reverse: true,
+          is_reverse: formData.is_reverse !== false,
         }),
         ...(formData.core === 'chisel' && {
           transport_type: formData.chisel_transport || 'ws',
@@ -4770,7 +4793,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
             : (port_ranges.length > 0 ? port_ranges : null),
           is_reverse: true,
         }),
-        node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || formData.node_id) : formData.node_id,
+        node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || formData.node_id) : (formData.foreign_node_id || formData.node_id),
         foreign_node_id: formData.foreign_node_id || null,
         iran_node_id: formData.iran_node_id || formData.node_id || null,
         category: formData.category ? formData.category.trim() : null
@@ -5960,8 +5983,27 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                 </p>
               </div>
 
-              {/* Reliability & Shaping */}
+              {/* Mode & Reliability */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
+                  <div className="pr-2">
+                    <div className="flex items-center gap-1.5">
+                      <ArrowLeftRight size={15} className="text-blue-600 dark:text-blue-400" />
+                      <span className="text-xs font-bold text-gray-900 dark:text-white">Reverse Mode</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                      {formData.is_reverse ? 'Foreign connects to Iran (Recommended)' : 'Iran connects to Foreign (Direct STCP)'}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={formData.is_reverse}
+                    onChange={(e) => setFormData({ ...formData, is_reverse: e.target.checked })}
+                  />
+                  <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shrink-0 relative"></div>
+                </label>
+
                 <label className="p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 dark:hover:bg-gray-700/40 transition-all">
                   <div className="pr-2">
                     <div className="flex items-center gap-1.5">
@@ -5980,24 +6022,24 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   />
                   <div className="w-9 h-5 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 shrink-0 relative"></div>
                 </label>
+              </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                      <Network size={14} className="text-blue-500" />
-                      Proxy Protocol Version
-                    </label>
-                  </div>
-                  <CustomSelect
-                    value={formData.frp_proxy_protocol || 'none'}
-                    onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
-                    options={[
-                      { value: 'none', label: 'Disabled (Direct)' },
-                      { value: 'v1', label: 'v1 (ASCII Text)' },
-                      { value: 'v2', label: 'v2 (Binary Fast)' },
-                    ]}
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Network size={14} className="text-blue-500" />
+                    Proxy Protocol Version
+                  </label>
                 </div>
+                <CustomSelect
+                  value={formData.frp_proxy_protocol || 'none'}
+                  onChange={(val) => setFormData({ ...formData, frp_proxy_protocol: val })}
+                  options={[
+                    { value: 'none', label: 'Disabled (Direct)' },
+                    { value: 'v1', label: 'v1 (ASCII Text)' },
+                    { value: 'v2', label: 'v2 (Binary Fast)' },
+                  ]}
+                />
               </div>
 
               {/* Bandwidth Limit & Custom Domains */}

@@ -1913,6 +1913,10 @@ class FrpAdapter:
         await asyncio.sleep(0.3)
         
         mode = spec.get('mode', 'client')
+        is_provider = bool(spec.get('is_provider'))
+        is_visitor = bool(spec.get('is_visitor'))
+        is_reverse = spec.get('is_reverse', True)
+        secret_key = spec.get('secret_key', '')
         
         if mode == 'server':
             bind_port = spec.get('bind_port', 7000)
@@ -1922,13 +1926,15 @@ class FrpAdapter:
                 bind_port = 7000
             
             ports_to_free = [bind_port]
-            for p_item in (spec.get('ports') or []):
-                if isinstance(p_item, (int, str)) and str(p_item).isdigit():
-                    ports_to_free.append(int(p_item))
-                elif isinstance(p_item, dict):
-                    p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
-                    if p_val and str(p_val).isdigit():
-                        ports_to_free.append(int(p_val))
+            if not is_provider and is_reverse:
+                # In reverse mode, server on Iran node binds remote service ports as well
+                for p_item in (spec.get('ports') or []):
+                    if isinstance(p_item, (int, str)) and str(p_item).isdigit():
+                        ports_to_free.append(int(p_item))
+                    elif isinstance(p_item, dict):
+                        p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
+                        if p_val and str(p_val).isdigit():
+                            ports_to_free.append(int(p_val))
             await free_ports(ports_to_free)
 
             token = spec.get('token')
@@ -1992,10 +1998,10 @@ bindPort: {bind_port}
                         first_service_port = int(p_val)
                         break
 
-            if tunnel_type == 'http':
+            if tunnel_type == 'http' and not is_provider:
                 hp = spec.get('vhost_http_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 80 else 80))
                 config_content += f"vhostHTTPPort: {hp}\n"
-            elif tunnel_type == 'https':
+            elif tunnel_type == 'https' and not is_provider:
                 hp = spec.get('vhost_https_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
                 config_content += f"vhostHTTPSPort: {hp}\n"
 
@@ -2030,10 +2036,9 @@ bindPort: {bind_port}
             except Exception:
                 pass
             
-            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, proto={transport_proto}, tls={'force' if force_tls else 'off'}, token={'set' if clean_token else 'none'}")
+            logger.info(f"FRP server tunnel {tunnel_id}: bind_port={bind_port}, proto={transport_proto}, tls={'force' if force_tls else 'off'}, token={'set' if clean_token else 'none'}, is_provider={is_provider}")
             
             binary_path = self._resolve_server_binary_path()
-            
             config_file_abs = config_file.resolve()
             cmd = [
                 str(binary_path),
@@ -2057,11 +2062,124 @@ bindPort: {bind_port}
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
                 )
+                self.log_handles[tunnel_id] = log_f
+                self.processes[tunnel_id] = proc
+                _save_tunnel_pid(tunnel_id, proc.pid)
             except Exception as e:
                 log_f.close()
                 if isinstance(e, FileNotFoundError):
                     raise RuntimeError("FRP server binary (frps) not found. Please install FRP.")
                 raise
+
+            provider_proc = None
+            provider_log_f = None
+            provider_log_file = None
+            if is_provider:
+                await asyncio.sleep(0.3)
+                # Build and launch local frpc provider on Foreign node connecting to 127.0.0.1:bind_port
+                provider_config_file = self.config_dir / f"frpc_{tunnel_id}_provider.yaml"
+                provider_config_content = f"""serverAddr: "127.0.0.1"
+serverPort: {bind_port}
+loginFailExit: false
+auth:
+  method: token
+  token: "{clean_token or ''}"
+proxies:
+"""
+                use_encryption = spec.get('use_encryption', True)
+                use_compression = spec.get('use_compression', True)
+                bandwidth_limit = spec.get('bandwidth_limit')
+                bandwidth_limit_mode = spec.get('bandwidth_limit_mode', 'client')
+                health_check_type = spec.get('health_check_type')
+                health_check_interval = int(spec.get('health_check_interval_s') or 10)
+                health_check_timeout = int(spec.get('health_check_timeout_s') or 3)
+                health_check_max_failed = int(spec.get('health_check_max_failed') or 3)
+                health_check_path = str(spec.get('health_check_path', '/')).strip()
+                if not health_check_path.startswith('/'):
+                    health_check_path = f"/{health_check_path}"
+                health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
+
+                raw_ports = spec.get('ports') or []
+                clean_target_host = str(spec.get('local_ip') or spec.get('target_host') or '127.0.0.1').replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+
+                for i, port_config in enumerate(raw_ports):
+                    if isinstance(port_config, dict):
+                        l_port = port_config.get('local') or port_config.get('local_port') or port_config.get('port') or port_config.get('remote') or port_config.get('remote_port')
+                    else:
+                        l_port = port_config
+                    try:
+                        l_port_num = int(l_port)
+                    except (ValueError, TypeError):
+                        continue
+
+                    proxy_base_name = f"{tunnel_id}_{i}" if len(raw_ports) > 1 else tunnel_id
+                    effective_compression = False if (tunnel_type in ['udp', 'tcp+udp'] or spec.get('gaming_mode')) else bool(use_compression)
+
+                    def _build_provider_proxy_block(p_name: str, p_type: str, port_num: int) -> str:
+                        clean_p_name = str(p_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        clean_sec_key = str(secret_key).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        blk = f"""  - name: "{clean_p_name}"
+    type: {p_type}
+    secretKey: "{clean_sec_key}"
+    localIP: "{clean_target_host}"
+    localPort: {port_num}
+    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if effective_compression else 'false'}
+"""
+                        if bandwidth_limit:
+                            blk += f"""      bandwidthLimit: "{bandwidth_limit}"
+      bandwidthLimitMode: "{bandwidth_limit_mode}"
+"""
+                        if health_check_type and p_type == 'stcp':
+                            hc_type = "http" if (tunnel_type == 'http' and health_check_type == 'http') else "tcp"
+                            blk += f"""    healthCheck:
+      type: {hc_type}
+"""
+                            if hc_type == 'http':
+                                blk += f'      path: "{health_check_path}"\n'
+                            blk += f"""      timeoutSeconds: {health_check_timeout}
+      maxFailed: {health_check_max_failed}
+      intervalSeconds: {health_check_interval}
+"""
+                        return blk
+
+                    if tunnel_type == 'tcp+udp':
+                        provider_config_content += _build_provider_proxy_block(f"{proxy_base_name}_tcp", "stcp", l_port_num)
+                        provider_config_content += _build_provider_proxy_block(f"{proxy_base_name}_udp", "sudp", l_port_num)
+                    elif tunnel_type == 'udp':
+                        provider_config_content += _build_provider_proxy_block(f"{proxy_base_name}_udp", "sudp", l_port_num)
+                    else:
+                        provider_config_content += _build_provider_proxy_block(proxy_base_name, "stcp", l_port_num)
+
+                with open(provider_config_file, 'w') as pf:
+                    pf.write(provider_config_content)
+                try:
+                    os.chmod(provider_config_file, 0o600)
+                except Exception:
+                    pass
+
+                provider_binary = self._resolve_binary_path()
+                provider_cmd = [str(provider_binary), "-c", str(provider_config_file.resolve())]
+                provider_log_file = self.config_dir / f"{tunnel_id}_provider.log"
+                provider_log_f = open(provider_log_file, 'w', buffering=1)
+                try:
+                    provider_log_f.write(f"Starting FRP provider for tunnel {tunnel_id}\n")
+                    provider_log_f.write(f"Command: {' '.join(provider_cmd)}\n")
+                    provider_log_f.flush()
+                    provider_proc = await _spawn_core_subprocess(
+                        provider_cmd,
+                        stdout=provider_log_f,
+                        stderr=subprocess.STDOUT,
+                    )
+                except Exception as e:
+                    provider_log_f.close()
+                    await self.remove(tunnel_id)
+                    raise RuntimeError(f"FRP provider failed to spawn: {e}")
+
+                self.processes[f"{tunnel_id}_provider"] = provider_proc
+                self.log_handles[f"{tunnel_id}_provider"] = provider_log_f
+                _save_tunnel_pid(f"{tunnel_id}_provider", provider_proc.pid)
         else:
             logger.info(f"FRP tunnel {tunnel_id} received spec: {sanitize_spec_for_log(spec)}")
             
@@ -2157,10 +2275,10 @@ bindPort: {bind_port}
                         except Exception:
                             pass
             
-            logger.info(f"FRP tunnel {tunnel_id} parsed: server_addr='{server_addr}', server_port={server_port}, proto={transport_proto}, tls={tls_enable}, sni={custom_sni}, ports={len(ports)}")
+            logger.info(f"FRP tunnel {tunnel_id} parsed: server_addr='{server_addr}', server_port={server_port}, proto={transport_proto}, tls={tls_enable}, sni={custom_sni}, ports={len(ports)}, is_visitor={is_visitor}")
             
             if not server_addr:
-                raise ValueError("FRP client requires 'server_addr' (foreign server address) in spec")
+                raise ValueError("FRP client requires 'server_addr' (server address) in spec")
             if not ports:
                 raise ValueError("FRP client requires 'ports' array or 'remote_port'/'listen_port' in spec")
             if tunnel_type not in ['tcp', 'udp', 'tcp+udp', 'http', 'https']:
@@ -2170,7 +2288,7 @@ bindPort: {bind_port}
                 server_addr = server_addr[1:-1]
             
             if not server_addr or server_addr in ["0.0.0.0", "localhost", "127.0.0.1", "::1"]:
-                raise ValueError(f"Invalid FRP server_addr: {server_addr}. Must be a valid foreign server IP address or hostname.")
+                raise ValueError(f"Invalid FRP server_addr: {server_addr}. Must be a valid server IP address or hostname.")
             
             clean_server_addr = str(server_addr).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
             clean_token = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if token else None
@@ -2253,20 +2371,67 @@ transport:
 """
                 return block
 
-            config_content += "\nproxies:\n"
-            for i, port_config in enumerate(ports):
-                if isinstance(port_config, dict):
-                    local_port = port_config.get('local')
-                    remote_port = port_config.get('remote')
-                else:
-                    local_port = remote_port = port_config
-                
-                proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                if tunnel_type == 'tcp+udp':
-                    config_content += _build_proxy_block(f"{proxy_name}_tcp", "tcp", local_port, remote_port)
-                    config_content += _build_proxy_block(f"{proxy_name}_udp", "udp", local_port, remote_port)
-                else:
-                    config_content += _build_proxy_block(proxy_name, tunnel_type, local_port, remote_port)
+            if is_visitor:
+                # Direct mode: Iran node runs visitor, binds local service ports on 0.0.0.0
+                ports_to_free = []
+                for p_item in ports:
+                    if isinstance(p_item, dict):
+                        p_val = p_item.get('remote') or p_item.get('remote_port') or p_item.get('local') or p_item.get('local_port') or p_item.get('port')
+                    else:
+                        p_val = p_item
+                    if p_val and str(p_val).isdigit():
+                        ports_to_free.append(int(p_val))
+                if ports_to_free:
+                    await free_ports(ports_to_free)
+
+                config_content += "\nvisitors:\n"
+                effective_compression = False if (tunnel_type in ['udp', 'tcp+udp'] or spec.get('gaming_mode')) else bool(use_compression)
+                for i, port_config in enumerate(ports):
+                    if isinstance(port_config, dict):
+                        local_port = port_config.get('local') or port_config.get('remote') or port_config.get('port')
+                    else:
+                        local_port = port_config
+                    p_num = int(local_port) if str(local_port).isdigit() else 8080
+                    proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
+
+                    def _build_visitor_block(v_name: str, v_type: str, s_name: str, b_port: int) -> str:
+                        clean_v_name = str(v_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        clean_s_name = str(s_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        clean_sec_key = str(secret_key).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
+                        return f"""  - name: "{clean_v_name}"
+    type: {v_type}
+    serverName: "{clean_s_name}"
+    secretKey: "{clean_sec_key}"
+    bindAddr: "0.0.0.0"
+    bindPort: {b_port}
+    transport:
+      useEncryption: {'true' if use_encryption else 'false'}
+      useCompression: {'true' if effective_compression else 'false'}
+"""
+
+                    if tunnel_type == 'tcp+udp':
+                        config_content += _build_visitor_block(f"{proxy_name}_tcp_visitor", "stcp", f"{proxy_name}_tcp", p_num)
+                        config_content += _build_visitor_block(f"{proxy_name}_udp_visitor", "sudp", f"{proxy_name}_udp", p_num)
+                    elif tunnel_type == 'udp':
+                        config_content += _build_visitor_block(f"{proxy_name}_udp_visitor", "sudp", f"{proxy_name}_udp", p_num)
+                    else:
+                        config_content += _build_visitor_block(f"{proxy_name}_visitor", "stcp", proxy_name, p_num)
+            else:
+                # Reverse mode: Foreign node runs standard proxies targeting local services
+                config_content += "\nproxies:\n"
+                for i, port_config in enumerate(ports):
+                    if isinstance(port_config, dict):
+                        local_port = port_config.get('local')
+                        remote_port = port_config.get('remote')
+                    else:
+                        local_port = remote_port = port_config
+                    
+                    proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
+                    if tunnel_type == 'tcp+udp':
+                        config_content += _build_proxy_block(f"{proxy_name}_tcp", "tcp", local_port, remote_port)
+                        config_content += _build_proxy_block(f"{proxy_name}_udp", "udp", local_port, remote_port)
+                    else:
+                        config_content += _build_proxy_block(proxy_name, tunnel_type, local_port, remote_port)
             
             with open(config_file, 'w') as f:
                 f.write(config_content)
@@ -2275,7 +2440,7 @@ transport:
             except Exception:
                 pass
             
-            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={clean_server_addr}:{server_port}")
+            logger.info(f"FRP tunnel {tunnel_id}: type={tunnel_type}, proto={transport_proto}, local={local_ip}, server={clean_server_addr}:{server_port}, is_visitor={is_visitor}")
             
             binary_path = self._resolve_binary_path()
             config_file_abs = config_file.resolve()
@@ -2295,7 +2460,7 @@ transport:
             try:
                 log_f.write(f"Starting FRP client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
-                log_f.write(f"Config: type={tunnel_type}, local={local_ip}:{local_port}, remote={remote_port}, server={clean_server_addr}:{server_port}\n")
+                log_f.write(f"Config: type={tunnel_type}, local={local_ip}, server={clean_server_addr}:{server_port}, is_visitor={is_visitor}\n")
                 log_f.flush()
                 proc = await _spawn_core_subprocess(
                     cmd,
@@ -2321,31 +2486,59 @@ transport:
             if tunnel_id in self.log_handles:
                 try:
                     self.log_handles[tunnel_id].close()
-                except:
+                except Exception:
                     pass
                 del self.log_handles[tunnel_id]
             _remove_tunnel_pid(tunnel_id)
             raise RuntimeError(f"FRP failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
+
+        if mode == 'server' and is_provider and provider_proc is not None:
+            if provider_proc.returncode is not None:
+                stderr = ""
+                if provider_log_file and provider_log_file.exists():
+                    with open(provider_log_file, 'r') as pf:
+                        stderr = pf.read()
+                await self.remove(tunnel_id)
+                raise RuntimeError(f"FRP provider failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str, purge: bool = False):
-        """Remove FRP tunnel (handles both server and client modes)"""
-        pid = _get_tunnel_pid(tunnel_id)
-        proc = self.processes.pop(tunnel_id, None)
-        if tunnel_id in self.log_handles:
-            try:
-                self.log_handles[tunnel_id].close()
-            except Exception:
-                pass
-            del self.log_handles[tunnel_id]
+        """Remove FRP tunnel (handles both server and client modes, and provider subprocess)"""
+        for sub_id in [tunnel_id, f"{tunnel_id}_provider"]:
+            pid = _get_tunnel_pid(sub_id)
+            proc = self.processes.pop(sub_id, None)
+            if sub_id in self.log_handles:
+                try:
+                    self.log_handles[sub_id].close()
+                except Exception:
+                    pass
+                del self.log_handles[sub_id]
 
-        await safe_stop_subprocess(
-            proc,
-            patterns=[f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml"],
-            pid=pid
-        )
-        _remove_tunnel_pid(tunnel_id)
+            await safe_stop_subprocess(
+                proc,
+                patterns=[
+                    f"frps_{tunnel_id}.yaml",
+                    f"frpc_{tunnel_id}.yaml",
+                    f"frpc_{tunnel_id}_provider.yaml",
+                    f"frps_{tunnel_id}.toml",
+                    f"frpc_{tunnel_id}.toml",
+                    f"frpc_{tunnel_id}_provider.toml"
+                ],
+                pid=pid
+            )
+            _remove_tunnel_pid(sub_id)
 
-        for cfg_name in [f"frps_{tunnel_id}.yaml", f"frpc_{tunnel_id}.yaml", f"frps_{tunnel_id}.toml", f"frpc_{tunnel_id}.toml", f"{tunnel_id}_cert.pem", f"{tunnel_id}_key.pem"]:
+        for cfg_name in [
+            f"frps_{tunnel_id}.yaml",
+            f"frpc_{tunnel_id}.yaml",
+            f"frpc_{tunnel_id}_provider.yaml",
+            f"frps_{tunnel_id}.toml",
+            f"frpc_{tunnel_id}.toml",
+            f"frpc_{tunnel_id}_provider.toml",
+            f"{tunnel_id}.log",
+            f"{tunnel_id}_provider.log",
+            f"{tunnel_id}_cert.pem",
+            f"{tunnel_id}_key.pem"
+        ]:
             cfg_path = self.config_dir / cfg_name
             if cfg_path.exists():
                 try:
@@ -2363,6 +2556,14 @@ transport:
         
         if not is_running:
             is_running = _is_tunnel_pid_alive(tunnel_id, "frp")
+            
+        provider_id = f"{tunnel_id}_provider"
+        if provider_id in self.processes:
+            provider_proc = self.processes[provider_id]
+            provider_running = provider_proc.returncode is None
+            is_running = is_running and provider_running
+        elif _get_tunnel_pid(provider_id):
+            is_running = is_running and _is_tunnel_pid_alive(provider_id, "frp")
         
         return {
             "active": is_running,
@@ -3739,9 +3940,9 @@ class AdapterManager:
                 else:
                     missing_ports.append({"port": int(ctrl_port), "type": f"control_{ctrl_proto}"})
                     
-            # In direct GOST/Chisel server mode, the server only terminates control_port.
+            # In direct GOST/Chisel/FRP server mode, the server only terminates control_port.
             # Service ports listen on the Iran client side.
-            skip_service_ports = (core in ["gost", "chisel"] and not spec.get("is_reverse", False))
+            skip_service_ports = (core in ["gost", "chisel", "frp"] and not spec.get("is_reverse", False))
             if not skip_service_ports:
                 for p in checked_ports:
                     try:
@@ -3773,8 +3974,8 @@ class AdapterManager:
                                 missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                     except Exception:
                         pass
-        elif actual_mode == "client" and core in ["gost", "chisel"] and not spec.get("is_reverse", False):
-            # Direct GOST / Chisel tunnel: Iran client node listens locally on service ports
+        elif actual_mode == "client" and core in ["gost", "chisel", "frp"] and not spec.get("is_reverse", False):
+            # Direct GOST / Chisel / FRP tunnel: Iran client node listens locally on service ports
             for p in checked_ports:
                 try:
                     p_num = None

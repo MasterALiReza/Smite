@@ -217,9 +217,9 @@ class TunnelReapplyManager:
                 or tunnel.is_reverse is not None
             )
         )
-        if tunnel.core in {"rathole", "backhaul", "frp"}:
+        if tunnel.core in {"rathole", "backhaul"}:
             is_reverse = True
-        elif tunnel.core in {"gost", "chisel"}:
+        elif tunnel.core in {"gost", "chisel", "frp"}:
             if tunnel.is_reverse is not None:
                 is_reverse = bool(tunnel.is_reverse)
             elif not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):

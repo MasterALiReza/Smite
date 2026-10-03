@@ -958,6 +958,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec = spec.copy()
     client_spec["mode"] = "client"
 
+    # 0. Directionality (Reverse vs Direct)
+    is_reverse = getattr(tunnel, "is_reverse", None)
+    if is_reverse is None and hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+        is_reverse = tunnel.spec.get("is_reverse")
+    if is_reverse is None:
+        is_reverse = spec.get("is_reverse", True)
+    is_reverse = bool(is_reverse)
+
     # 1. Service / Proxy Type (tcp, udp, tcp+udp, http, https)
     tunnel_type = (
         getattr(tunnel, "type", None)
@@ -1093,8 +1101,9 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 from cryptography.hazmat.primitives import hashes, serialization
                 from cryptography.hazmat.primitives.asymmetric import rsa
 
+                target_server_ip = iran_node_ip if is_reverse else foreign_node_ip
                 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-                cn = custom_sni or iran_node_ip or "frp-tunnel"
+                cn = custom_sni or target_server_ip or "frp-tunnel"
                 subject = issuer = x509.Name([
                     x509.NameAttribute(NameOID.COMMON_NAME, cn),
                 ])
@@ -1115,11 +1124,16 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 san_items = []
                 if custom_sni:
                     san_items.append(x509.DNSName(custom_sni))
-                if iran_node_ip:
-                    try:
-                        san_items.append(x509.IPAddress(ipaddress.ip_address(iran_node_ip)))
-                    except ValueError:
-                        san_items.append(x509.DNSName(iran_node_ip))
+                for s_ip in [target_server_ip, iran_node_ip, foreign_node_ip]:
+                    if s_ip:
+                        try:
+                            ip_obj = x509.IPAddress(ipaddress.ip_address(s_ip))
+                            if ip_obj not in san_items:
+                                san_items.append(ip_obj)
+                        except ValueError:
+                            dns_obj = x509.DNSName(s_ip)
+                            if dns_obj not in san_items:
+                                san_items.append(dns_obj)
                 if not san_items:
                     san_items.append(x509.DNSName("frp-tunnel"))
                 builder = builder.add_extension(x509.SubjectAlternativeName(san_items), critical=False)
@@ -1212,12 +1226,17 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     # Target host resolution
     target_host = getattr(tunnel, "target_host", None) or server_spec.get("target_host") or server_spec.get("local_ip") or "127.0.0.1"
 
+    # Deterministic secretKey for Visitor / STCP / SUDP authentication
+    tunnel_id_str = str(getattr(tunnel, "id", "") or "default-frp")
+    secret_key = hashlib.sha256(f"{tunnel_id_str}:{token}".encode()).hexdigest()[:24]
+
     # 7. Assembling Server & Client Specs
     server_spec["bind_port"] = bind_port
     server_spec["control_port"] = bind_port
     server_spec["vhost_http_port"] = vhost_http_port
     server_spec["vhost_https_port"] = vhost_https_port
     server_spec["token"] = token
+    server_spec["secret_key"] = secret_key
     server_spec["transport_type"] = transport_proto
     server_spec["transport"] = transport_proto
     server_spec["security_type"] = security_type
@@ -1229,11 +1248,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     server_spec["use_compression"] = use_compression
     server_spec["local_ip"] = target_host
     server_spec["target_host"] = target_host
+    server_spec["is_reverse"] = is_reverse
+    server_spec["force_direct"] = not is_reverse
 
-    client_spec["server_addr"] = iran_node_ip
+    client_spec["server_addr"] = iran_node_ip if is_reverse else foreign_node_ip
     client_spec["server_port"] = bind_port
     client_spec["control_port"] = bind_port
     client_spec["token"] = token
+    client_spec["secret_key"] = secret_key
     client_spec["transport_type"] = transport_proto
     client_spec["transport"] = transport_proto
     client_spec["security_type"] = security_type
@@ -1248,6 +1270,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["local_ip"] = target_host
     client_spec["target_host"] = target_host
     client_spec["ports"] = ports
+    client_spec["is_reverse"] = is_reverse
+    client_spec["force_direct"] = not is_reverse
 
     if health_check_type:
         client_spec["health_check_type"] = health_check_type
@@ -1281,6 +1305,9 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
 
     # 8. Sync state back into tunnel.spec for persistent DB storage
     if tunnel.spec is not None:
+        tunnel.spec["is_reverse"] = is_reverse
+        tunnel.spec["force_direct"] = not is_reverse
+        tunnel.spec["secret_key"] = secret_key
         tunnel.spec["token"] = token
         tunnel.spec["bind_port"] = bind_port
         tunnel.spec["control_port"] = bind_port
@@ -1315,7 +1342,53 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         if custom_domains:
             tunnel.spec["custom_domains"] = custom_domains
 
-    return server_spec, client_spec
+    # 9. Return (iran_spec, foreign_spec)
+    if is_reverse:
+        # Reverse Mode: Iran is Server (frps), Foreign is Client (frpc)
+        server_spec["mode"] = "server"
+        client_spec["mode"] = "client"
+        client_spec["server_addr"] = iran_node_ip
+        return server_spec, client_spec
+    else:
+        # Direct Mode: Foreign is Server & Provider (frps + frpc_provider), Iran is Client Visitor (frpc visitor)
+        foreign_spec = server_spec.copy()
+        foreign_spec["mode"] = "server"
+        foreign_spec["is_provider"] = True
+        foreign_spec["is_reverse"] = False
+        foreign_spec["secret_key"] = secret_key
+        foreign_spec["bind_port"] = bind_port
+        foreign_spec["control_port"] = bind_port
+        foreign_spec["token"] = token
+        foreign_spec["ports"] = ports
+        foreign_spec["local_ip"] = target_host
+        foreign_spec["target_host"] = target_host
+        if health_check_type:
+            foreign_spec["health_check_type"] = health_check_type
+            foreign_spec["health_check_interval_s"] = health_check_interval
+            foreign_spec["health_check_timeout_s"] = health_check_timeout
+            foreign_spec["health_check_max_failed"] = health_check_max_failed
+            if health_check_type == "http":
+                foreign_spec["health_check_path"] = health_check_path
+
+        iran_spec = client_spec.copy()
+        iran_spec["mode"] = "client"
+        iran_spec["is_visitor"] = True
+        iran_spec["is_reverse"] = False
+        iran_spec["server_addr"] = foreign_node_ip
+        iran_spec["server_port"] = bind_port
+        iran_spec["control_port"] = bind_port
+        iran_spec["token"] = token
+        iran_spec["secret_key"] = secret_key
+        iran_spec["ports"] = ports
+        iran_spec["bind_addr"] = "0.0.0.0"
+        # FRP Visitors do not support healthCheck block
+        iran_spec.pop("health_check_type", None)
+        iran_spec.pop("health_check_interval_s", None)
+        iran_spec.pop("health_check_timeout_s", None)
+        iran_spec.pop("health_check_max_failed", None)
+        iran_spec.pop("health_check_path", None)
+
+        return iran_spec, foreign_spec
 
 
 def build_gost_node_specs(
