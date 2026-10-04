@@ -80,7 +80,7 @@ class NodeClient:
                 if not frp_comm_manager.is_running():
                     logger.debug(f"[HTTP] FRP enabled but FRP server not running, falling back to HTTP for node {node.id}")
                 else:
-                    logger.info(f"[FRP] Using FRP tunnel to communicate with node {node.id} (remote_port={frp_remote_port})")
+                    logger.debug(f"[FRP] Using FRP tunnel to communicate with node {node.id} (remote_port={frp_remote_port})")
                     return (f"http://127.0.0.1:{frp_remote_port}", True)
             else:
                 logger.debug(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")

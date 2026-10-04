@@ -285,7 +285,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
         else:
             # Unauthenticated re-registration (legacy node): keep existing
             # metadata to prevent node-hijack via fingerprint overwrite.
-            logger.info(f"Unauthenticated re-registration for node {existing.id}, metadata update skipped (hijack protection)")
+            logger.debug(f"Unauthenticated re-registration for node {existing.id}, metadata update skipped (hijack protection)")
         await db.commit()
         await db.refresh(existing)
         
