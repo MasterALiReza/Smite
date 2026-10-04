@@ -78,12 +78,12 @@ class NodeClient:
             if frp_remote_port:
                 from app.frp_comm_manager import frp_comm_manager
                 if not frp_comm_manager.is_running():
-                    logger.warning(f"[HTTP] FRP enabled but FRP server not running, falling back to HTTP for node {node.id}")
+                    logger.debug(f"[HTTP] FRP enabled but FRP server not running, falling back to HTTP for node {node.id}")
                 else:
                     logger.info(f"[FRP] Using FRP tunnel to communicate with node {node.id} (remote_port={frp_remote_port})")
                     return (f"http://127.0.0.1:{frp_remote_port}", True)
             else:
-                logger.warning(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
+                logger.debug(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
         
         # Direct HTTP
         if node.node_metadata and node.node_metadata.get("ip_address") in _local_addresses():
@@ -91,7 +91,7 @@ class NodeClient:
         node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
         if not node_address.startswith("http"):
             node_address = f"http://{node_address}"
-        logger.info(f"[HTTP] Using direct HTTP to communicate with node {node.id} at {node_address}")
+        logger.debug(f"[HTTP] Using direct HTTP to communicate with node {node.id} at {node_address}")
         return (node_address, False)
     
     async def send_to_node(
@@ -192,7 +192,7 @@ class NodeClient:
             logger.debug(f"[{comm_type}] Getting tunnel status from node {node_id} (tunnel: {tunnel_id or 'all'})")
             
             try:
-                timeout = httpx.Timeout(3.0, connect=2.0)
+                timeout = httpx.Timeout(4.0, connect=2.5)
                 async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
                     response = await client.get(url, headers=self._node_token_headers())
                     response.raise_for_status()

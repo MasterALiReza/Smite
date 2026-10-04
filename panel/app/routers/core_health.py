@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 import logging
@@ -24,7 +24,7 @@ RESET_COOLDOWN_SECONDS = 30
 
 
 _HEALTH_CACHE: Dict[str, Any] = {"timestamp": 0.0, "data": []}
-HEALTH_CACHE_TTL = 3.0  # 3 seconds cache
+HEALTH_CACHE_TTL = 4.0  # 4 seconds cache
 
 
 class CoreHealthResponse(BaseModel):
@@ -64,43 +64,42 @@ async def get_core_health(request: Request, db: AsyncSession = Depends(get_db), 
     
     client = NodeClient()
     
-    async def check_single_node(node_id: str, node: Node, role: str):
-        connection_status = {
-            "status": "failed",
-            "error_message": None
-        }
-        
+    async def probe_node(node_id: str, timeout_sec: float) -> tuple[bool, str, Optional[str]]:
         try:
-            # Enforce 1.8s timeout so unresponsive nodes don't block the UI
-            response = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=1.8)
+            response = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=timeout_sec)
             if response and response.get("status") == "ok":
-                connection_status["status"] = "connected"
-            else:
-                error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
-                if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                    connection_status["status"] = "reconnecting"
-                else:
-                    connection_status["status"] = "failed"
-                connection_status["error_message"] = error_msg
-        except asyncio.TimeoutError:
-            connection_status["status"] = "reconnecting"
-            connection_status["error_message"] = "Connection timeout"
+                return True, "connected", None
+            
+            error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
+            low_msg = error_msg.lower()
+            if "timeout" in low_msg or "connection" in low_msg:
+                return False, "reconnecting", error_msg
+            return False, "failed", error_msg
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            return False, "reconnecting", "Connection timeout"
         except httpx.ConnectError:
-            connection_status["status"] = "connecting"
-            connection_status["error_message"] = "Connecting to node..."
-        except httpx.TimeoutException:
-            connection_status["status"] = "reconnecting"
-            connection_status["error_message"] = "Connection timeout"
+            return False, "reconnecting", "Connecting to node..."
         except Exception as e:
-            logger.error(f"Error checking node {node_id} health: {e}")
-            connection_status["status"] = "failed"
-            connection_status["error_message"] = str(e)
+            return False, "failed", str(e)
+
+    async def check_single_node(node_id: str, node: Node, role: str):
+        # 1. Primary probe with 3.5s timeout (accommodates international route latency and DPI jitter)
+        success, status, error_message = await probe_node(node_id, timeout_sec=3.5)
+        
+        # 2. Resilient debounce: if probe experienced a transient timeout or network error, do an immediate retry
+        # This completely eliminates false-positive flapping caused by momentary packet drops
+        if not success and status == "reconnecting":
+            await asyncio.sleep(0.25)
+            retry_success, retry_status, retry_err = await probe_node(node_id, timeout_sec=2.5)
+            if retry_success:
+                success, status, error_message = retry_success, retry_status, retry_err
         
         return {
             "id": node_id,
             "name": node.name,
             "role": role,
-            **connection_status
+            "status": status,
+            "error_message": error_message if not success else None
         }
     
     # Check all nodes once in parallel
