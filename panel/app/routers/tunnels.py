@@ -469,14 +469,15 @@ async def check_port_conflicts(
                         collided_port = sorted(list(c2))[0]
 
             if collided_port is not None:
+                cat_hint = f" (در دسته‌بندی '{ex.category}')" if getattr(ex, "category", None) else ""
                 error_msg = (
                     f"تداخل پورت: پورت {collided_port} در سرور {node_type_label} {node_name_str} "
-                    f"قبلاً توسط تانل '{ex.name}' رزرو شده است. "
+                    f"قبلاً توسط تانل '{ex.name}'{cat_hint} رزرو شده است. "
                     f"استفاده همزمان از یک پورت در دو تانل روی یک سرور باعث تداخل و کرش پروسه‌ها می‌شود."
                 )
                 logger.warning(
                     f"Port collision prevented: port {collided_port} on node {nid} ({node_name_str}) "
-                    f"already used by tunnel '{ex.name}' (id={ex.id})"
+                    f"already used by tunnel '{ex.name}'{cat_hint} (id={ex.id})"
                 )
                 raise HTTPException(status_code=400, detail=error_msg)
 
@@ -738,10 +739,18 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 db_tunnel.error_message = f"{second_role} error: {error_msg}"
                 logger.error(f"Tunnel {db_tunnel.id}: {second_role} error: {error_msg}")
                 try:
+                    f_ports = list(extract_all_tunnel_ports(db_tunnel.spec or {}).get("all_ports", set()))
+                    f_ctrl = (db_tunnel.spec or {}).get("control_port")
                     await client.send_to_node(
                         node_id=first_node.id,
                         endpoint="/api/agent/tunnels/remove",
-                        data={"tunnel_id": db_tunnel.id}
+                        data={
+                            "tunnel_id": db_tunnel.id,
+                            "purge": True,
+                            "core": db_tunnel.core,
+                            "ports": f_ports,
+                            "control_port": f_ctrl,
+                        }
                     )
                 except:
                     pass
@@ -1701,11 +1710,20 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 active_node_ids = {iran_node.id, foreign_node.id}
                 other_nodes = [n for n in all_nodes if n.id not in active_node_ids]
                 if other_nodes:
+                    g_ports = list(extract_all_tunnel_ports(tunnel.spec or {}).get("all_ports", set()))
+                    g_ctrl = (tunnel.spec or {}).get("control_port")
+                    g_payload = {
+                        "tunnel_id": tunnel.id,
+                        "purge": True,
+                        "core": tunnel.core,
+                        "ports": g_ports,
+                        "control_port": g_ctrl,
+                    }
                     async def _purge_ghost_node(n_obj):
                         try:
                             await asyncio.wait_for(
-                                client.send_to_node(n_obj.id, "/api/agent/tunnels/remove", {"tunnel_id": tunnel.id}),
-                                timeout=2.0
+                                client.send_to_node(n_obj.id, "/api/agent/tunnels/remove", g_payload),
+                                timeout=3.0
                             )
                         except Exception:
                             pass
@@ -2083,15 +2101,28 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     if getattr(tunnel, "iran_node_id", None):
         nodes_to_notify.add(tunnel.iran_node_id)
 
+    # Extract all ports from tunnel spec to ensure node agents release them cleanly
+    ports_info = extract_all_tunnel_ports(tunnel.spec or {})
+    all_tunnel_ports = list(ports_info.get("all_ports", set()))
+    control_port = (tunnel.spec or {}).get("control_port")
+
+    remove_payload = {
+        "tunnel_id": tunnel.id,
+        "purge": True,
+        "core": tunnel.core,
+        "ports": all_tunnel_ports,
+        "control_port": control_port,
+    }
+
     async def _notify_node(n_id: str):
         try:
             await asyncio.wait_for(
                 client.send_to_node(
                     node_id=n_id,
                     endpoint="/api/agent/tunnels/remove",
-                    data={"tunnel_id": tunnel.id, "purge": True}
+                    data=remove_payload
                 ),
-                timeout=4.0
+                timeout=6.0
             )
         except Exception as e:
             logger.warning(f"Failed to notify node {n_id} during tunnel removal: {e}")
@@ -2101,6 +2132,7 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     
     await db.delete(tunnel)
     await db.commit()
+    logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database, notified nodes {nodes_to_notify}, freed ports: {all_tunnel_ports}")
     return {"status": "deleted"}
 
 

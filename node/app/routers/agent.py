@@ -52,6 +52,9 @@ class TunnelApply(BaseModel):
 class TunnelRemove(BaseModel):
     tunnel_id: str
     purge: Optional[bool] = False
+    ports: Optional[List[Any]] = None
+    control_port: Optional[int] = None
+    core: Optional[str] = None
 
     @field_validator("tunnel_id")
     @classmethod
@@ -118,7 +121,13 @@ async def remove_tunnel(data: TunnelRemove, request: Request):
     adapter_manager = request.app.state.adapter_manager
     
     try:
-        await adapter_manager.remove_tunnel(data.tunnel_id, purge=bool(data.purge))
+        await adapter_manager.remove_tunnel(
+            data.tunnel_id,
+            purge=bool(data.purge),
+            ports=data.ports,
+            control_port=data.control_port,
+            core=data.core
+        )
         return {"status": "success", "message": "Tunnel removed"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

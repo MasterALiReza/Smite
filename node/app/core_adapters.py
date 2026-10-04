@@ -195,6 +195,71 @@ def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> boo
         return False
 
 
+
+def _extract_ports_from_spec_dict(spec: Dict[str, Any]) -> Set[int]:
+    """Helper to extract all listening and service ports from a tunnel spec dictionary."""
+    extracted: Set[int] = set()
+    if not isinstance(spec, dict):
+        return extracted
+
+    # 1. ports array or comma-separated string
+    raw_ports = spec.get("ports") or []
+    if isinstance(raw_ports, str):
+        raw_ports = [p.strip() for p in raw_ports.split(",") if p.strip()]
+    elif not isinstance(raw_ports, list):
+        raw_ports = [raw_ports]
+
+    for p in raw_ports:
+        if isinstance(p, int) and 0 < p <= 65535:
+            extracted.add(p)
+        elif isinstance(p, str):
+            p_clean = p.strip()
+            if "=" in p_clean:
+                p_clean = p_clean.split("=", 1)[0].strip()
+            if ":" in p_clean:
+                p_clean = p_clean.rsplit(":", 1)[-1].strip()
+            if "/" in p_clean:
+                p_clean = p_clean.split("/", 1)[0].strip()
+            if p_clean.isdigit():
+                val = int(p_clean)
+                if 0 < val <= 65535:
+                    extracted.add(val)
+        elif isinstance(p, dict):
+            for k in ("port", "listen_port", "remote_port", "local_port", "remote", "local"):
+                v = p.get(k)
+                if v and str(v).isdigit() and 0 < int(v) <= 65535:
+                    extracted.add(int(v))
+
+    # 2. explicit port keys
+    for k in ("port", "listen_port", "remote_port", "proxy_port", "local_port", "bind_port", "control_port", "server_port"):
+        val = spec.get(k)
+        if val and str(val).isdigit() and 0 < int(val) <= 65535:
+            extracted.add(int(val))
+
+    # 3. bind_addr / remote_addr / server_addr
+    for k in ("bind_addr", "remote_addr", "server_addr", "target_addr"):
+        val = str(spec.get(k, ""))
+        if ":" in val:
+            port_part = val.rsplit(":", 1)[-1].strip().strip("]")
+            if port_part.isdigit() and 0 < int(port_part) <= 65535:
+                extracted.add(int(port_part))
+
+    # 4. port ranges
+    pranges = spec.get("port_ranges") or []
+    if isinstance(pranges, str):
+        pranges = [x.strip() for x in pranges.split(",") if x.strip()]
+    if isinstance(pranges, list):
+        for pr in pranges:
+            if isinstance(pr, str) and "-" in pr:
+                parts = pr.split("-")
+                if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                    s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
+                    if 0 < s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
+                        extracted.update(range(s_p, e_p + 1))
+
+    return extracted
+
+
 async def free_ports(ports: Iterable[Any]) -> None:
     """Safely terminate any core proxy process holding any of the specified ports in a single batch pass."""
     if not ports:
@@ -857,7 +922,7 @@ nodelay = true
             raise RuntimeError(f"rathole failed to start: {error_output}")
     
     async def remove(self, tunnel_id: str, purge: bool = False):
-        """Remove Rathole tunnel"""
+        """Remove Rathole tunnel and release bound ports"""
         pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
@@ -867,6 +932,17 @@ nodelay = true
             except Exception:
                 pass
             del self.log_handles[tunnel_id]
+
+        ports_to_free: Set[int] = set()
+        if config_path.exists():
+            try:
+                content = config_path.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        ports_to_free.add(p_val)
+            except Exception:
+                pass
 
         await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
@@ -888,6 +964,17 @@ nodelay = true
                 ca_path.unlink()
             except Exception:
                 pass
+
+        for lf_name in [f"{tunnel_id}.log", f"{tunnel_id}.log.old"]:
+            lf = self.config_dir / lf_name
+            if lf.exists() and purge:
+                try:
+                    lf.unlink()
+                except Exception:
+                    pass
+
+        if ports_to_free:
+            await free_ports(ports_to_free)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -1311,6 +1398,7 @@ class BackhaulAdapter:
             raise
 
     async def remove(self, tunnel_id: str, purge: bool = False):
+        """Remove Backhaul tunnel and release bound ports"""
         pid = _get_tunnel_pid(tunnel_id)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
@@ -1323,6 +1411,21 @@ class BackhaulAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
+        ports_to_free: Set[int] = set()
+        if config_path.exists():
+            try:
+                txt = config_path.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', txt, re.IGNORECASE):
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        ports_to_free.add(p_val)
+                for m in re.finditer(r'["\'](\d{1,5})/(?:tcp|udp)["\']', txt, re.IGNORECASE):
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        ports_to_free.add(p_val)
+            except Exception:
+                pass
+
         await safe_stop_subprocess(proc, patterns=[f"{tunnel_id}.toml"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
@@ -1332,6 +1435,17 @@ class BackhaulAdapter:
                     p.unlink()
                 except Exception:
                     pass
+
+        for lf_name in [f"backhaul_{tunnel_id}.log", f"backhaul_{tunnel_id}.log.old"]:
+            lf = self.config_dir / lf_name
+            if lf.exists() and purge:
+                try:
+                    lf.unlink()
+                except Exception:
+                    pass
+
+        if ports_to_free:
+            await free_ports(ports_to_free)
 
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         config_path = self.config_dir / f"{tunnel_id}.toml"
@@ -1803,7 +1917,7 @@ class ChiselAdapter:
             raise RuntimeError(f"chisel failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str, purge: bool = False):
-        """Remove Chisel tunnel and clean up associated key/cert files"""
+        """Remove Chisel tunnel, free bound ports, and clean up associated key/cert files"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -1813,13 +1927,25 @@ class ChiselAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
+        ports_to_free: Set[int] = set()
+        log_file = self.config_dir / f"{tunnel_id}.log"
+        if log_file.exists():
+            try:
+                txt = log_file.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(r'(?:R:|\s:?)(\d{1,5}):', txt):
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        ports_to_free.add(p_val)
+            except Exception:
+                pass
+
         await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.log"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
         # Clean up temporary certificate/key files
         suffixes = ["_cert.pem", "_key.pem", "_ca.pem"]
         if purge:
-            suffixes.append("_ssh.key")
+            suffixes.extend(["_ssh.key", ".log", ".log.old"])
         for suffix in suffixes:
             fpath = self.config_dir / f"{tunnel_id}{suffix}"
             if fpath.exists():
@@ -1827,6 +1953,9 @@ class ChiselAdapter:
                     fpath.unlink()
                 except Exception:
                     pass
+
+        if ports_to_free:
+            await free_ports(ports_to_free)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -2502,8 +2631,21 @@ transport:
                 raise RuntimeError(f"FRP provider failed to start: {stderr[-500:] if len(stderr) > 500 else stderr}")
     
     async def remove(self, tunnel_id: str, purge: bool = False):
-        """Remove FRP tunnel (handles both server and client modes, and provider subprocess)"""
+        """Remove FRP tunnel (handles both server and client modes, and provider subprocess) and free bound ports"""
+        ports_to_free: Set[int] = set()
         for sub_id in [tunnel_id, f"{tunnel_id}_provider"]:
+            for cfg_name in [f"frps_{sub_id}.yaml", f"frpc_{sub_id}.yaml", f"frps_{sub_id}.toml", f"frpc_{sub_id}.toml"]:
+                cfg_path = self.config_dir / cfg_name
+                if cfg_path.exists():
+                    try:
+                        txt = cfg_path.read_text(encoding="utf-8", errors="ignore")
+                        for m in re.finditer(r'(?:bindPort|remotePort|localPort|serverPort|port)\s*[:=]\s*(\d{1,5})', txt, re.IGNORECASE):
+                            p_val = int(m.group(1))
+                            if 0 < p_val <= 65535:
+                                ports_to_free.add(p_val)
+                    except Exception:
+                        pass
+
             pid = _get_tunnel_pid(sub_id)
             proc = self.processes.pop(sub_id, None)
             if sub_id in self.log_handles:
@@ -2545,6 +2687,9 @@ transport:
                     cfg_path.unlink()
                 except Exception:
                     pass
+
+        if ports_to_free:
+            await free_ports(ports_to_free)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -3372,7 +3517,7 @@ class GostAdapter:
         logger.info(f"GOST v3 forwarding started for tunnel {tunnel_id} (Mode: {mode})")
     
     async def remove(self, tunnel_id: str, purge: bool = False):
-        """Remove GOST tunnel"""
+        """Remove GOST tunnel and release bound ports"""
         pid = _get_tunnel_pid(tunnel_id)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -3383,7 +3528,17 @@ class GostAdapter:
             del self.log_handles[tunnel_id]
 
         config_file = self.config_dir / f"{tunnel_id}.json"
-        
+        ports_to_free: Set[int] = set()
+        if config_file.exists():
+            try:
+                txt = config_file.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(r'"addr"\s*:\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', txt, re.IGNORECASE):
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        ports_to_free.add(p_val)
+            except Exception:
+                pass
+
         await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.json"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
@@ -3412,6 +3567,9 @@ class GostAdapter:
                     extra.unlink()
                 except Exception:
                     pass
+
+        if ports_to_free:
+            await free_ports(ports_to_free)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get status"""
@@ -3800,23 +3958,145 @@ class AdapterManager:
         if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
     
-    async def _remove_tunnel_unlocked(self, tunnel_id: str, purge: bool = False):
-        """Internal unlocked tunnel removal helper"""
-        adapter = self.active_tunnels.pop(tunnel_id, None)
-        if not adapter and tunnel_id in self.tunnel_configs:
-            tunnel_core = self.tunnel_configs[tunnel_id].get("core")
-            if tunnel_core:
-                adapter = self.get_adapter(tunnel_core)
-        
-        if adapter:
+    async def _remove_tunnel_unlocked(
+        self,
+        tunnel_id: str,
+        purge: bool = False,
+        ports: Optional[Iterable[Any]] = None,
+        control_port: Optional[int] = None,
+        core: Optional[str] = None
+    ):
+        """Internal unlocked tunnel removal helper with guaranteed complete process kill and port freeing"""
+        logger.info(f"Removing tunnel {tunnel_id} (purge={purge}, core={core})")
+
+        # 1. Gather all potential ports used by this tunnel
+        target_ports: Set[int] = set()
+
+        if ports:
+            for p in ports:
+                try:
+                    p_int = int(p)
+                    if 0 < p_int <= 65535:
+                        target_ports.add(p_int)
+                except (ValueError, TypeError):
+                    pass
+
+        if control_port:
             try:
-                await adapter.remove(tunnel_id, purge=purge)
+                cp_int = int(control_port)
+                if 0 < cp_int <= 65535:
+                    target_ports.add(cp_int)
+            except (ValueError, TypeError):
+                pass
+
+        # From stored config in memory
+        saved_spec = self.tunnel_configs.get(tunnel_id, {}).get("spec", {})
+        if saved_spec:
+            target_ports.update(_extract_ports_from_spec_dict(saved_spec))
+
+        # From all disk configuration files
+        core_dirs = [
+            Path("/etc/smite-node/rathole"),
+            Path("/etc/smite-node/backhaul"),
+            Path("/etc/smite-node/gost"),
+            Path("/etc/smite-node/frp"),
+            Path("/etc/smite-node/chisel"),
+        ]
+        for cdir in core_dirs:
+            if not cdir.exists():
+                continue
+            try:
+                for fpath in cdir.glob(f"*{tunnel_id}*"):
+                    if fpath.is_file() and fpath.suffix in (".toml", ".json", ".yaml", ".yml"):
+                        try:
+                            content = fpath.read_text(encoding="utf-8", errors="ignore")
+                            for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr|addr|port|listen_port|proxy_port|remotePort|localPort|bindPort)\s*[:=]\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
+                                p_num = int(m.group(1))
+                                if 0 < p_num <= 65535:
+                                    target_ports.add(p_num)
+                            for m in re.finditer(r'["\'](\d{1,5})/(?:tcp|udp)["\']', content, re.IGNORECASE):
+                                p_num = int(m.group(1))
+                                if 0 < p_num <= 65535:
+                                    target_ports.add(p_num)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # 2. Stop through primary adapter
+        primary_adapter = self.active_tunnels.pop(tunnel_id, None)
+        if not primary_adapter:
+            t_core = core or self.tunnel_configs.get(tunnel_id, {}).get("core")
+            if t_core:
+                primary_adapter = self.get_adapter(t_core)
+
+        if primary_adapter:
+            try:
+                await primary_adapter.remove(tunnel_id, purge=purge)
             except TypeError:
-                await adapter.remove(tunnel_id)
-        
+                await primary_adapter.remove(tunnel_id)
+            except Exception as e:
+                logger.warning(f"Error in primary adapter remove for {tunnel_id}: {e}")
+
+        # 3. Check and clean across ALL adapters (prevents ghost instances if core changed)
+        for c_name, adapter in list(self.adapters.items()):
+            if adapter is primary_adapter:
+                continue
+            has_proc = tunnel_id in getattr(adapter, "processes", {})
+            has_disk_cfg = hasattr(adapter, "config_dir") and any(adapter.config_dir.glob(f"*{tunnel_id}*"))
+            if has_proc or has_disk_cfg or _is_tunnel_pid_alive(tunnel_id, c_name):
+                try:
+                    logger.info(f"Purging secondary adapter instance for tunnel {tunnel_id} under core {c_name}")
+                    await adapter.remove(tunnel_id, purge=purge)
+                except Exception as e:
+                    logger.warning(f"Error in secondary adapter remove for {tunnel_id} ({c_name}): {e}")
+
+        # 4. Sweep process table for any orphan core process matching tunnel_id
+        patterns = [tunnel_id, f"{tunnel_id}.toml", f"{tunnel_id}.json", f"{tunnel_id}.yaml"]
+        rec_pid = _get_tunnel_pid(tunnel_id)
+        await safe_stop_subprocess(patterns=patterns, pid=rec_pid)
+        _remove_tunnel_pid(tunnel_id)
+
+        prov_pid = _get_tunnel_pid(f"{tunnel_id}_provider")
+        if prov_pid:
+            await safe_stop_subprocess(pid=prov_pid)
+            _remove_tunnel_pid(f"{tunnel_id}_provider")
+
+        # 5. Free and verify all target ports
+        if target_ports:
+            logger.info(f"Freeing and verifying ports {sorted(list(target_ports))} for tunnel {tunnel_id}")
+            await free_ports(target_ports)
+            await asyncio.sleep(0.2)
+
+            # Verification pass: check if any proxy process is still holding any port
+            for p in target_ports:
+                held_pids = _find_pids_by_port_procfs(p)
+                for hp in held_pids:
+                    if _is_safe_core_process(hp):
+                        logger.warning(f"Verification: killing core process {hp} still holding port {p}")
+                        try:
+                            os.kill(hp, signal.SIGKILL)
+                        except Exception:
+                            pass
+
+            if os.name == 'posix':
+                for p in target_ports:
+                    try:
+                        proc_kill = await asyncio.create_subprocess_exec(
+                            "ss", "-K", f"( sport = :{p} or dport = :{p} )",
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL
+                        )
+                        await asyncio.wait_for(proc_kill.wait(), timeout=0.5)
+                    except Exception:
+                        pass
+
+        # 6. Delete config and persist
         if tunnel_id in self.tunnel_configs:
             del self.tunnel_configs[tunnel_id]
             self._save_tunnels()
+
+        logger.info(f"Tunnel {tunnel_id} removal complete. Ports freed: {sorted(list(target_ports))}")
 
     async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
         """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
@@ -3864,10 +4144,23 @@ class AdapterManager:
             self.start_watchdog()
             logger.info(f"Tunnel {tunnel_id} applied and saved successfully (core={tunnel_core}, mode={spec.get('mode', 'N/A')}, total_saved={len(self.tunnel_configs)})")
     
-    async def remove_tunnel(self, tunnel_id: str, purge: bool = False):
-        """Remove tunnel"""
+    async def remove_tunnel(
+        self,
+        tunnel_id: str,
+        purge: bool = False,
+        ports: Optional[Iterable[Any]] = None,
+        control_port: Optional[int] = None,
+        core: Optional[str] = None
+    ):
+        """Remove tunnel and guarantee complete process termination and port freeing"""
         async with self._get_tunnel_lock(tunnel_id):
-            await self._remove_tunnel_unlocked(tunnel_id, purge=purge)
+            await self._remove_tunnel_unlocked(
+                tunnel_id,
+                purge=purge,
+                ports=ports,
+                control_port=control_port,
+                core=core
+            )
         self._tunnel_locks.pop(tunnel_id, None)
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:

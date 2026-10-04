@@ -226,6 +226,25 @@ class NodeClient:
         """Apply tunnel to node"""
         return await self.send_to_node(node_id, "/api/agent/tunnels/apply", tunnel_data)
 
+    async def remove_tunnel(
+        self,
+        node_id: str,
+        tunnel_id: str,
+        core: Optional[str] = None,
+        ports: Optional[List[int]] = None,
+        control_port: Optional[int] = None,
+        purge: bool = True
+    ) -> Dict[str, Any]:
+        """Remove tunnel from node and guarantee process termination and port release"""
+        payload = {
+            "tunnel_id": tunnel_id,
+            "purge": purge,
+            "core": core,
+            "ports": ports or [],
+            "control_port": control_port,
+        }
+        return await self.send_to_node(node_id, "/api/agent/tunnels/remove", payload)
+
     async def verify_tunnel_on_node(
         self,
         node_id: str,
