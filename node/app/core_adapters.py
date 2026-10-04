@@ -98,10 +98,14 @@ def _find_pids_by_port_procfs(port: int) -> Set[int]:
                         for fd_entry in os.scandir(fd_dir):
                             try:
                                 target = os.readlink(fd_entry.path)
-                                for inode in inodes:
-                                    if f"[{inode}]" in target:
+                                if target.startswith("socket:[") and target.endswith("]"):
+                                    s_inode = target[8:-1]
+                                    if s_inode in inodes:
                                         pids.add(pid)
                                         break
+                                elif any(f"[{inode}]" in target for inode in inodes):
+                                    pids.add(pid)
+                                    break
                             except Exception:
                                 pass
                     except Exception:
@@ -113,17 +117,44 @@ def _find_pids_by_port_procfs(port: int) -> Set[int]:
 
 ALLOWED_CORE_BINARIES = {"rathole", "backhaul", "frps", "frpc", "gost", "chisel"}
 
+PROTECTED_PROCESS_NAMES = {
+    "python", "python3", "docker", "dockerd", "containerd", "containerd-shim",
+    "systemd", "sshd", "ssh", "bash", "sh", "zsh", "dash", "nginx", "uvicorn",
+    "init", "kthreadd", "systemd-journald", "systemd-udevd", "systemd-networkd",
+    "systemd-resolved", "dbus-daemon", "cron", "rsyslogd"
+}
+
 
 def _is_safe_core_process(pid: int) -> bool:
-    """Check if a process belongs to a known proxy core binary before terminating."""
+    """Check if a process belongs strictly to a known proxy core binary before terminating."""
     try:
         p = psutil.Process(pid)
-        name = p.name().lower()
-        if any(c in name for c in ALLOWED_CORE_BINARIES):
+        raw_name = p.name().lower().replace(".exe", "")
+        if raw_name in PROTECTED_PROCESS_NAMES:
+            return False
+        if raw_name in ALLOWED_CORE_BINARIES:
             return True
-        cmdline = " ".join(p.cmdline()).lower()
-        if any(c in cmdline for c in ALLOWED_CORE_BINARIES):
+
+        cmdline = p.cmdline()
+        if not cmdline:
+            return False
+
+        # Extract executable name from cmdline[0]
+        exe_base = os.path.basename(cmdline[0].split()[0]).lower().replace(".exe", "")
+        if exe_base in PROTECTED_PROCESS_NAMES:
+            return False
+        if exe_base in ALLOWED_CORE_BINARIES:
             return True
+
+        # Check exe path if available
+        try:
+            exe_path = os.path.basename(p.exe().lower()).replace(".exe", "")
+            if exe_path in PROTECTED_PROCESS_NAMES:
+                return False
+            if exe_path in ALLOWED_CORE_BINARIES:
+                return True
+        except Exception:
+            pass
     except Exception:
         pass
     return False
@@ -196,9 +227,15 @@ def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> boo
 
 
 
-def _extract_ports_from_spec_dict(spec: Dict[str, Any]) -> Set[int]:
+def _extract_ports_from_spec_dict(spec: Any) -> Set[int]:
     """Helper to extract all listening and service ports from a tunnel spec dictionary."""
     extracted: Set[int] = set()
+    if isinstance(spec, str):
+        try:
+            import json
+            spec = json.loads(spec)
+        except Exception:
+            return extracted
     if not isinstance(spec, dict):
         return extracted
 
@@ -318,7 +355,7 @@ async def free_ports(ports: Iterable[Any]) -> None:
         logger.debug(f"Error freeing ports {target_ports} via psutil: {e}")
 
     # Method 3: Tear down lingering half-open kernel TCP sockets on Linux via ss -K (SOCK_DESTROY)
-    if os.name == 'posix':
+    if os.name == 'posix' and shutil.which("ss"):
         for port_num in target_ports:
             try:
                 proc_kill = await asyncio.create_subprocess_exec(
@@ -417,8 +454,9 @@ async def safe_stop_subprocess(
                     continue
                 cmdline_str = " ".join(p.info.get('cmdline') or [])
                 for pat in patterns:
-                    if pat and str(pat).strip() in cmdline_str:
-                        logger.info(f"Terminating orphan core process {p.pid} matching '{pat}'")
+                    clean_pat = str(pat).strip() if pat else ""
+                    if len(clean_pat) >= 3 and clean_pat in cmdline_str:
+                        logger.info(f"Terminating orphan core process {p.pid} matching '{clean_pat}'")
                         p.kill()
                         try:
                             p.wait(timeout=0.5)
@@ -473,9 +511,9 @@ def is_port_listening_locally(port: int, proto: str = "any") -> bool:
                         if len(parts) >= 4:
                             local_addr = parts[1]
                             state = parts[3]
-                            if local_addr.endswith(f":{port_hex}"):
+                            if local_addr.upper().endswith(f":{port_hex}"):
                                 if "tcp" in pfile:
-                                    if state == "0A":  # TCP_LISTEN
+                                    if state.upper() == "0A":  # TCP_LISTEN
                                         return True
                                 else:
                                     return True
@@ -1063,10 +1101,9 @@ class BackhaulAdapter:
         ]
 
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
-        """Apply Backhaul tunnel - supports both server and client modes"""
-        if tunnel_id in self.processes or _is_tunnel_pid_alive(tunnel_id, "backhaul"):
-            logger.info(f"Backhaul tunnel {tunnel_id} already exists or running via PID, removing it first")
-            await self.remove(tunnel_id)
+        # Always remove any previous or orphan instance for this tunnel before applying
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.2)
 
         mode = spec.get('mode', 'client')
 
@@ -1426,7 +1463,7 @@ class BackhaulAdapter:
             except Exception:
                 pass
 
-        await safe_stop_subprocess(proc, patterns=[f"{tunnel_id}.toml"], pid=pid)
+        await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.toml"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
         for p in (config_path, cert_path, key_path):
@@ -1562,9 +1599,9 @@ class ChiselAdapter:
             if not ports and not local_port and tunnel_proto != 'socks5':
                 raise ValueError("Chisel client requires at least one port mapping")
 
-        if tunnel_id in self.processes:
-            logger.info(f"Chisel tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
+        # Always remove any previous or orphan instance for this tunnel before applying
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.2)
         
         if mode == 'server':
             control_port = spec.get('control_port') or spec.get('server_port') or spec.get('listen_port') or 8080
@@ -2776,9 +2813,8 @@ class GostAdapter:
                 raise ValueError("GOST client requires 'ports' array or 'listen_port' or 'port_ranges' in spec")
         
         # 2. Spec validation passed: cleanly stop existing process if any
-        if tunnel_id in self.processes:
-            logger.info(f"GOST tunnel {tunnel_id} already exists, removing it first")
-            await self.remove(tunnel_id)
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.2)
             
         auth_token = spec.get('auth_token', '')
         transport_type = (spec.get('transport_type') or spec.get('transport') or spec.get('gost_type') or 'tcp').lower()
@@ -3765,9 +3801,15 @@ class AdapterManager:
         self.start_watchdog()
 
     @staticmethod
-    def _extract_spec_ports(spec: Dict[str, Any]) -> Set[int]:
+    def _extract_spec_ports(spec: Any) -> Set[int]:
         """Extract all service and control ports defined in a tunnel spec"""
         ports: Set[int] = set()
+        if isinstance(spec, str):
+            try:
+                import json
+                spec = json.loads(spec)
+            except Exception:
+                return ports
         if not spec or not isinstance(spec, dict):
             return ports
         raw_ports = spec.get("ports", [])
@@ -4079,7 +4121,7 @@ class AdapterManager:
                         except Exception:
                             pass
 
-            if os.name == 'posix':
+            if os.name == 'posix' and shutil.which("ss"):
                 for p in target_ports:
                     try:
                         proc_kill = await asyncio.create_subprocess_exec(
@@ -4111,10 +4153,22 @@ class AdapterManager:
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
+            # Check if tunnel switched core type (e.g. rathole -> backhaul)
+            existing_config = self.tunnel_configs.get(tunnel_id, {})
+            old_core = existing_config.get("core")
+            if old_core and old_core != tunnel_core:
+                logger.info(f"Tunnel {tunnel_id} switched core from {old_core} to {tunnel_core}. Purging old core instance first.")
+                old_adapter = self.get_adapter(old_core)
+                if old_adapter:
+                    try:
+                        await old_adapter.remove(tunnel_id, purge=True)
+                    except Exception as e:
+                        logger.warning(f"Error purging old {old_core} adapter for {tunnel_id}: {e}")
+                self.active_tunnels.pop(tunnel_id, None)
+
             # Check if already running with exact same configuration (Idempotent Apply)
             force_restart = bool(spec.get("force_restart", False))
             if tunnel_id in self.active_tunnels and not force_restart:
-                existing_config = self.tunnel_configs.get(tunnel_id, {})
                 if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
                     t_status = adapter.status(tunnel_id)
                     if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):

@@ -231,7 +231,7 @@ def parse_ports_from_spec(spec: dict) -> list:
     return ports if ports else []
 
 
-def extract_all_tunnel_ports(spec: dict) -> Dict[str, Set[int]]:
+def extract_all_tunnel_ports(spec: Any) -> Dict[str, Set[int]]:
     """
     Extract both service ports and control/bind ports from a tunnel spec.
     Returns a dict with 'service_ports', 'control_ports', and 'all_ports'.
@@ -239,6 +239,13 @@ def extract_all_tunnel_ports(spec: dict) -> Dict[str, Set[int]]:
     service_ports: Set[int] = set()
     control_ports: Set[int] = set()
     
+    if isinstance(spec, str):
+        try:
+            import json
+            spec = json.loads(spec)
+        except Exception:
+            spec = {}
+            
     if not spec or not isinstance(spec, dict):
         return {"service_ports": service_ports, "control_ports": control_ports, "all_ports": set()}
     
@@ -360,20 +367,29 @@ async def check_port_conflicts(
                 extracted["control_ports"]
             ))
     else:
-        if iran_nid and str(iran_nid).strip() and extracted["service_ports"]:
+        if iran_nid and foreign_nid and str(iran_nid).strip() == str(foreign_nid).strip():
+            # Single-node direct tunnel binds both service and control ports on the single host
             nodes_to_check.append((
                 str(iran_nid).strip(),
-                "ایران (Iran)",
+                "سرور (Node)",
                 extracted["service_ports"],
-                set()
-            ))
-        if foreign_nid and str(foreign_nid).strip() and extracted["control_ports"]:
-            nodes_to_check.append((
-                str(foreign_nid).strip(),
-                "خارج (Foreign)",
-                set(),
                 extracted["control_ports"]
             ))
+        else:
+            if iran_nid and str(iran_nid).strip() and extracted["service_ports"]:
+                nodes_to_check.append((
+                    str(iran_nid).strip(),
+                    "ایران (Iran)",
+                    extracted["service_ports"],
+                    set()
+                ))
+            if foreign_nid and str(foreign_nid).strip() and extracted["control_ports"]:
+                nodes_to_check.append((
+                    str(foreign_nid).strip(),
+                    "خارج (Foreign)",
+                    set(),
+                    extracted["control_ports"]
+                ))
             
     if not nodes_to_check:
         return
@@ -2102,9 +2118,21 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
         nodes_to_notify.add(tunnel.iran_node_id)
 
     # Extract all ports from tunnel spec to ensure node agents release them cleanly
-    ports_info = extract_all_tunnel_ports(tunnel.spec or {})
+    raw_spec = tunnel.spec
+    if isinstance(raw_spec, str):
+        try:
+            import json
+            spec_dict = json.loads(raw_spec)
+        except Exception:
+            spec_dict = {}
+    elif isinstance(raw_spec, dict):
+        spec_dict = raw_spec
+    else:
+        spec_dict = {}
+
+    ports_info = extract_all_tunnel_ports(spec_dict)
     all_tunnel_ports = list(ports_info.get("all_ports", set()))
-    control_port = (tunnel.spec or {}).get("control_port")
+    control_port = spec_dict.get("control_port") or spec_dict.get("bind_port") or spec_dict.get("server_port")
 
     remove_payload = {
         "tunnel_id": tunnel.id,
