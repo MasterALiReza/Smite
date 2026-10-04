@@ -22,12 +22,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def registration_loop(panel_client: PanelClient):
+async def registration_loop(panel_client: PanelClient, app: FastAPI):
     """Periodic registration loop to pick up FRP config changes"""
     while True:
         try:
             await asyncio.sleep(60 + random.uniform(0, 15))  # Re-register every ~60s with jitter
-            if panel_client and panel_client.client:
+            if getattr(app.state, "decommissioned", False) or (panel_client and getattr(panel_client, "decommissioned", False)):
+                logger.info("Node marked as decommissioned. Terminating registration loop.")
+                app.state.decommissioned = True
+                break
+            if panel_client and panel_client.client and not getattr(panel_client, "decommissioned", False):
                 await panel_client.register_with_panel()
         except asyncio.CancelledError:
             break
@@ -38,6 +42,13 @@ async def registration_loop(panel_client: PanelClient):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
+    # Check if this node was decommissioned
+    if os.path.exists("/var/lib/smite-node/decommissioned") or os.path.exists("/etc/smite-node/decommissioned"):
+        logger.warning("Node is marked as DECOMMISSIONED. Skipping panel registration and tunnel restoration.")
+        app.state.decommissioned = True
+        yield
+        return
+
     h2_client = PanelClient()
     registration_task = None
     try:
@@ -50,7 +61,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Could not register with panel: {e}")
             logger.warning("Node will continue running but manual registration may be needed")
         
-        registration_task = asyncio.create_task(registration_loop(h2_client))
+        registration_task = asyncio.create_task(registration_loop(h2_client, app))
         app.state.registration_task = registration_task
     except Exception as e:
         logger.error(f"Failed to start Panel client: {e}")

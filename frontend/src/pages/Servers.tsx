@@ -118,21 +118,43 @@ const Servers = () => {
     const target = servers.find(s => s.id === id)
     const targetName = target?.name || 'this foreign server'
 
+    // Check linked tunnels count
+    let linkedCount = 0
+    try {
+      const tunnelsRes = await api.get('/tunnels')
+      const linked = (tunnelsRes.data || []).filter((t: any) => 
+        t.foreign_node_id === id || t.iran_node_id === id || t.node_id === id
+      )
+      linkedCount = linked.length
+    } catch {
+      // fallback
+    }
+
+    const confirmMsg = linkedCount > 0
+      ? `Are you sure you want to delete "${targetName}"? This server has ${linkedCount} active tunnel(s). All linked tunnels and their ports will be closed on both servers, and the remote Docker container will be decommissioned.`
+      : `Are you sure you want to delete "${targetName}"? The remote Docker container and all running services will be cleanly decommissioned.`
+
     const confirmed = await showConfirm({
-      title: 'Delete Foreign Server',
-      message: `Are you sure you want to delete "${targetName}"? Any tunnels linked to it may stop working.`,
+      title: 'Delete Server & Decommission',
+      message: confirmMsg,
       variant: 'danger',
-      confirmText: 'Delete Server'
+      confirmText: 'Delete & Decommission'
     })
     if (!confirmed) return
     
     setDeletingServerId(id)
-    showToast('info', 'Deleting Server', `Removing "${targetName}"...`, 2500)
+    showToast('info', 'Decommissioning Server', `Cleaning up tunnels and removing "${targetName}"...`, 3000)
 
     try {
-      await api.delete(`/nodes/${id}`)
-      setServers(prev => prev.filter(s => s.id !== id))
-      showToast('success', 'Deleted', `Foreign server "${targetName}" deleted successfully`)
+      const resp = await api.delete(`/nodes/${id}`)
+      setServers(prev => prev.filter(n => n.id !== id))
+      
+      const decomRemote = resp.data?.decommissioned_remote
+      if (decomRemote) {
+        showToast('success', 'Decommissioned', `Server "${targetName}" and its remote container were decommissioned cleanly.`, 4000)
+      } else {
+        showToast('warning', 'Deleted (Server Offline)', `Server "${targetName}" removed from panel. Remote server was offline; to clean up Docker manually, run: docker stop smite-node && docker rm -f smite-node`, 6000)
+      }
       fetchServers()
     } catch (error: any) {
       console.error('Failed to delete server:', error)

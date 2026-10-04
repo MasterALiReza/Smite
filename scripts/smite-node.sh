@@ -111,6 +111,8 @@ ARG_PORT=""
 ARG_NAME=""
 ARG_IP=""
 ARG_AUTO="false"
+ARG_UNINSTALL="false"
+ARG_FORCE="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -140,6 +142,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --auto)
             ARG_AUTO="true"
+            shift
+            ;;
+        --uninstall)
+            ARG_UNINSTALL="true"
+            shift
+            ;;
+        -y|--yes|--force)
+            ARG_FORCE="true"
             shift
             ;;
         *)
@@ -988,9 +998,58 @@ update_existing_node() {
 }
 
 # -------------------------------------------------------------
+# Function: Complete Uninstall & Cleanup of all Smite Nodes
+# -------------------------------------------------------------
+uninstall_all_nodes() {
+    echo ""
+    echo -e "${YELLOW}${BOLD}=== Smite Node Complete Uninstaller ===${NC}"
+    echo "This will stop and remove all Smite Node containers, volumes, and configurations from this server."
+    echo ""
+    if [ "$ARG_FORCE" != "true" ]; then
+        read -p "Type 'yes' to confirm complete uninstall: " CONFIRM_UNINST
+        if [ "$CONFIRM_UNINST" != "yes" ]; then
+            info "Uninstall cancelled."
+            exit 0
+        fi
+    fi
+
+    echo ""
+    info "Stopping and removing Smite Node Docker containers..."
+    for c in smite-node smite-node-2 smite-node-3 smite-node-4 smite-node-5; do
+        if docker ps -a --format '{{.Names}}' | grep -q "^${c}$"; then
+            info "Removing container: ${c}..."
+            docker stop "$c" >/dev/null 2>&1 || true
+            docker rm -f "$c" >/dev/null 2>&1 || true
+            progress "Container ${c} removed"
+        fi
+        docker volume rm -f "${c}-data" >/dev/null 2>&1 || true
+    done
+    docker volume rm -f smite-node-data >/dev/null 2>&1 || true
+
+    info "Cleaning up node directories..."
+    for d in /opt/smite-node /opt/smite-node-[0-9]* /usr/local/node; do
+        if [ -d "$d" ]; then
+            info "Removing directory: $d..."
+            rm -rf "$d"
+            progress "Directory $d removed"
+        fi
+    done
+
+    rm -f /usr/local/bin/smite-node 2>/dev/null || true
+    echo ""
+    progress "Smite Node has been completely uninstalled from this server."
+    exit 0
+}
+
+# -------------------------------------------------------------
 # MAIN DISPATCHER
 # -------------------------------------------------------------
 scan_existing_nodes
+
+# Check if uninstaller triggered via --uninstall flag
+if [ "$ARG_UNINSTALL" = "true" ]; then
+    uninstall_all_nodes
+fi
 
 # Check if One-Click automated join is triggered via flags
 if [ "$ARG_AUTO" = "true" ]; then
@@ -1030,9 +1089,10 @@ else
     echo -e "  1) ${GREEN}Add a new parallel Node${NC} (e.g., ${next_cname} in ${next_dir}) [Recommended]"
     echo -e "  2) ${CYAN}Update an existing Node${NC} (pull latest image & restart safely)"
     echo -e "  3) ${YELLOW}Reinstall / Overwrite an existing Node${NC} (with safe backup)"
-    echo -e "  4) Cancel / Exit"
+    echo -e "  4) ${RED}Uninstall / Remove all Smite Nodes from this server${NC}"
+    echo -e "  5) Cancel / Exit"
     echo ""
-    read -p "Enter choice [1-4] (default: 1): " ACTION_CHOICE
+    read -p "Enter choice [1-5] (default: 1): " ACTION_CHOICE
     ACTION_CHOICE=${ACTION_CHOICE:-1}
 
     case "$ACTION_CHOICE" in
@@ -1099,6 +1159,9 @@ else
             deploy_node_instance "$target_d" "$target_c" "$vname" "$inst_num"
             ;;
         4)
+            uninstall_all_nodes
+            ;;
+        5)
             info "Operation cancelled by user."
             exit 0
             ;;

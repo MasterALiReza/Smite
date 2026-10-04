@@ -118,21 +118,43 @@ const Nodes = () => {
     const target = nodes.find(n => n.id === id)
     const targetName = target?.name || 'this Iran node'
 
+    // Check linked tunnels count
+    let linkedCount = 0
+    try {
+      const tunnelsRes = await api.get('/tunnels')
+      const linked = (tunnelsRes.data || []).filter((t: any) => 
+        t.iran_node_id === id || t.foreign_node_id === id || t.node_id === id
+      )
+      linkedCount = linked.length
+    } catch {
+      // fallback
+    }
+
+    const confirmMsg = linkedCount > 0
+      ? `Are you sure you want to delete "${targetName}"? This node has ${linkedCount} active tunnel(s). All linked tunnels and their ports will be closed on both servers, and the remote Docker container will be decommissioned.`
+      : `Are you sure you want to delete "${targetName}"? The remote Docker container and all running services will be cleanly decommissioned.`
+
     const confirmed = await showConfirm({
-      title: 'Delete Node',
-      message: `Are you sure you want to delete "${targetName}"? Any tunnels linked to it may stop working.`,
+      title: 'Delete Node & Decommission',
+      message: confirmMsg,
       variant: 'danger',
-      confirmText: 'Delete Node'
+      confirmText: 'Delete & Decommission'
     })
     if (!confirmed) return
     
     setDeletingNodeId(id)
-    showToast('info', 'Deleting Node', `Removing "${targetName}"...`, 2500)
+    showToast('info', 'Decommissioning Node', `Cleaning up tunnels and removing "${targetName}"...`, 3000)
 
     try {
-      await api.delete(`/nodes/${id}`)
+      const resp = await api.delete(`/nodes/${id}`)
       setNodes(prev => prev.filter(n => n.id !== id))
-      showToast('success', 'Deleted', `Node "${targetName}" deleted successfully`)
+      
+      const decomRemote = resp.data?.decommissioned_remote
+      if (decomRemote) {
+        showToast('success', 'Decommissioned', `Node "${targetName}" and its remote container were decommissioned cleanly.`, 4000)
+      } else {
+        showToast('warning', 'Deleted (Node Offline)', `Node "${targetName}" removed from panel. Remote server was offline; to clean up Docker manually, run: docker stop smite-node && docker rm -f smite-node`, 6000)
+      }
       fetchNodes()
     } catch (error: any) {
       console.error('Failed to delete node:', error)

@@ -1,7 +1,7 @@
 """Nodes API endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
@@ -92,19 +92,34 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         
     incoming_role = payload.role if payload.role in ["iran", "foreign"] else "foreign"
     
-    # Reverse probe verification (honest status reporting)
+    # Reverse probe verification with retry (gives starting containers time to accept traffic)
+    import asyncio
     client_conn_status = "disconnected"
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
-            if resp.status_code == 200:
-                client_conn_status = "connected"
-    except Exception as e:
-        logger.warning(f"Probe to http://{payload.ip_address}:{payload.api_port} failed: {e}")
-        client_conn_status = "disconnected"
+    for probe_attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
+                if resp.status_code == 200:
+                    client_conn_status = "connected"
+                    break
+        except Exception as e:
+            if probe_attempt < 2:
+                await asyncio.sleep(1.0)
+            else:
+                logger.info(f"Probe to http://{payload.ip_address}:{payload.api_port} attempt {probe_attempt+1} failed: {e}")
 
     fingerprint_data = f"{payload.ip_address}:{payload.api_port}".encode()
     fingerprint = hashlib.sha256(fingerprint_data).hexdigest()[:16]
+
+    # Clear decommission tombstone if node is re-registering via legitimate token
+    decom_res = await db.execute(select(Settings).where(Settings.key == "decommissioned_nodes"))
+    decom_setting = decom_res.scalar_one_or_none()
+    if decom_setting and decom_setting.value and fingerprint in decom_setting.value:
+        from sqlalchemy.orm.attributes import flag_modified
+        new_val = decom_setting.value.copy()
+        new_val.pop(fingerprint, None)
+        decom_setting.value = new_val
+        flag_modified(decom_setting, "value")
 
     result = await db.execute(select(Node).where(Node.fingerprint == fingerprint))
     existing = result.scalar_one_or_none()
@@ -211,6 +226,33 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
     
     result = await db.execute(select(Node).where(Node.fingerprint == fingerprint))
     existing = result.scalar_one_or_none()
+
+    # Check tombstone / decommissioned status to prevent zombie node auto-resurrection
+    decom_res = await db.execute(select(Settings).where(Settings.key == "decommissioned_nodes"))
+    decom_setting = decom_res.scalar_one_or_none()
+    is_decommissioned = bool(decom_setting and decom_setting.value and fingerprint in decom_setting.value)
+
+    if is_decommissioned:
+        if current_user is not None:
+            # Admin is explicitly re-adding the node, remove from tombstone
+            from sqlalchemy.orm.attributes import flag_modified
+            new_val = decom_setting.value.copy()
+            new_val.pop(fingerprint, None)
+            decom_setting.value = new_val
+            flag_modified(decom_setting, "value")
+        else:
+            # Unauthenticated registration from decommissioned node: reject!
+            raise HTTPException(
+                status_code=403,
+                detail="This node has been decommissioned. Re-add from panel or use Auto Join."
+            )
+
+    if not existing and current_user is None:
+        # Prevent unauthenticated zombie node creation
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthenticated registration of new nodes is disabled. Use Auto Join with a valid registration token."
+        )
     
     metadata = node.metadata.copy() if node.metadata else {}
     metadata["api_address"] = f"http://{node.ip_address}:{node.api_port}"
@@ -602,13 +644,138 @@ async def update_frp_status(node_id: str, frp_status: dict, request: Request, db
 
 @router.delete("/{node_id}")
 async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
-    """Delete a node"""
+    """Cleanly delete a node:
+    1. Cascade teardown: release ports and remove all linked tunnels on counterpart nodes.
+    2. Decommission remote node: instruct remote agent to kill all tunnel processes,
+       cancel registration loop, and cleanly terminate its container.
+    3. Blacklist/tombstone: record fingerprint so this node cannot re-register automatically as a zombie.
+    4. Delete node and linked tunnel records from database.
+    """
+    from app.models import Tunnel
+    from app.routers.tunnels import extract_all_tunnel_ports
+    import asyncio
+
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     
+    node_fingerprint = node.fingerprint
+    node_name = node.name
+
+    # 1. Find all linked tunnels
+    tunnel_res = await db.execute(
+        select(Tunnel).where(
+            or_(
+                Tunnel.iran_node_id == node_id,
+                Tunnel.foreign_node_id == node_id,
+                Tunnel.node_id == node_id
+            )
+        )
+    )
+    linked_tunnels = tunnel_res.scalars().all()
+    client = NodeClient()
+
+    # 2. Cascade cleanup of linked tunnels on counterpart nodes
+    tunnels_cleaned = 0
+    for tunnel in linked_tunnels:
+        try:
+            # Determine the counterpart node
+            counterpart_id = None
+            if tunnel.iran_node_id == node_id:
+                counterpart_id = tunnel.foreign_node_id
+            elif tunnel.foreign_node_id == node_id:
+                counterpart_id = tunnel.iran_node_id
+
+            # Extract ports to free on the counterpart node
+            raw_spec = tunnel.spec or {}
+            if isinstance(raw_spec, str):
+                try:
+                    import json
+                    spec_dict = json.loads(raw_spec)
+                except Exception:
+                    spec_dict = {}
+            else:
+                spec_dict = raw_spec
+
+            ports_info = extract_all_tunnel_ports(spec_dict)
+            all_ports = list(ports_info.get("all_ports", set()))
+            ctrl_port = spec_dict.get("control_port") or spec_dict.get("bind_port") or spec_dict.get("server_port")
+
+            if counterpart_id and counterpart_id != node_id:
+                remove_payload = {
+                    "tunnel_id": tunnel.id,
+                    "purge": True,
+                    "core": tunnel.core,
+                    "ports": all_ports,
+                    "control_port": ctrl_port,
+                }
+                try:
+                    await asyncio.wait_for(
+                        client.send_to_node(
+                            node_id=counterpart_id,
+                            endpoint="/api/agent/tunnels/remove",
+                            data=remove_payload
+                        ),
+                        timeout=5.0
+                    )
+                    logger.info(f"[Cascade] Notified counterpart node {counterpart_id} to release ports for tunnel {tunnel.id}")
+                except Exception as peer_err:
+                    logger.warning(f"[Cascade] Failed to notify counterpart node {counterpart_id}: {peer_err}")
+
+            # Delete the tunnel record
+            await db.delete(tunnel)
+            tunnels_cleaned += 1
+        except Exception as t_err:
+            logger.error(f"[Cascade] Error cleaning tunnel {tunnel.id}: {t_err}")
+
+    # 3. Instruct target node agent to decommission (kill all processes, stop FRP, stop container)
+    decommissioned_remote = False
+    try:
+        decom_resp = await asyncio.wait_for(
+            client.send_to_node(
+                node_id=node_id,
+                endpoint="/api/agent/decommission",
+                data={"action": "decommission", "stop_container": True}
+            ),
+            timeout=5.0
+        )
+        if isinstance(decom_resp, dict) and decom_resp.get("status") in ["success", "decommissioned"]:
+            decommissioned_remote = True
+            logger.info(f"Node {node_id} ({node_name}) successfully decommissioned remotely: {decom_resp}")
+    except Exception as d_err:
+        logger.warning(f"Remote decommission request failed for node {node_id} (node may be offline/unreachable): {d_err}")
+
+    # 4. Record fingerprint in tombstone setting to prevent zombie auto-registration
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        settings_res = await db.execute(select(Settings).where(Settings.key == "decommissioned_nodes"))
+        decom_setting = settings_res.scalar_one_or_none()
+        if not decom_setting:
+            decom_setting = Settings(key="decommissioned_nodes", value={})
+            db.add(decom_setting)
+        
+        current_decom = decom_setting.value.copy() if decom_setting.value else {}
+        current_decom[node_fingerprint] = {
+            "name": node_name,
+            "decommissioned_at": datetime.utcnow().isoformat(),
+            "tunnels_removed": tunnels_cleaned
+        }
+        decom_setting.value = current_decom
+        flag_modified(decom_setting, "value")
+    except Exception as s_err:
+        logger.warning(f"Could not record tombstone for node {node_id}: {s_err}")
+
+    # 5. Delete node from database
     await db.delete(node)
     await db.commit()
-    return {"status": "deleted"}
+
+    logger.info(f"Node {node_id} ('{node_name}') deleted. Tunnels removed: {tunnels_cleaned}, remote decommissioned: {decommissioned_remote}")
+    return {
+        "status": "deleted",
+        "node_id": node_id,
+        "name": node_name,
+        "tunnels_removed": tunnels_cleaned,
+        "decommissioned_remote": decommissioned_remote
+    }
 

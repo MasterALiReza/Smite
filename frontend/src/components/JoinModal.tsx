@@ -31,8 +31,8 @@ export const JoinModal: React.FC<JoinModalProps> = ({ isOpen, onClose, role }) =
       const regToken = resp.data.token
       setToken(regToken)
       
-      const host = window.location.host || '127.0.0.1:8000'
-      const cmd = `curl -sSL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh | sudo bash -s -- --panel ${host} --token ${regToken} --role ${role}`
+      const panelOrigin = window.location.origin || `${window.location.protocol}//${window.location.host}` || 'http://127.0.0.1:8000'
+      const cmd = `curl -sSL https://raw.githubusercontent.com/MasterALiReza/Smite/main/scripts/smite-node.sh | sudo bash -s -- --panel ${panelOrigin} --token ${regToken} --role ${role}`
       setCommand(cmd)
     } catch (err: any) {
       console.error('Failed to get join token:', err)

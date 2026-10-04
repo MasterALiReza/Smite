@@ -5,6 +5,10 @@ from typing import Dict, Any, Optional, List
 import hmac
 import logging
 import re
+import os
+import signal
+import asyncio
+from datetime import datetime
 
 from app.config import settings
 
@@ -225,5 +229,91 @@ async def ping_target(target: str, port: int = None):
     fallback_ports.extend([8888, 8889, 22, 443, 80, 8080, 7000])
     res = await _measure_precise_ping(target, fallback_ports)
     return {"status": "ok", "target": target, "latency_ms": res}
+
+
+class DecommissionRequest(BaseModel):
+    action: Optional[str] = "decommission"
+    stop_container: Optional[bool] = True
+
+
+@router.post("/decommission")
+async def decommission_node(request: Request, payload: Optional[DecommissionRequest] = None):
+    """Decommission this node: terminate all active tunnels, stop FRP, cancel registration, and self-terminate."""
+    logger.warning("Received DECOMMISSION request from panel. Initiating clean teardown...")
+    app = request.app
+    app.state.decommissioned = True
+
+    # 1. Cancel background registration task immediately so it will never re-register
+    if hasattr(app.state, 'registration_task') and app.state.registration_task:
+        try:
+            app.state.registration_task.cancel()
+            logger.info("Registration task cancelled.")
+        except Exception as e:
+            logger.debug(f"Error cancelling registration task: {e}")
+
+    # 2. Touch persistent decommission marker files so restarted containers refuse to register
+    for marker_path in ["/var/lib/smite-node/decommissioned", "/etc/smite-node/decommissioned"]:
+        try:
+            os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+            with open(marker_path, "w") as f:
+                f.write(f"decommissioned_at={datetime.utcnow().isoformat()}\n")
+            logger.info(f"Created persistent decommission marker: {marker_path}")
+        except Exception as e:
+            logger.debug(f"Could not write marker to {marker_path}: {e}")
+
+    # 3. Cleanup all active tunnels with kill_processes=True (releases ports, kills gost/rathole/etc.)
+    adapter_manager = getattr(app.state, 'adapter_manager', None)
+    killed_tunnels = 0
+    if adapter_manager:
+        killed_tunnels = len(adapter_manager.active_tunnels)
+        try:
+            await adapter_manager.cleanup(kill_processes=True)
+            logger.info(f"Adapter manager cleaned up: {killed_tunnels} tunnels terminated and ports released.")
+        except Exception as e:
+            logger.error(f"Error during adapter manager cleanup: {e}", exc_info=True)
+
+    # 4. Stop FRP client if running
+    try:
+        from app.frp_comm import frp_comm_client
+        if frp_comm_client.is_running():
+            await frp_comm_client.stop()
+            logger.info("FRP comm client stopped.")
+    except Exception as e:
+        logger.debug(f"Error stopping FRP comm client: {e}")
+
+    # 5. Stop panel client if running
+    if hasattr(app.state, 'h2_client') and app.state.h2_client:
+        try:
+            app.state.h2_client.decommissioned = True
+            await app.state.h2_client.stop()
+            logger.info("Panel client stopped.")
+        except Exception as e:
+            logger.debug(f"Error stopping panel client: {e}")
+
+    # 6. Schedule graceful exit so Docker container stops cleanly
+    should_stop = payload.stop_container if payload and payload.stop_container is not None else True
+    if should_stop:
+        async def delayed_exit():
+            await asyncio.sleep(1.5)
+            logger.warning("Decommission grace period completed. Stopping agent container process...")
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except Exception:
+                pass
+            await asyncio.sleep(1.5)
+            try:
+                os._exit(0)
+            except Exception:
+                pass
+
+        asyncio.create_task(delayed_exit())
+
+    return {
+        "status": "success",
+        "message": "Node decommissioned successfully",
+        "killed_tunnels": killed_tunnels,
+        "container_stopping": should_stop
+    }
+
 
 

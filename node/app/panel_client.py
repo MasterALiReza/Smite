@@ -151,6 +151,21 @@ class PanelClient:
                     logger.info(f"[HTTP] FRP communication not enabled, continuing with HTTP")
                 
                 return True
+            elif response.status_code == 403 and "decommissioned" in response.text.lower():
+                logger.warning(f"Panel reported that this node has been DECOMMISSIONED: {response.text}. Ceasing future registrations.")
+                self.decommissioned = True
+                try:
+                    import os
+                    for m_dir in ["/var/lib/smite-node", "/etc/smite-node"]:
+                        try:
+                            os.makedirs(m_dir, exist_ok=True)
+                            with open(f"{m_dir}/decommissioned", "w") as f:
+                                f.write("panel_decommissioned=true\n")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return False
             else:
                 logger.error(f"Registration failed: {response.status_code} - {response.text}")
                 return False
