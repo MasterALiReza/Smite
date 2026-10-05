@@ -49,26 +49,6 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    h2_client = PanelClient()
-    registration_task = None
-    try:
-        await h2_client.start()
-        app.state.h2_client = h2_client
-        
-        try:
-            await h2_client.register_with_panel()
-        except Exception as e:
-            logger.warning(f"Could not register with panel: {e}")
-            logger.warning("Node will continue running but manual registration may be needed")
-        
-        registration_task = asyncio.create_task(registration_loop(h2_client, app))
-        app.state.registration_task = registration_task
-    except Exception as e:
-        logger.error(f"Failed to start Panel client: {e}")
-        logger.error("Node API will still be available, but panel connection will not work")
-        logger.error("Make sure CA certificate is available at the configured path")
-        app.state.h2_client = None
-    
     if os.name == 'posix':
         try:
             import resource
@@ -90,6 +70,27 @@ async def lifespan(app: FastAPI):
         await adapter_manager.restore_tunnels()
     except Exception as e:
         logger.error(f"Failed to restore tunnels on startup: {e}", exc_info=True)
+
+    h2_client = PanelClient()
+    h2_client.adapter_manager = adapter_manager
+    registration_task = None
+    try:
+        await h2_client.start()
+        app.state.h2_client = h2_client
+        
+        try:
+            await h2_client.register_with_panel()
+        except Exception as e:
+            logger.warning(f"Could not register with panel: {e}")
+            logger.warning("Node will continue running but manual registration may be needed")
+        
+        registration_task = asyncio.create_task(registration_loop(h2_client, app))
+        app.state.registration_task = registration_task
+    except Exception as e:
+        logger.error(f"Failed to start Panel client: {e}")
+        logger.error("Node API will still be available, but panel connection will not work")
+        logger.error("Make sure CA certificate is available at the configured path")
+        app.state.h2_client = None
     
     yield
     if hasattr(app.state, 'registration_task') and app.state.registration_task:

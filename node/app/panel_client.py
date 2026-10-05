@@ -24,6 +24,7 @@ class PanelClient:
         self.registered = False
         self.using_frp = False
         self.frp_panel_url: Optional[str] = None
+        self.adapter_manager = None
     
     async def start(self):
         """Start client and connect to panel"""
@@ -150,6 +151,32 @@ class PanelClient:
                         self.using_frp = False
                     logger.info(f"[HTTP] FRP communication not enabled, continuing with HTTP")
                 
+                # Process pending removals dispatched from panel
+                pending_removals = metadata.get("pending_removals")
+                if pending_removals and getattr(self, "adapter_manager", None):
+                    for rem in pending_removals:
+                        t_id = rem.get("tunnel_id")
+                        if t_id:
+                            try:
+                                logger.info(f"[Reconciliation] Executing pending tunnel removal for {t_id}")
+                                await self.adapter_manager.remove_tunnel(
+                                    tunnel_id=t_id,
+                                    purge=bool(rem.get("purge", True)),
+                                    ports=rem.get("ports"),
+                                    control_port=rem.get("control_port"),
+                                    core=rem.get("core")
+                                )
+                            except Exception as e:
+                                logger.warning(f"[Reconciliation] Error executing pending removal for {t_id}: {e}")
+
+                # Reconcile local active tunnels against panel authoritative list
+                active_tunnel_ids = metadata.get("active_tunnel_ids")
+                if isinstance(active_tunnel_ids, list) and getattr(self, "adapter_manager", None):
+                    try:
+                        await self.adapter_manager.reconcile_active_tunnels(active_tunnel_ids)
+                    except Exception as e:
+                        logger.warning(f"[Reconciliation] Error reconciling active tunnels: {e}")
+
                 return True
             elif response.status_code == 403 and "decommissioned" in response.text.lower():
                 logger.warning(f"Panel reported that this node has been DECOMMISSIONED: {response.text}. Ceasing future registrations.")

@@ -290,4 +290,53 @@ async def test_inspect_tunnel_health_dict_ports_and_bind_port():
         srv.close()
 
 
+@pytest.mark.asyncio
+async def test_adapter_manager_reconcile_active_tunnels(tmp_path):
+    """Test AdapterManager.reconcile_active_tunnels safely purges orphans while preserving active tunnels"""
+    manager = AdapterManager()
+    manager.tunnel_configs = {
+        "active-tun-1": {"core": "rathole", "spec": {}},
+        "orphan-tun-2": {"core": "gost", "spec": {}},
+    }
+    manager.active_tunnels = {
+        "active-tun-1": MagicMock(),
+        "orphan-tun-2": MagicMock(),
+    }
+    manager.remove_tunnel = AsyncMock()
+
+    with patch("node.app.core_adapters._get_pid_dir", return_value=tmp_path):
+        # Reconcile with panel having only active-tun-1
+        await manager.reconcile_active_tunnels(["active-tun-1"])
+
+    # orphan-tun-2 must be purged
+    manager.remove_tunnel.assert_called_once_with("orphan-tun-2", purge=True)
+
+
+@pytest.mark.asyncio
+async def test_enrich_node_response_metadata():
+    """Test enrich_node_response_metadata injects active_tunnel_ids and flushes pending removals"""
+    from panel.app.routers.nodes import enrich_node_response_metadata
+    
+    mock_db = AsyncMock()
+    mock_t_res = MagicMock()
+    mock_t_res.scalars.return_value.all.return_value = ["tunnel-1", "tunnel-2"]
+    
+    # Mock settings response with pending removals for node-100
+    mock_setting = MagicMock()
+    mock_setting.value = {"node-100": [{"tunnel_id": "ghost-1", "purge": True}]}
+    mock_s_res = MagicMock()
+    mock_s_res.scalar_one_or_none.return_value = mock_setting
+    
+    mock_db.execute.side_effect = [mock_t_res, mock_s_res]
+    
+    initial_metadata = {"role": "foreign", "ip_address": "1.2.3.4"}
+    enriched = await enrich_node_response_metadata(mock_db, "node-100", initial_metadata)
+    
+    assert enriched["active_tunnel_ids"] == ["tunnel-1", "tunnel-2"]
+    assert enriched["pending_removals"] == [{"tunnel_id": "ghost-1", "purge": True}]
+    assert "node-100" not in mock_setting.value
+    mock_db.commit.assert_called_once()
+
+
+
 

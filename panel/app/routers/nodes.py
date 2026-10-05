@@ -9,7 +9,7 @@ import httpx
 import logging
 
 from app.database import get_db
-from app.models import Node, Settings, Admin
+from app.models import Node, Settings, Admin, Tunnel
 from app.node_client import NodeClient
 from app.routers.auth import get_current_user, get_current_user_optional
 
@@ -78,6 +78,46 @@ async def get_country_info(ip: str) -> tuple:
         pass
 
     return ("", "")
+
+
+async def enrich_node_response_metadata(db: AsyncSession, node_id: str, metadata: dict) -> dict:
+    """Enrich node response metadata with authoritative active tunnels and pending removals"""
+    enriched = metadata.copy() if metadata else {}
+    
+    # 1. Authoritative active tunnels
+    try:
+        t_res = await db.execute(
+            select(Tunnel.id).where(
+                or_(
+                    Tunnel.node_id == node_id,
+                    Tunnel.foreign_node_id == node_id,
+                    Tunnel.iran_node_id == node_id
+                ),
+                Tunnel.status.in_(["active", "pending", "stopped", "running"])
+            )
+        )
+        enriched["active_tunnel_ids"] = list(t_res.scalars().all())
+    except Exception as e:
+        logger.warning(f"Failed to query active tunnels for node {node_id}: {e}")
+
+    # 2. Check pending tunnel removals
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        p_res = await db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+        p_setting = p_res.scalar_one_or_none()
+        if p_setting and p_setting.value and node_id in p_setting.value:
+            pending_list = p_setting.value.get(node_id, [])
+            if pending_list:
+                enriched["pending_removals"] = pending_list
+                new_p = dict(p_setting.value)
+                new_p.pop(node_id, None)
+                p_setting.value = new_p
+                flag_modified(p_setting, "value")
+                await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to check pending removals for node {node_id}: {e}")
+
+    return enriched
 
 
 @router.post("/auto-register", response_model=NodeResponse)
@@ -180,6 +220,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         existing.node_metadata.update(metadata)
         await db.commit()
         await db.refresh(existing)
+        resp_meta = await enrich_node_response_metadata(db, existing.id, existing.node_metadata)
         return NodeResponse(
             id=existing.id,
             name=existing.name,
@@ -187,7 +228,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
             status=existing.status,
             registered_at=existing.registered_at,
             last_seen=existing.last_seen,
-            metadata=existing.node_metadata
+            metadata=resp_meta
         )
     else:
         db_node = Node(
@@ -199,6 +240,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         db.add(db_node)
         await db.commit()
         await db.refresh(db_node)
+        resp_meta = await enrich_node_response_metadata(db, db_node.id, db_node.node_metadata)
         return NodeResponse(
             id=db_node.id,
             name=db_node.name,
@@ -206,7 +248,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
             status=db_node.status,
             registered_at=db_node.registered_at,
             last_seen=db_node.last_seen,
-            metadata=db_node.node_metadata
+            metadata=resp_meta
         )
 
 
@@ -321,6 +363,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
                 "token": frp_setting.value.get("token")
             }
         
+        response_metadata = await enrich_node_response_metadata(db, existing.id, response_metadata)
         return NodeResponse(
             id=existing.id,
             name=existing.name,
@@ -373,6 +416,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
             "token": frp_setting.value.get("token")
         }
     
+    response_metadata = await enrich_node_response_metadata(db, db_node.id, response_metadata)
     return NodeResponse(
         id=db_node.id,
         name=db_node.name,

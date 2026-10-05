@@ -4216,6 +4216,42 @@ class AdapterManager:
                 core=core
             )
         self._tunnel_locks.pop(tunnel_id, None)
+
+    async def reconcile_active_tunnels(self, authoritative_ids: List[str]):
+        """Reconcile local tunnels against authoritative list from panel.
+        Orphan/ghost tunnels running locally or saved on disk that do not exist
+        in authoritative_ids are safely purged.
+        Active valid tunnels are left completely untouched (zero downtime).
+        """
+        auth_set = set(str(tid).strip() for tid in authoritative_ids if tid and str(tid).strip())
+        
+        # 1. Gather all local tunnel IDs currently tracked in memory / disk json
+        local_ids = set(self.tunnel_configs.keys()) | set(self.active_tunnels.keys())
+        
+        # 2. Check recorded PID files (e.g. detached processes)
+        pdir = _get_pid_dir()
+        if pdir.exists():
+            try:
+                for pf in pdir.glob("*.pid"):
+                    stem = pf.stem
+                    if stem.endswith("_provider"):
+                        stem = stem[:-9]
+                    if stem and len(stem) >= 8 and not stem.startswith("default"):
+                        local_ids.add(stem)
+            except Exception:
+                pass
+
+        orphans = [tid for tid in local_ids if tid not in auth_set]
+        if not orphans:
+            return
+            
+        logger.warning(f"Reconciliation: detected {len(orphans)} orphan/ghost tunnel(s) not in panel authoritative list: {orphans}. Purging cleanly...")
+        for orphan_id in orphans:
+            try:
+                await self.remove_tunnel(orphan_id, purge=True)
+                logger.info(f"Reconciliation: successfully purged orphan tunnel {orphan_id}")
+            except Exception as e:
+                logger.error(f"Reconciliation: failed to purge orphan tunnel {orphan_id}: {e}")
     
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get tunnel status with non-destructive live adoption fallback"""

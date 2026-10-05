@@ -441,6 +441,8 @@ async def check_port_conflicts(
                 if nid in {ex.iran_node_id, ex.node_id}:
                     ex_bound_svc = ex_ports_info["service_ports"]
                     ex_bound_ctrl = ex_ports_info["control_ports"]
+                elif ex.foreign_node_id and nid == ex.foreign_node_id:
+                    ex_bound_svc = ex_ports_info["service_ports"]
             else:
                 # Direct tunnel:
                 if ex.foreign_node_id and ex.iran_node_id:
@@ -2142,25 +2144,58 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
         "control_port": control_port,
     }
 
-    async def _notify_node(n_id: str):
-        try:
-            await asyncio.wait_for(
-                client.send_to_node(
-                    node_id=n_id,
-                    endpoint="/api/agent/tunnels/remove",
-                    data=remove_payload
-                ),
-                timeout=6.0
-            )
-        except Exception as e:
-            logger.warning(f"Failed to notify node {n_id} during tunnel removal: {e}")
+    failed_nodes: List[str] = []
+
+    async def _notify_node(n_id: str) -> bool:
+        for attempt in range(3):
+            try:
+                await asyncio.wait_for(
+                    client.send_to_node(
+                        node_id=n_id,
+                        endpoint="/api/agent/tunnels/remove",
+                        data=remove_payload
+                    ),
+                    timeout=5.0
+                )
+                return True
+            except Exception as e:
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.warning(f"Failed to notify node {n_id} during tunnel removal after 3 attempts: {e}")
+                    return False
+        return False
 
     if nodes_to_notify:
-        await asyncio.gather(*[_notify_node(n_id) for n_id in nodes_to_notify], return_exceptions=True)
-    
+        results = await asyncio.gather(*[_notify_node(n_id) for n_id in nodes_to_notify], return_exceptions=True)
+        for n_id, res in zip(nodes_to_notify, results):
+            if res is not True:
+                failed_nodes.append(n_id)
+
+    if failed_nodes:
+        # Save to pending_tunnel_removals in Settings so node purges it as soon as reachable/re-registered
+        try:
+            from app.models import Settings
+            from sqlalchemy.orm.attributes import flag_modified
+            s_res = await db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+            s_row = s_res.scalar_one_or_none()
+            if not s_row:
+                s_row = Settings(key="pending_tunnel_removals", value={})
+                db.add(s_row)
+            current_pending = dict(s_row.value or {})
+            for fn_id in failed_nodes:
+                node_list = list(current_pending.get(fn_id, []))
+                if not any(item.get("tunnel_id") == tunnel.id for item in node_list):
+                    node_list.append(remove_payload)
+                current_pending[fn_id] = node_list
+            s_row.value = current_pending
+            flag_modified(s_row, "value")
+        except Exception as e:
+            logger.error(f"Failed to persist pending tunnel removal: {e}")
+
     await db.delete(tunnel)
     await db.commit()
-    logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database, notified nodes {nodes_to_notify}, freed ports: {all_tunnel_ports}")
+    logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database, notified nodes {nodes_to_notify} (failed: {failed_nodes}), freed ports: {all_tunnel_ports}")
     return {"status": "deleted"}
 
 
