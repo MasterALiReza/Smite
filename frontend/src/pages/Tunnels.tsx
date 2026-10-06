@@ -15,13 +15,18 @@ import {
 import EditTunnelModal from './tunnels/EditTunnelModal'
 import AddTunnelModal from './tunnels/AddTunnelModal'
 
+let _cachedTunnels: Tunnel[] = []
+let _cachedCategories: TunnelCategory[] = []
+let _cachedTunnelsIranNodes: any[] = []
+let _cachedTunnelsForeignServers: any[] = []
+
 const Tunnels = () => {
   const { t } = useLanguage()
   const { showToast, showConfirm } = useToast()
-  const [tunnels, setTunnels] = useState<Tunnel[]>([])
-  const [nodes, setNodes] = useState<any[]>([])
-  const [servers, setServers] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [tunnels, setTunnels] = useState<Tunnel[]>(_cachedTunnels)
+  const [nodes, setNodes] = useState<any[]>(_cachedTunnelsIranNodes)
+  const [servers, setServers] = useState<any[]>(_cachedTunnelsForeignServers)
+  const [loading, setLoading] = useState(_cachedTunnels.length === 0)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingTunnel, setEditingTunnel] = useState<Tunnel | null>(null)
   // Per-tunnel reapply loading (stores the tunnel id being reapplied)
@@ -36,7 +41,7 @@ const Tunnels = () => {
   const [livePingEnabled, setLivePingEnabled] = useState(true)
 
   // ─── Category & Multi-Selection States ───────────────────────
-  const [categories, setCategories] = useState<TunnelCategory[]>([])
+  const [categories, setCategories] = useState<TunnelCategory[]>(_cachedCategories)
   const [activeCategoryTab, setActiveCategoryTab] = useState<string>('all')
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
   const categoryDropdownRef = useRef<HTMLDivElement>(null)
@@ -149,25 +154,37 @@ const Tunnels = () => {
 
   const fetchData = async () => {
     try {
-      const [tunnelsRes, nodesRes, categoriesRes] = await Promise.all([
+      // 1. Fetch tunnels & categories first - returns immediately
+      const [tunnelsRes, categoriesRes] = await Promise.all([
         api.get('/tunnels'),
-        api.get('/nodes'),
         api.get('/tunnels/categories').catch(() => ({ data: [] })),
       ])
-      setTunnels(tunnelsRes.data)
-      setCategories(categoriesRes.data || [])
-      // Filter nodes: iran nodes and foreign servers
-      const iranNodes = nodesRes.data.filter((node: any) => 
-        node.metadata?.role === 'iran' || !node.metadata?.role  // Default to iran for backward compatibility
-      )
-      const foreignServers = nodesRes.data.filter((node: any) => 
-        node.metadata?.role === 'foreign'
-      )
-      setNodes(iranNodes)
-      setServers(foreignServers)
+      _cachedTunnels = tunnelsRes.data || []
+      _cachedCategories = categoriesRes.data || []
+      setTunnels(_cachedTunnels)
+      setCategories(_cachedCategories)
+      // Immediately unblock UI so tunnel cards render instantaneously
+      setLoading(false)
+
+      // 2. Fetch nodes concurrently to enrich topology tags without delaying the view
+      api.get('/nodes').then((nodesRes) => {
+        if (nodesRes && Array.isArray(nodesRes.data)) {
+          const iranNodes = nodesRes.data.filter((node: any) => 
+            node.metadata?.role === 'iran' || !node.metadata?.role
+          )
+          const foreignServers = nodesRes.data.filter((node: any) => 
+            node.metadata?.role === 'foreign'
+          )
+          _cachedTunnelsIranNodes = iranNodes
+          _cachedTunnelsForeignServers = foreignServers
+          setNodes(iranNodes)
+          setServers(foreignServers)
+        }
+      }).catch((err) => {
+        console.error('Failed to fetch nodes in tunnels view:', err)
+      })
     } catch (error) {
       console.error('Failed to fetch data:', error)
-    } finally {
       setLoading(false)
     }
   }

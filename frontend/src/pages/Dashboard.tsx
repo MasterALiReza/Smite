@@ -23,9 +23,11 @@ interface Status {
   }
 }
 
+let _cachedDashboardStatus: Status | null = null
+
 const Dashboard = () => {
-  const [status, setStatus] = useState<Status | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [status, setStatus] = useState<Status | null>(_cachedDashboardStatus)
+  const [loading, setLoading] = useState(!_cachedDashboardStatus)
   const { t, language } = useLanguage()
   const navigate = useNavigate()
 
@@ -33,6 +35,7 @@ const Dashboard = () => {
     const fetchData = async () => {
       try {
         const statusResponse = await api.get('/status')
+        _cachedDashboardStatus = statusResponse.data
         setStatus(statusResponse.data)
       } catch (error) {
         console.error('Failed to fetch data:', error)

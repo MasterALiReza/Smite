@@ -224,6 +224,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         existing.node_metadata.update(metadata)
         await db.commit()
         await db.refresh(existing)
+        invalidate_node_status_cache(existing.id)
         resp_meta = await enrich_node_response_metadata(db, existing.id, existing.node_metadata)
         return NodeResponse(
             id=existing.id,
@@ -244,6 +245,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         db.add(db_node)
         await db.commit()
         await db.refresh(db_node)
+        invalidate_node_status_cache(db_node.id)
         resp_meta = await enrich_node_response_metadata(db, db_node.id, db_node.node_metadata)
         return NodeResponse(
             id=db_node.id,
@@ -387,6 +389,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
     db.add(db_node)
     await db.commit()
     await db.refresh(db_node)
+    invalidate_node_status_cache(db_node.id)
     
     response_metadata = db_node.node_metadata.copy() if db_node.node_metadata else {}
     
@@ -432,6 +435,19 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
     )
 
 
+_node_status_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_NODE_STATUS_CACHE_TTL = 3.5  # seconds cache TTL for instantaneous UI transitions
+
+
+def invalidate_node_status_cache(node_id: Optional[str] = None):
+    """Invalidate cached node connection status and latency."""
+    global _node_status_cache
+    if node_id:
+        _node_status_cache.pop(node_id, None)
+    else:
+        _node_status_cache.clear()
+
+
 @router.get("", response_model=List[NodeResponse])
 async def list_nodes(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """List all nodes with connection state and real-time latency"""
@@ -444,58 +460,56 @@ async def list_nodes(db: AsyncSession = Depends(get_db), current_user: Admin = D
     node_responses = []
     
     async def check_node_status(node):
-        connection_status = "failed"
-        latency_ms = None
-        t_start = time.perf_counter()
-        try:
-            response = await client.get_tunnel_status(node.id, "")
-            elapsed = int((time.perf_counter() - t_start) * 1000)
-            if response and response.get("status") == "ok":
-                connection_status = "connected"
-                node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-                from app.utils import measure_precise_ping
-                ping_res = await measure_precise_ping(node_ip)
-                latency_ms = ping_res if ping_res is not None else max(1, elapsed)
-            else:
-                error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
-                if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                    if node.node_metadata and node.node_metadata.get("frp_connected"):
-                        connection_status = "connected"
-                        node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-                        from app.utils import measure_precise_ping
-                        ping_res = await measure_precise_ping(node_ip)
-                        latency_ms = ping_res if ping_res is not None else max(1, elapsed)
+        now = time.time()
+        cached = _node_status_cache.get(node.id)
+        if cached and (now - cached[0]) < _NODE_STATUS_CACHE_TTL:
+            connection_status = cached[1].get("connection_status", "connected")
+            latency_ms = cached[1].get("latency_ms")
+        else:
+            connection_status = "failed"
+            latency_ms = None
+            t_start = time.perf_counter()
+            try:
+                # Direct bounded check to node agent (1.8s max timeout)
+                response = await asyncio.wait_for(client.get_tunnel_status(node.id, ""), timeout=1.8)
+                elapsed = int((time.perf_counter() - t_start) * 1000)
+                if response and response.get("status") == "ok":
+                    connection_status = "connected"
+                    # The HTTP RTT is the true network latency to node agent
+                    latency_ms = max(1, elapsed)
+                else:
+                    error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
+                    if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                        if node.node_metadata and node.node_metadata.get("frp_connected"):
+                            connection_status = "connected"
+                            latency_ms = node.node_metadata.get("latency_ms") or 45
+                        else:
+                            connection_status = "reconnecting"
                     else:
-                        connection_status = "reconnecting"
+                        connection_status = "failed"
+            except httpx.ConnectError:
+                if node.node_metadata and node.node_metadata.get("frp_connected"):
+                    connection_status = "connected"
+                    latency_ms = node.node_metadata.get("latency_ms") or 40
+                else:
+                    connection_status = "connecting"
+            except (httpx.TimeoutException, asyncio.TimeoutError):
+                if node.node_metadata and node.node_metadata.get("frp_connected"):
+                    connection_status = "connected"
+                    latency_ms = node.node_metadata.get("latency_ms") or 50
+                else:
+                    connection_status = "reconnecting"
+            except Exception:
+                if node.node_metadata and node.node_metadata.get("frp_connected"):
+                    connection_status = "connected"
+                    latency_ms = node.node_metadata.get("latency_ms") or 45
                 else:
                     connection_status = "failed"
-        except httpx.ConnectError:
-            if node.node_metadata and node.node_metadata.get("frp_connected"):
-                connection_status = "connected"
-                node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-                from app.utils import measure_precise_ping
-                ping_res = await measure_precise_ping(node_ip)
-                latency_ms = ping_res if ping_res is not None else 40
-            else:
-                connection_status = "connecting"
-        except httpx.TimeoutException:
-            if node.node_metadata and node.node_metadata.get("frp_connected"):
-                connection_status = "connected"
-                node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-                from app.utils import measure_precise_ping
-                ping_res = await measure_precise_ping(node_ip)
-                latency_ms = ping_res if ping_res is not None else 50
-            else:
-                connection_status = "reconnecting"
-        except Exception:
-            if node.node_metadata and node.node_metadata.get("frp_connected"):
-                connection_status = "connected"
-                node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-                from app.utils import measure_precise_ping
-                ping_res = await measure_precise_ping(node_ip)
-                latency_ms = ping_res if ping_res is not None else 45
-            else:
-                connection_status = "failed"
+
+            _node_status_cache[node.id] = (now, {
+                "connection_status": connection_status,
+                "latency_ms": latency_ms
+            })
         
         metadata = node.node_metadata.copy() if node.node_metadata else {}
         metadata["connection_status"] = connection_status
@@ -623,6 +637,7 @@ async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depe
         
     await db.commit()
     await db.refresh(node)
+    invalidate_node_status_cache(node_id)
     
     return NodeResponse(
         id=node.id,
@@ -687,6 +702,7 @@ async def update_frp_status(node_id: str, frp_status: dict, request: Request, db
     
     await db.commit()
     await db.refresh(node)
+    invalidate_node_status_cache(node_id)
     return {"status": "success"}
 
 
@@ -833,6 +849,7 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_
     # 5. Delete node from database
     await db.delete(node)
     await db.commit()
+    invalidate_node_status_cache(node_id)
 
     logger.info(f"Node {node_id} ('{node_name}') deleted. Tunnels removed: {tunnels_cleaned}, remote decommissioned: {decommissioned_remote}")
     return {

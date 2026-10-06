@@ -20,11 +20,13 @@ interface Node {
   metadata: Record<string, any>
 }
 
+let _cachedIranNodes: Node[] = []
+
 const Nodes = () => {
   const { t, language } = useLanguage()
   const { showToast, showConfirm } = useToast()
-  const [nodes, setNodes] = useState<Node[]>([])
-  const [loading, setLoading] = useState(true)
+  const [nodes, setNodes] = useState<Node[]>(_cachedIranNodes)
+  const [loading, setLoading] = useState(_cachedIranNodes.length === 0)
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
@@ -53,6 +55,7 @@ const Nodes = () => {
       const iranNodes = response.data.filter((node: Node) => 
         node.metadata?.role !== 'foreign' && (node.metadata?.role === 'iran' || !node.metadata?.role)
       )
+      _cachedIranNodes = iranNodes
       setNodes(iranNodes)
     } catch (error) {
       console.error('Failed to fetch nodes:', error)

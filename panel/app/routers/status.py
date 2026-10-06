@@ -15,6 +15,9 @@ router = APIRouter()
 VERSION = "0.1.0"
 
 
+_cached_version: Optional[str] = None
+
+
 @router.get("/health")
 async def get_health():
     """Unauthenticated health check endpoint"""
@@ -24,6 +27,9 @@ async def get_health():
 @router.get("/version")
 async def get_version():
     """Get panel version from git tag, VERSION file, Docker image label, or environment"""
+    global _cached_version
+    if _cached_version:
+        return {"version": _cached_version}
     import os
     import asyncio
     from pathlib import Path
@@ -50,6 +56,7 @@ async def get_version():
             if git_version and not git_version.startswith("fatal"):
                 version = git_version.split("-")[0].lstrip("v")
                 if version and version not in ["next", "latest", "main", "master"]:
+                    _cached_version = version
                     return {"version": version}
     except Exception:
         pass
@@ -59,14 +66,17 @@ async def get_version():
         try:
             version = version_file.read_text().strip()
             if version and version not in ["next", "latest"]:
-                return {"version": version.lstrip("v")}
+                _cached_version = version.lstrip("v")
+                return {"version": _cached_version}
         except:
             pass
     
     smite_version = os.getenv("SMITE_VERSION", "")
     if smite_version and smite_version not in ["next", "latest"]:
-        return {"version": smite_version.lstrip("v")}
+        _cached_version = smite_version.lstrip("v")
+        return {"version": _cached_version}
     
+    _cached_version = VERSION
     return {"version": VERSION}
 
 

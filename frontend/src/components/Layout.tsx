@@ -1,5 +1,5 @@
 import { ReactNode, useState, useEffect } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom'
 import { LayoutDashboard, Network, FileText, Activity, Moon, Sun, Github, Menu, X, LogOut, Settings, Heart, Globe, Languages, MoreHorizontal } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -8,7 +8,7 @@ import SmiteLogoDark from '../assets/SmiteD.png'
 import SmiteLogoLight from '../assets/SmiteL.png'
 
 interface LayoutProps {
-  children: ReactNode
+  children?: ReactNode
 }
 
 const Layout = ({ children }: LayoutProps) => {
@@ -250,7 +250,7 @@ const Layout = ({ children }: LayoutProps) => {
           
           {/* Scrollable Page Content Container */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 pb-28 lg:pb-8">
-            {children}
+            {children || <Outlet />}
           </div>
 
           {/* Floating Mobile Bottom Navigation Island */}

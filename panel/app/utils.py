@@ -312,13 +312,13 @@ async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Option
     # 1. Try ICMP ping first (matches standard OS terminal ping output)
     try:
         is_win = os.name == 'nt'
-        cmd = ["ping", "-n", "1", "-w", "1000", host] if is_win else ["ping", "-c", "1", "-W", "1", host]
+        cmd = ["ping", "-n", "1", "-w", "800", host] if is_win else ["ping", "-c", "1", "-W", "1", host]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.5)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.0)
         out = stdout.decode('utf-8', errors='ignore')
         match = re.search(r'time[=<]\s*([0-9.]+)\s*ms', out, re.IGNORECASE)
         if not match:
@@ -329,13 +329,14 @@ async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Option
     except Exception:
         pass
 
-    # 2. Try fast TCP Handshake probe (Layer 4 true RTT - Works if ICMP blocked by firewall)
+    # 2. Try fast concurrent TCP Handshake probe (Layer 4 true RTT - Works if ICMP blocked by firewall)
     candidate_ports = fallback_ports or [443, 80, 22, 8080, 7000]
-    for port in candidate_ports:
+
+    async def _probe_single_port(port: int) -> Optional[int]:
         t_start = time.perf_counter()
         try:
             conn = asyncio.open_connection(host, port)
-            _, writer = await asyncio.wait_for(conn, timeout=1.0)
+            _, writer = await asyncio.wait_for(conn, timeout=0.6)
             elapsed = (time.perf_counter() - t_start) * 1000
             writer.close()
             try:
@@ -344,12 +345,24 @@ async def measure_precise_ping(ip_or_host: Optional[str], fallback_ports: Option
                 pass
             return max(1, round(elapsed))
         except (ConnectionRefusedError, ConnectionResetError):
-            # Target OS kernel returned RST packet in exactly 1 RTT
             elapsed = (time.perf_counter() - t_start) * 1000
             if elapsed < 800:
                 return max(1, round(elapsed))
         except Exception:
-            continue
+            pass
+        return None
+
+    tasks = [asyncio.create_task(_probe_single_port(p)) for p in candidate_ports]
+    for done_fut in asyncio.as_completed(tasks):
+        try:
+            res = await done_fut
+            if res is not None:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                return res
+        except Exception:
+            pass
 
     return None
 

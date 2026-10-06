@@ -20,11 +20,13 @@ interface Server {
   metadata: Record<string, any>
 }
 
+let _cachedForeignServers: Server[] = []
+
 const Servers = () => {
   const { t, language } = useLanguage()
   const { showToast, showConfirm } = useToast()
-  const [servers, setServers] = useState<Server[]>([])
-  const [loading, setLoading] = useState(true)
+  const [servers, setServers] = useState<Server[]>(_cachedForeignServers)
+  const [loading, setLoading] = useState(_cachedForeignServers.length === 0)
   const [deletingServerId, setDeletingServerId] = useState<string | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCertModal, setShowCertModal] = useState(false)
@@ -53,6 +55,7 @@ const Servers = () => {
       const foreignServers = response.data.filter((node: Server) => 
         node.metadata?.role === 'foreign'
       )
+      _cachedForeignServers = foreignServers
       setServers(foreignServers)
     } catch (error) {
       console.error('Failed to fetch servers:', error)

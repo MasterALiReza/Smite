@@ -61,92 +61,77 @@ const AppRoutes = () => {
 
   return (
     <ErrorBoundary>
-      <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        
+        {/* Persistent Layout shell: keeps sidebar and header mounted for instant page transitions */}
         <Route
-          path="/"
           element={
             <ProtectedRoute>
-              <Layout>
-                <Navigate to="/dashboard" replace />
-              </Layout>
+              <Layout />
             </ProtectedRoute>
           }
-        />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <Layout>
+        >
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route
+            path="/dashboard"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Dashboard />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/nodes"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/nodes"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Nodes />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/servers"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/servers"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Servers />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/tunnels"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/tunnels"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Tunnels />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/logs"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/logs"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Logs />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/core-health"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/core-health"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <CoreHealth />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <ProtectedRoute>
-              <Layout>
+              </Suspense>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <Suspense fallback={<PageFallback />}>
                 <Settings />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
+              </Suspense>
+            }
+          />
+        </Route>
       </Routes>
-    </Suspense>
-  </ErrorBoundary>
+    </ErrorBoundary>
   )
 }
 

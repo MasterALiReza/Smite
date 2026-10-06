@@ -11,11 +11,13 @@ interface LogEntry {
   message: string
 }
 
+let _cachedLogs: LogEntry[] = []
+
 const Logs = () => {
   const { t } = useLanguage()
   const { showToast } = useToast()
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [loading, setLoading] = useState(true)
+  const [logs, setLogs] = useState<LogEntry[]>(_cachedLogs)
+  const [loading, setLoading] = useState(_cachedLogs.length === 0)
   const logEndRef = useRef<HTMLDivElement>(null)
   const logContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
@@ -54,7 +56,9 @@ const Logs = () => {
   const fetchLogs = async () => {
     try {
       const response = await api.get('/logs?limit=100')
-      setLogs(response.data.logs || [])
+      const fetched = response.data.logs || []
+      _cachedLogs = fetched
+      setLogs(fetched)
     } catch (error) {
       console.error('Failed to fetch logs:', error)
     } finally {
