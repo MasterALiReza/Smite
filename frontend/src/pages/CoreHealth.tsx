@@ -80,7 +80,11 @@ const CoreHealth = () => {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(() => fetchData(false), 10000)
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        fetchData(false)
+      }
+    }, 10000)
     return () => clearInterval(interval)
   }, [])
 

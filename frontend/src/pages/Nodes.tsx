@@ -196,8 +196,9 @@ const Nodes = () => {
         <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
           <button
             onClick={() => setShowJoinModal(true)}
-            className="group px-3.5 py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:from-purple-500 hover:to-sky-500 text-white rounded-xl transition-all duration-200 font-semibold shadow-md shadow-purple-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[42px] active:scale-95 cursor-pointer"
+            className="group px-3.5 py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:from-purple-500 hover:to-sky-500 text-white rounded-xl transition-all duration-200 font-semibold shadow-md shadow-purple-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 cursor-pointer"
             title="One-Click Automatic Node Join Command"
+            aria-label="One-Click Automatic Node Join Command"
           >
             <Sparkles size={16} className="text-purple-200 group-hover:rotate-12 transition-transform" />
             <span>Auto Join</span>
@@ -205,7 +206,8 @@ const Nodes = () => {
           
           <button
             onClick={showCA}
-            className="px-3.5 py-2.5 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-300 rounded-xl transition-all font-semibold border border-slate-200/80 dark:border-white/[0.08] shadow-2xs flex items-center justify-center gap-1.5 text-xs sm:text-sm min-h-[42px] active:scale-95 cursor-pointer"
+            className="px-3.5 py-2.5 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-300 rounded-xl transition-all font-semibold border border-slate-200/80 dark:border-white/[0.08] shadow-2xs flex items-center justify-center gap-1.5 text-xs sm:text-sm min-h-[44px] active:scale-95 cursor-pointer"
+            aria-label={t.nodes.viewCACertificate}
           >
             <Copy size={15} className="text-sky-500" />
             <span>{t.nodes.viewCACertificate}</span>
@@ -213,15 +215,17 @@ const Nodes = () => {
 
           <button
             onClick={downloadCA}
-            className="p-2.5 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-300 rounded-xl transition-all font-semibold border border-slate-200/80 dark:border-white/[0.08] shadow-2xs flex items-center justify-center min-h-[42px] min-w-[42px] active:scale-95 cursor-pointer"
+            className="p-2.5 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-300 rounded-xl transition-all font-semibold border border-slate-200/80 dark:border-white/[0.08] shadow-2xs flex items-center justify-center min-h-[44px] min-w-[44px] active:scale-95 cursor-pointer"
             title={t.nodes.downloadCA}
+            aria-label={t.nodes.downloadCA}
           >
             <Download size={16} />
           </button>
 
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-4 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl transition-all duration-200 font-semibold shadow-md shadow-blue-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[42px] active:scale-95 cursor-pointer"
+            className="px-4 py-2.5 bg-gradient-to-r from-blue-600 via-sky-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl transition-all duration-200 font-semibold shadow-md shadow-blue-600/20 flex items-center justify-center gap-2 text-xs sm:text-sm min-h-[44px] active:scale-95 cursor-pointer"
+            aria-label={t.nodes.addNode}
           >
             <Plus size={17} />
             <span>{t.nodes.addNode}</span>
@@ -354,24 +358,24 @@ const Nodes = () => {
                             type="button"
                             onClick={() => setEditingNode(node)}
                             disabled={deletingNodeId === node.id}
-                            className="p-2 text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400 hover:bg-slate-100 dark:hover:bg-white/[0.08] rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                            className="p-2.5 min-h-[40px] min-w-[40px] text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400 hover:bg-slate-100 dark:hover:bg-white/[0.08] rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center active:scale-95"
                             title="Edit Node Name"
                             aria-label="Edit Node Name"
                           >
-                            <Edit2 size={15} />
+                            <Edit2 size={16} />
                           </button>
                           <button
                             type="button"
                             onClick={() => deleteNode(node.id)}
                             disabled={deletingNodeId === node.id}
-                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                            className="p-2.5 min-h-[40px] min-w-[40px] text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center active:scale-95"
                             title={deletingNodeId === node.id ? "Deleting..." : "Delete Node"}
                             aria-label="Delete Node"
                           >
                             {deletingNodeId === node.id ? (
-                              <Loader2 size={15} className="animate-spin text-rose-500" />
+                              <Loader2 size={16} className="animate-spin text-rose-500" />
                             ) : (
-                              <Trash2 size={15} />
+                              <Trash2 size={16} />
                             )}
                           </button>
                         </div>

@@ -226,6 +226,7 @@ def test_validate_cert_and_key_payload_limits():
         validate_cert_and_key("valid_cert", oversized_key)
 
 
+
 def test_acme_token_regex_protection():
     from app.routers.ssl import _ACME_TOKEN_REGEX
     # Valid tokens (RFC 8555 base64url)
@@ -239,5 +240,29 @@ def test_acme_token_regex_protection():
     assert _ACME_TOKEN_REGEX.match("token/with/slashes") is None
     assert _ACME_TOKEN_REGEX.match("token;reboot") is None
     assert _ACME_TOKEN_REGEX.match("") is None
+
+
+@pytest.mark.asyncio
+async def test_acme_challenge_root_endpoint(tmp_path):
+    from pathlib import Path
+    import main as panel_main
+    from fastapi.responses import PlainTextResponse
+
+    test_token = "valid_test_token_acme_12345"
+    test_keyauth = "valid_test_token_acme_12345.secret_thumbprint_data"
+    
+    cert_challenge_dir = Path("./certs/.well-known/acme-challenge")
+    cert_challenge_dir.mkdir(parents=True, exist_ok=True)
+    token_file = cert_challenge_dir / test_token
+    try:
+        token_file.write_text(test_keyauth, encoding="utf-8")
+        resp = await panel_main.acme_challenge_root(test_token)
+        assert isinstance(resp, PlainTextResponse)
+        assert resp.status_code == 200
+        assert resp.body.decode("utf-8") == test_keyauth
+    finally:
+        if token_file.exists():
+            token_file.unlink()
+
 
 

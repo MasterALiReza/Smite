@@ -7,10 +7,16 @@ const api = axios.create({
   },
 })
 
-const token = localStorage.getItem('token')
-if (token) {
-  api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-}
+api.interceptors.request.use(
+  (config) => {
+    const currentToken = localStorage.getItem('token')
+    if (currentToken) {
+      config.headers.Authorization = `Bearer ${currentToken}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
 
 api.interceptors.response.use(
   (response) => response,

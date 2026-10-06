@@ -2207,7 +2207,7 @@ async def measure_node_latency(node_id: str, client: NodeClient, node_ip: Option
     try:
         resp = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=3.5)
         elapsed = int((time.perf_counter() - t_start) * 1000)
-        if resp and resp.get("status") == "ok":
+        if resp and resp.get("status") in ("ok", "success"):
             if node_ip:
                 from app.utils import measure_precise_ping
                 p_ms = await measure_precise_ping(node_ip)

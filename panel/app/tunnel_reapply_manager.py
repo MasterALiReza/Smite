@@ -104,14 +104,14 @@ class TunnelReapplyManager:
                                 if iran_id:
                                     try:
                                         resp = await asyncio.wait_for(client.get_tunnel_status(iran_id, ""), timeout=3.5)
-                                        ir_ok = bool(resp and resp.get("status") == "ok")
+                                        ir_ok = bool(resp and resp.get("status") in ("ok", "success"))
                                     except Exception:
                                         ir_ok = False
                                         
                                 if foreign_id:
                                     try:
                                         resp = await asyncio.wait_for(client.get_tunnel_status(foreign_id, ""), timeout=3.5)
-                                        fn_ok = bool(resp and resp.get("status") == "ok")
+                                        fn_ok = bool(resp and resp.get("status") in ("ok", "success"))
                                     except Exception:
                                         fn_ok = False
                                         

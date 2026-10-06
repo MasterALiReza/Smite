@@ -125,7 +125,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-label={ariaLabel || placeholder}
-        className={`w-full px-3.5 py-2.5 border rounded-xl flex items-center justify-between text-start text-sm font-medium transition-all shadow-xs outline-none select-none min-h-[42px] ${
+        className={`w-full px-3.5 py-2.5 border rounded-xl flex items-center justify-between text-start text-sm font-medium transition-all shadow-xs outline-none select-none min-h-[44px] ${
           disabled
             ? 'opacity-50 cursor-not-allowed bg-slate-100 dark:bg-gray-800 border-slate-200 dark:border-gray-700 text-slate-400'
             : isOpen

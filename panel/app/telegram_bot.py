@@ -440,9 +440,11 @@ Use buttons in messages to interact with nodes and tunnels."""
         try:
             from app.config import settings
             import os
+            import tempfile
             
-            backup_dir = Path("/tmp/smite_backup")
-            backup_dir.mkdir(exist_ok=True)
+            tmp_root = Path(tempfile.gettempdir())
+            backup_dir = tmp_root / "smite_backup"
+            backup_dir.mkdir(parents=True, exist_ok=True)
             
             # Find panel root directory
             data_dir = Path("/opt/smite/panel/data")
@@ -561,7 +563,7 @@ Use buttons in messages to interact with nodes and tunnels."""
                                 shutil.copy2(cert_path, backup_dir / "letsencrypt" / "live" / settings.panel_domain / cert_file)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_file = f"/tmp/smite_backup_{timestamp}.zip"
+            backup_file = str(tmp_root / f"smite_backup_{timestamp}.zip")
             
             with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for root, dirs, files in os.walk(backup_dir):
@@ -803,8 +805,8 @@ Use buttons in messages to interact with nodes and tunnels."""
             logger.error(f"Error in cmd_status_callback: {e}", exc_info=True)
             try:
                 user_id = message_or_query.from_user.id if hasattr(message_or_query, 'from_user') else 0
+                reply_markup = self._get_keyboard(user_id)
                 if hasattr(message_or_query, 'reply_text'):
-                    reply_markup = self._get_keyboard(user_id)
                     await message_or_query.reply_text("❌ Error loading status", reply_markup=reply_markup)
                 elif hasattr(message_or_query, 'edit_message_text') and message_or_query:
                     await message_or_query.edit_message_text("❌ Error loading status")

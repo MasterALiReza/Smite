@@ -55,9 +55,15 @@ class PortForwarder:
     async def _forward_loop(self, local_port: int, node_address: str, remote_port: int):
         """Main forwarding loop - accepts connections and forwards them"""
         try:
-            if "://" in node_address:
-                node_address = node_address.split("://")[-1]
-            node_host = node_address.split(":")[0] if ":" in node_address else node_address
+            clean_addr = node_address
+            if "://" in clean_addr:
+                clean_addr = clean_addr.split("://", 1)[-1]
+            if clean_addr.startswith("[") and "]" in clean_addr:
+                node_host = clean_addr[1:clean_addr.index("]")]
+            elif clean_addr.count(":") == 1:
+                node_host = clean_addr.split(":", 1)[0]
+            else:
+                node_host = clean_addr
             
             try:
                 server = await asyncio.start_server(
@@ -87,26 +93,28 @@ class PortForwarder:
             raise
     
     async def _handle_client(self, reader: StreamReader, writer: StreamWriter, target_host: str, target_port: int):
-        """Handle a client connection by forwarding to target"""
+        """Handle a client connection by forwarding to target (supports IPv4, IPv6, and hostnames)"""
         remote_reader = None
         remote_writer = None
         
         try:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-                sock.setblocking(False)
-                
-                loop = asyncio.get_event_loop()
-                await asyncio.wait_for(
-                    loop.sock_connect(sock, (target_host, target_port)),
+                remote_reader, remote_writer = await asyncio.wait_for(
+                    asyncio.open_connection(target_host, target_port),
                     timeout=10.0
                 )
-                
-                remote_reader, remote_writer = await asyncio.open_connection(sock=sock)
+                sock = remote_writer.get_extra_info("socket")
+                if sock:
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        for opt_name, val in [("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 3)]:
+                            if hasattr(socket, opt_name):
+                                try:
+                                    sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt_name), val)
+                                except OSError:
+                                    pass
+                    except OSError:
+                        pass
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout connecting to {target_host}:{target_port}")
                 try:

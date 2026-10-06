@@ -67,7 +67,7 @@ async def get_core_health(request: Request, db: AsyncSession = Depends(get_db), 
     async def probe_node(node_id: str, timeout_sec: float) -> tuple[bool, str, Optional[str]]:
         try:
             response = await asyncio.wait_for(client.get_tunnel_status(node_id, ""), timeout=timeout_sec)
-            if response and response.get("status") == "ok":
+            if response and response.get("status") in ("ok", "success"):
                 return True, "connected", None
             
             error_msg = response.get("message", "Node disconnected") if response else "Node not responding"

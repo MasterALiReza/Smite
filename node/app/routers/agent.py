@@ -186,7 +186,15 @@ async def _measure_precise_ping(ip_or_host: str, fallback_ports: list = None) ->
         is_win = os.name == 'nt'
         cmd = ["ping", "-n", "1", "-w", "1000", host] if is_win else ["ping", "-c", "1", "-W", "1", host]
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.5)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.5)
+        except (asyncio.TimeoutError, Exception):
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            stdout = b""
         out = stdout.decode('utf-8', errors='ignore')
         match = re.search(r'time[=<]\s*([0-9.]+)\s*ms', out, re.IGNORECASE)
         if not match:
@@ -223,6 +231,8 @@ async def _measure_precise_ping(ip_or_host: str, fallback_ports: list = None) ->
 @router.get("/ping")
 async def ping_target(target: str, port: int = None):
     """Measures precise ping/RTT from this node to target IP/host"""
+    if not target or not re.match(r"^[a-zA-Z0-9.\-_:\[\]]+$", target.strip()):
+        raise HTTPException(status_code=400, detail="Invalid target address")
     fallback_ports = []
     if port:
         fallback_ports.append(port)
@@ -274,7 +284,7 @@ async def decommission_node(request: Request, payload: Optional[DecommissionRequ
 
     # 4. Stop FRP client if running
     try:
-        from app.frp_comm import frp_comm_client
+        from app.frp_comm_client import frp_comm_client
         if frp_comm_client.is_running():
             await frp_comm_client.stop()
             logger.info("FRP comm client stopped.")

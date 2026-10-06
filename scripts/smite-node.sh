@@ -651,8 +651,8 @@ deploy_auto_one_click() {
         curl -fsSL "${proto}://${clean_addr}/${ca_endpoint}" -o "$target_dir/certs/ca.crt" 2>/dev/null || true
     fi
 
-    if [ ! -s "$target_dir/certs/ca.crt" ]; then
-        warn "Could not download CA certificate directly from panel API. Creating placeholder..."
+    if [ ! -s "$target_dir/certs/ca.crt" ] || ! grep -q "BEGIN CERTIFICATE" "$target_dir/certs/ca.crt" 2>/dev/null; then
+        warn "Could not download valid CA certificate directly from panel API. Creating placeholder..."
         touch "$target_dir/certs/ca.crt"
     else
         progress "CA certificate downloaded"

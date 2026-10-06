@@ -158,7 +158,7 @@ async def get_join_command(role: str = "foreign", current_user: Admin = Depends(
     return {
         "token": token,
         "role": role,
-        "ca_endpoint": "/panel/ca/server" if role == "foreign" else "/panel/ca"
+        "ca_endpoint": "/api/panel/ca/server" if role == "foreign" else "/api/panel/ca"
     }
 
 

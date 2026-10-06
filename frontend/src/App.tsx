@@ -5,6 +5,7 @@ import { LanguageProvider } from './contexts/LanguageContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // Eagerly loaded for instant critical path render
 import Login from './pages/Login'
@@ -59,7 +60,8 @@ const AppRoutes = () => {
   const { isAuthenticated } = useAuth()
 
   return (
-    <Suspense fallback={<PageFallback />}>
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route
@@ -144,6 +146,7 @@ const AppRoutes = () => {
         />
       </Routes>
     </Suspense>
+  </ErrorBoundary>
   )
 }
 

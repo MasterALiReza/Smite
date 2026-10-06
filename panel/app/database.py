@@ -165,7 +165,9 @@ async def migrate_db():
 async def init_db():
     """Initialize database tables"""
     if settings.db_type == "sqlite":
-        os.makedirs(os.path.dirname(settings.db_path), exist_ok=True)
+        db_dir = os.path.dirname(settings.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
     
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

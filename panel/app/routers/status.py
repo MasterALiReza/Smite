@@ -29,20 +29,29 @@ async def get_version():
     from pathlib import Path
     
     try:
+        git_cwd = "/app" if Path("/app/.git").exists() or Path("/app").exists() else str(Path(__file__).resolve().parent.parent.parent)
         proc = await asyncio.create_subprocess_exec(
             "git", "describe", "--tags", "--always", "--dirty",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd="/app"
+            cwd=git_cwd
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+        except (asyncio.TimeoutError, Exception):
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            raise
         if proc.returncode == 0:
             git_version = stdout.decode().strip()
             if git_version and not git_version.startswith("fatal"):
                 version = git_version.split("-")[0].lstrip("v")
                 if version and version not in ["next", "latest", "main", "master"]:
                     return {"version": version}
-    except:
+    except Exception:
         pass
     
     version_file = Path("/app/VERSION")

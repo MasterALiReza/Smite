@@ -1,6 +1,6 @@
 """Logs API endpoints"""
 from collections import deque
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from datetime import datetime, timezone
 from typing import List, Dict
 import logging
@@ -32,11 +32,15 @@ logging.getLogger().setLevel(logging.INFO)
 
 def get_recent_logs(limit: int = 100) -> List[Dict]:
     """In-process helper for reading recent logs (used by the Telegram bot)"""
+    safe_limit = max(1, min(limit, 1000))
     logs = list(log_buffer)
-    return logs[-limit:]
+    return logs[-safe_limit:]
 
 
 @router.get("")
-async def get_logs(limit: int = 100, current_user: Admin = Depends(get_current_user)):
+async def get_logs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    current_user: Admin = Depends(get_current_user)
+):
     """Get logs"""
     return {"logs": get_recent_logs(limit)}

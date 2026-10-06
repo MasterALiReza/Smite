@@ -107,22 +107,23 @@ const Login = () => {
                 </h2>
               </div>
               
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => setLanguage(language === 'fa' ? 'en' : 'fa')}
-                  className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-200/60 dark:border-white/[0.08] min-h-[36px] active:scale-95"
+                  className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-200/60 dark:border-white/[0.08] min-h-[44px] active:scale-95 cursor-pointer"
                   title="Toggle Language"
+                  aria-label="Toggle Language"
                 >
-                  <Languages size={14} className="text-sky-500" />
+                  <Languages size={15} className="text-sky-500" />
                   <span>{language === 'fa' ? 'English' : 'فارسی'}</span>
                 </button>
                 <button
                   onClick={toggleDarkMode}
-                  className="p-2 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 transition-colors border border-slate-200/60 dark:border-white/[0.08] min-h-[36px] min-w-[36px] flex items-center justify-center active:scale-95"
+                  className="p-2.5 rounded-xl bg-slate-100 dark:bg-white/[0.05] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] text-slate-700 dark:text-slate-200 transition-colors border border-slate-200/60 dark:border-white/[0.08] min-h-[44px] min-w-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
                   title={darkMode ? 'Light mode' : 'Dark mode'}
                   aria-label="Toggle dark mode"
                 >
-                  {darkMode ? <Sun size={15} className="text-amber-400" /> : <Moon size={15} className="text-indigo-500" />}
+                  {darkMode ? <Sun size={16} className="text-amber-400" /> : <Moon size={16} className="text-indigo-500" />}
                 </button>
               </div>
             </div>
@@ -147,7 +148,7 @@ const Login = () => {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
-                  className="w-full px-4 py-2.5 border border-slate-200 dark:border-white/[0.1] rounded-xl bg-slate-50/50 dark:bg-[#070b14]/70 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all min-h-[44px]"
+                  className="w-full px-4 py-2.5 border border-slate-200 dark:border-white/[0.1] rounded-xl bg-slate-50/50 dark:bg-[#070b14]/70 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all min-h-[44px]"
                   placeholder={t.login.usernamePlaceholder}
                   autoComplete="username"
                 />
@@ -166,7 +167,7 @@ const Login = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="w-full px-4 py-2.5 border border-slate-200 dark:border-white/[0.1] rounded-xl bg-slate-50/50 dark:bg-[#070b14]/70 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all min-h-[44px]"
+                  className="w-full px-4 py-2.5 border border-slate-200 dark:border-white/[0.1] rounded-xl bg-slate-50/50 dark:bg-[#070b14]/70 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all min-h-[44px]"
                   placeholder={t.login.passwordPlaceholder}
                   autoComplete="current-password"
                 />

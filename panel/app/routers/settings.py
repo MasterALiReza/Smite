@@ -59,6 +59,16 @@ def _resolve_secret(incoming: Optional[str], existing: Optional[str]) -> Optiona
     return incoming
 
 
+def _dump_model(m: Optional[BaseModel]) -> dict:
+    """Serialize model cleanly across Pydantic v1 and v2"""
+    if m is None:
+        return {}
+    if hasattr(m, "model_dump"):
+        return m.model_dump(exclude_none=True)
+    return m.dict(exclude_none=True)
+
+
+
 @router.get("")
 async def get_settings(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """Get all settings (secrets are masked)"""
@@ -111,7 +121,7 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
             existing_token = setting.value.get("token")
         
         new_enabled = settings_update.frp.enabled
-        new_value = settings_update.frp.dict(exclude_none=True)
+        new_value = _dump_model(settings_update.frp)
         
         resolved_token = _resolve_secret(new_value.get("token"), existing_token)
         if resolved_token is None:
@@ -158,7 +168,7 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
             existing_bot_token = setting.value.get("bot_token")
         
         new_enabled = settings_update.telegram.enabled
-        new_value = settings_update.telegram.dict(exclude_none=True)
+        new_value = _dump_model(settings_update.telegram)
         
         resolved_bot_token = _resolve_secret(new_value.get("bot_token"), existing_bot_token)
         if resolved_bot_token is None:
@@ -197,12 +207,12 @@ async def update_settings(settings_update: SettingsUpdate, request: Request, db:
         setting = result.scalar_one_or_none()
         
         if setting:
-            setting.value = settings_update.tunnel.dict(exclude_none=True)
+            setting.value = _dump_model(settings_update.tunnel)
             setting.updated_at = datetime.utcnow()
         else:
             setting = Settings(
                 key="tunnel",
-                value=settings_update.tunnel.dict(exclude_none=True)
+                value=_dump_model(settings_update.tunnel)
             )
             db.add(setting)
         

@@ -23,7 +23,11 @@ const Logs = () => {
 
   useEffect(() => {
     fetchLogs()
-    const interval = setInterval(fetchLogs, 2000)
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        fetchLogs()
+      }
+    }, 2000)
     return () => clearInterval(interval)
   }, [])
 
@@ -124,12 +128,13 @@ const Logs = () => {
           
           <button
             onClick={() => setShouldAutoScroll(prev => !prev)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-all min-h-[38px] active:scale-95 cursor-pointer ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-all min-h-[44px] active:scale-95 cursor-pointer ${
               shouldAutoScroll
                 ? 'bg-blue-500/10 dark:bg-sky-500/15 text-blue-600 dark:text-sky-400 border-blue-200 dark:border-sky-500/30'
                 : 'bg-white dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 border-slate-200/80 dark:border-white/[0.08]'
             }`}
             title="Toggle automatic scroll on new logs"
+            aria-label="Toggle auto scroll"
           >
             <ArrowDownCircle size={15} className={shouldAutoScroll ? 'text-sky-500 animate-bounce' : 'opacity-40'} />
             <span>Auto-Scroll: {shouldAutoScroll ? 'ON' : 'OFF'}</span>
@@ -138,8 +143,9 @@ const Logs = () => {
           <button
             onClick={handleCopyLogs}
             disabled={logs.length === 0}
-            className="px-3.5 py-1.5 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-white/[0.08] transition-colors flex items-center gap-1.5 min-h-[38px] disabled:opacity-40 active:scale-95 cursor-pointer"
+            className="px-3.5 py-2 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-white/[0.08] transition-colors flex items-center gap-1.5 min-h-[44px] disabled:opacity-40 active:scale-95 cursor-pointer"
             title="Copy all logs"
+            aria-label="Copy all logs"
           >
             {copied ? <CheckCircle2 size={15} className="text-emerald-500" /> : <Copy size={15} />}
             <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -147,8 +153,9 @@ const Logs = () => {
 
           <button
             onClick={handleClearDisplay}
-            className="px-3 py-1.5 bg-white dark:bg-white/[0.04] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-white/[0.08] transition-colors flex items-center gap-1.5 min-h-[38px] active:scale-95 cursor-pointer"
+            className="px-3.5 py-2 bg-white dark:bg-white/[0.04] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 rounded-xl text-xs font-semibold border border-slate-200/80 dark:border-white/[0.08] transition-colors flex items-center gap-1.5 min-h-[44px] active:scale-95 cursor-pointer"
             title="Clear current log view"
+            aria-label="Clear current log view"
           >
             <Trash2 size={15} />
             <span>Clear</span>

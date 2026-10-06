@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 import httpx
 import logging
+import re
 
 from app.database import get_db
 from app.models import Node, Settings, Admin, Tunnel
@@ -200,17 +201,20 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     )
 
     if is_generic and country_code:
-        # Count existing nodes with this country code
+        # Determine next non-colliding sequence number for this country code
         all_nodes_res = await db.execute(select(Node))
         all_nodes = all_nodes_res.scalars().all()
-        matching_count = sum(
-            1 for n in all_nodes
+        existing_numbers = []
+        for n in all_nodes:
             if n.id != getattr(existing, "id", None) and (
                 (n.node_metadata and n.node_metadata.get("country_code") == country_code) or
                 n.name.startswith(f"{country_code} Node")
-            )
-        )
-        final_name = f"{country_code} Node {matching_count + 1}"
+            ):
+                m = re.search(rf"^{re.escape(country_code)}\s+Node\s+(\d+)$", n.name)
+                if m:
+                    existing_numbers.append(int(m.group(1)))
+        next_num = (max(existing_numbers) + 1) if existing_numbers else 1
+        final_name = f"{country_code} Node {next_num}"
 
     if existing:
         if final_name and not existing.name:
@@ -766,6 +770,22 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_
                     logger.info(f"[Cascade] Notified counterpart node {counterpart_id} to release ports for tunnel {tunnel.id}")
                 except Exception as peer_err:
                     logger.warning(f"[Cascade] Failed to notify counterpart node {counterpart_id}: {peer_err}")
+                    try:
+                        from sqlalchemy.orm.attributes import flag_modified
+                        s_res = await db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+                        s_row = s_res.scalar_one_or_none()
+                        if not s_row:
+                            s_row = Settings(key="pending_tunnel_removals", value={})
+                            db.add(s_row)
+                        current_pending = dict(s_row.value or {})
+                        node_list = list(current_pending.get(counterpart_id, []))
+                        if not any(item.get("tunnel_id") == tunnel.id for item in node_list):
+                            node_list.append(remove_payload)
+                        current_pending[counterpart_id] = node_list
+                        s_row.value = current_pending
+                        flag_modified(s_row, "value")
+                    except Exception as s_err:
+                        logger.warning(f"Could not queue pending removal for counterpart node {counterpart_id}: {s_err}")
 
             # Delete the tunnel record
             await db.delete(tunnel)

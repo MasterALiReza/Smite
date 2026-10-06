@@ -15,11 +15,12 @@ from app.database import get_db
 from app.models import Admin
 from app.config import settings
 
+import hashlib
+import bcrypt
+
 router = APIRouter()
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-import hashlib
 
 SECRET_KEY = settings.secret_key
 ALGORITHM = "HS256"
@@ -137,13 +138,22 @@ class TokenData(BaseModel):
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against a hash using native bcrypt with fallback"""
+    try:
+        pw_bytes = plain_password.encode("utf-8")[:72]
+        hash_bytes = hashed_password.encode("utf-8")
+        return bcrypt.checkpw(pw_bytes, hash_bytes)
+    except Exception:
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception:
+            return False
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a password"""
-    return pwd_context.hash(password)
+    """Hash a password using native bcrypt"""
+    pw_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -220,16 +230,30 @@ async def get_current_user_optional(
     return user
 
 
+# Pre-computed bcrypt hash for constant-time dummy verification on unknown usernames
+_DUMMY_BCRYPT_HASH = "$2b$12$bDSQ5nf6E2iMUMWkjRapHOb3QsH9LdEWXY4QH6vqlEbXjz4eoMZGa"
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    """Login endpoint (rate-limited per client IP)"""
+    """Login endpoint (rate-limited per client IP with constant-time verification)"""
     client_ip = _client_ip(request)
     _check_login_rate_limit(client_ip)
 
     result = await db.execute(select(Admin).where(Admin.username == login_data.username))
     user = result.scalar_one_or_none()
     
-    if not user or not verify_password(login_data.password, user.password_hash):
+    if not user:
+        # Constant-time dummy check to prevent timing-based username enumeration
+        verify_password(login_data.password, _DUMMY_BCRYPT_HASH)
+        _record_failed_login(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not verify_password(login_data.password, user.password_hash):
         _record_failed_login(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

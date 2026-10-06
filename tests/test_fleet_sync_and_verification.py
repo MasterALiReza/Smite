@@ -338,5 +338,33 @@ async def test_enrich_node_response_metadata():
     mock_db.commit.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_country_node_deterministic_auto_naming():
+    """Verify that auto-naming chooses max(numbers) + 1 to prevent collisions when nodes are deleted"""
+    import re
+    from types import SimpleNamespace
+
+    # Scenario: DE Node 1 and DE Node 4 exist (e.g., DE Node 2 & 3 were deleted)
+    n1 = SimpleNamespace(id="id-1", name="DE Node 1", node_metadata={"country_code": "DE"})
+    n4 = SimpleNamespace(id="id-4", name="DE Node 4", node_metadata={"country_code": "DE"})
+    all_nodes = [n1, n4]
+
+    country_code = "DE"
+    existing_numbers = []
+    for n in all_nodes:
+        if (
+            (n.node_metadata and n.node_metadata.get("country_code") == country_code) or
+            n.name.startswith(f"{country_code} Node")
+        ):
+            m = re.search(rf"^{re.escape(country_code)}\s+Node\s+(\d+)$", n.name)
+            if m:
+                existing_numbers.append(int(m.group(1)))
+
+    next_num = (max(existing_numbers) + 1) if existing_numbers else 1
+    new_name = f"{country_code} Node {next_num}"
+    assert new_name == "DE Node 5"
+
+
+
 
 

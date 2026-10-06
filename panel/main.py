@@ -6,14 +6,15 @@ import re
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models import Tunnel, Node, CoreResetConfig
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -440,7 +441,7 @@ async def _restore_node_tunnels():
 
                     try:
                         first_status = await client.get_tunnel_status(first_node.id, tunnel.id)
-                        if first_status and first_status.get("status") == "success" and first_status.get("data", {}).get("active"):
+                        if first_status and first_status.get("status") in ("ok", "success") and first_status.get("data", {}).get("active"):
                             first_response = {"status": "success", "message": "Already active"}
                             logger.info(f"Tunnel {tunnel.id} is ALREADY active on {first_role}, skipping disruptive apply")
                         else:
@@ -466,7 +467,7 @@ async def _restore_node_tunnels():
                     
                     try:
                         second_status = await client.get_tunnel_status(second_node.id, tunnel.id)
-                        if second_status and second_status.get("status") == "success" and second_status.get("data", {}).get("active"):
+                        if second_status and second_status.get("status") in ("ok", "success") and second_status.get("data", {}).get("active"):
                             second_response = {"status": "success", "message": "Already active"}
                             logger.info(f"Tunnel {tunnel.id} is ALREADY active on {second_role}, skipping disruptive apply")
                         else:
@@ -633,6 +634,19 @@ async def acme_challenge_root(token: str):
             continue
     raise HTTPException(status_code=404, detail="Challenge token not found")
 
+
+@app.get("/panel/ca", include_in_schema=False)
+async def get_ca_cert_alias(download: bool = False, current_user: Optional[panel.Admin] = Depends(auth.get_current_user_optional)):
+    """Direct alias for CA certificate endpoint to support legacy installers"""
+    return await panel.get_ca_cert(download=download, current_user=current_user)
+
+
+@app.get("/panel/ca/server", include_in_schema=False)
+async def get_server_ca_cert_alias(download: bool = False, current_user: Optional[panel.Admin] = Depends(auth.get_current_user_optional)):
+    """Direct alias for server CA certificate endpoint to support legacy installers"""
+    return await panel.get_server_ca_cert(download=download, current_user=current_user)
+
+
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 static_path = Path(static_dir)
 
@@ -650,7 +664,7 @@ if static_path.exists() and (static_path / "index.html").exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         """Serve frontend for all non-API routes with strict path traversal protection"""
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json") or full_path.startswith(".well-known/"):
+        if full_path.startswith("api/") or full_path.startswith("panel/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json") or full_path.startswith(".well-known/"):
             raise HTTPException(status_code=404)
         
         try:
