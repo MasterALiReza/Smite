@@ -97,7 +97,8 @@ async def lifespan(app: FastAPI):
     await _restore_chisel_servers()
     await _restore_frp_servers()
     
-    await _restore_node_tunnels()
+    restore_tunnels_task = asyncio.create_task(_restore_node_tunnels())
+    app.state.restore_tunnels_task = restore_tunnels_task
     
     gost_forwarder.start_monitor()
     
@@ -120,6 +121,13 @@ async def lifespan(app: FastAPI):
         app.state.reset_task.cancel()
         try:
             await app.state.reset_task
+        except asyncio.CancelledError:
+            pass
+
+    if hasattr(app.state, 'restore_tunnels_task'):
+        app.state.restore_tunnels_task.cancel()
+        try:
+            await app.state.restore_tunnels_task
         except asyncio.CancelledError:
             pass
     
