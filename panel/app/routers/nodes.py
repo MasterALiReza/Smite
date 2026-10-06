@@ -341,7 +341,8 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
         
         result = await db.execute(select(Settings).where(Settings.key == "frp"))
         frp_setting = result.scalar_one_or_none()
-        if frp_setting and frp_setting.value and frp_setting.value.get("enabled"):
+        node_role = (existing.node_metadata.get("role") if existing.node_metadata else None) or metadata.get("role")
+        if frp_setting and frp_setting.value and frp_setting.value.get("enabled") and node_role == "iran":
             panel_address = node.metadata.get("panel_address", "") if node.metadata else ""
             if panel_address:
                 if "://" in panel_address:
@@ -395,7 +396,8 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
     
     result = await db.execute(select(Settings).where(Settings.key == "frp"))
     frp_setting = result.scalar_one_or_none()
-    if frp_setting and frp_setting.value and frp_setting.value.get("enabled"):
+    new_node_role = (db_node.node_metadata.get("role") if db_node.node_metadata else None) or metadata.get("role")
+    if frp_setting and frp_setting.value and frp_setting.value.get("enabled") and new_node_role == "iran":
         panel_address = node.metadata.get("panel_address", "") if node.metadata else ""
         if panel_address:
             if "://" in panel_address:

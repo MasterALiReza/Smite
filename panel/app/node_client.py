@@ -59,23 +59,27 @@ class NodeClient:
         Get node address (direct or via FRP)
         Returns: (address, using_frp)
         """
-        frp_settings = await self._get_frp_settings()
-        
-        if frp_settings and frp_settings.get("enabled"):
-            node_role = node.node_metadata.get("role") if node.node_metadata else None
-            node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
-            
-            # Local or collocated Iran nodes should always use direct local connection
-            if node_role == "iran" or node_ip in _local_addresses():
-                if node_ip in _local_addresses():
-                    return ("http://127.0.0.1:8888", False)
-                node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
-                if not node_address.startswith("http"):
-                    node_address = f"http://{node_address}"
-                return (node_address, False)
+        node_role = node.node_metadata.get("role") if node.node_metadata else None
+        node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
 
+        # Local or collocated Iran node running on the exact same host
+        if node_ip in _local_addresses():
+            return ("http://127.0.0.1:8888", False)
+
+        # Foreign nodes always have public static IPs and direct connectivity
+        # (FRP management traffic across international borders into Iran is blocked by DPI)
+        if node_role == "foreign":
+            node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
+            if not node_address.startswith("http"):
+                node_address = f"http://{node_address}"
+            return (node_address, False)
+
+        # For domestic/Iran nodes behind NAT: check if FRP reverse tunnel is active
+        frp_settings = await self._get_frp_settings()
+        if frp_settings and frp_settings.get("enabled"):
             frp_remote_port = node.node_metadata.get("frp_remote_port") if node.node_metadata else None
-            if frp_remote_port:
+            frp_connected = node.node_metadata.get("frp_connected", True) if node.node_metadata else False
+            if frp_remote_port and frp_connected:
                 from app.frp_comm_manager import frp_comm_manager
                 if not frp_comm_manager.is_running():
                     logger.debug(f"[HTTP] FRP enabled but FRP server not running, falling back to HTTP for node {node.id}")
@@ -83,11 +87,9 @@ class NodeClient:
                     logger.debug(f"[FRP] Using FRP tunnel to communicate with node {node.id} (remote_port={frp_remote_port})")
                     return (f"http://127.0.0.1:{frp_remote_port}", True)
             else:
-                logger.debug(f"[HTTP] FRP enabled but node {node.id} has no frp_remote_port yet, temporarily using HTTP")
+                logger.debug(f"[HTTP] FRP enabled but node {node.id} has no active frp_remote_port, temporarily using HTTP")
         
-        # Direct HTTP
-        if node.node_metadata and node.node_metadata.get("ip_address") in _local_addresses():
-            return ("http://127.0.0.1:8888", False)
+        # Direct HTTP default
         node_address = node.node_metadata.get("api_address", "http://127.0.0.1:8888") if node.node_metadata else "http://127.0.0.1:8888"
         if not node_address.startswith("http"):
             node_address = f"http://{node_address}"
