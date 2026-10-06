@@ -459,10 +459,11 @@ const Tunnels = () => {
       const response = await api.post(`/tunnels/${tunnel.id}/test`)
       if (response.data?.status === 'active') {
         const latency = response.data.latency_ms
-        showToast('success', 'Tunnel Connection Active', `${tunnel.name}: ${latency ? `${latency} ms` : 'Online'} — Healthy and routing traffic`)
+        const message = response.data.message || `${tunnel.name}: ${latency ? `${latency} ms` : 'Online'} — Healthy and routing traffic`
+        showToast('success', 'Tunnel Connection Active', message)
         setTunnels(prev => prev.map(t => t.id === tunnel.id ? { ...t, spec: { ...t.spec, latency_ms: latency } } : t))
       } else {
-        showToast('error', 'Tunnel Ping Failed', response.data?.message || 'Tunnel is not responding')
+        showToast('error', 'Tunnel Test Failed', response.data?.message || 'Tunnel is not responding')
       }
     } catch (error: any) {
       const msg = error.response?.data?.detail || error.message || 'Could not test tunnel'

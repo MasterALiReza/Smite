@@ -560,7 +560,7 @@ const renderConnectionStatusBadge = (connStatus: string) => {
       case 'connected': return 'Connected'
       case 'connecting': return 'Connecting'
       case 'reconnecting': return 'Reconnecting'
-      case 'failed': return 'Failed'
+      case 'failed': return 'Offline'
       default: return status
     }
   }

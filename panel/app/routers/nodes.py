@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict
 import httpx
 import logging
 import re
+import time
+import asyncio
 
 from app.database import get_db
 from app.models import Node, Settings, Admin, Tunnel
@@ -450,114 +452,124 @@ def invalidate_node_status_cache(node_id: Optional[str] = None):
         _node_status_cache.clear()
 
 
+async def check_node_status(node: Any, client: Optional[NodeClient] = None) -> NodeResponse:
+    """Check single node connection state and latency with bounded timeouts."""
+    if client is None:
+        client = NodeClient()
+    now = time.time()
+    cached = _node_status_cache.get(node.id)
+    if cached and (now - cached[0]) < _NODE_STATUS_CACHE_TTL:
+        connection_status = cached[1].get("connection_status", "connected")
+        latency_ms = cached[1].get("latency_ms")
+    else:
+        # Calculate time since last registration heartbeat (handling naive & aware UTC datetimes)
+        if node.last_seen:
+            try:
+                if node.last_seen.tzinfo is not None:
+                    from datetime import timezone
+                    diff = (datetime.now(timezone.utc) - node.last_seen).total_seconds()
+                else:
+                    diff = (datetime.utcnow() - node.last_seen).total_seconds()
+                seconds_since_last_seen = max(0.0, diff)
+            except Exception:
+                seconds_since_last_seen = 999999.0
+        else:
+            seconds_since_last_seen = 999999.0
+
+        connection_status = "failed"
+        latency_ms = None
+        t_start = time.perf_counter()
+        try:
+            # Direct bounded check to node agent (1.8s max timeout)
+            response = await asyncio.wait_for(client.get_tunnel_status(node.id, ""), timeout=1.8)
+            elapsed = int((time.perf_counter() - t_start) * 1000)
+            if response and response.get("status") == "ok":
+                connection_status = "connected"
+                # The HTTP RTT is the true network latency to node agent
+                latency_ms = max(1, elapsed)
+            else:
+                latency_ms = None
+                if seconds_since_last_seen <= 90:
+                    connection_status = "reconnecting"
+                else:
+                    connection_status = "failed"
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            latency_ms = None
+            if seconds_since_last_seen <= 90:
+                connection_status = "reconnecting"
+            else:
+                connection_status = "failed"
+        except httpx.ConnectError:
+            latency_ms = None
+            if seconds_since_last_seen <= 60:
+                connection_status = "connecting"
+            else:
+                connection_status = "failed"
+        except Exception:
+            latency_ms = None
+            if seconds_since_last_seen <= 90:
+                connection_status = "reconnecting"
+            else:
+                connection_status = "failed"
+
+        _node_status_cache[node.id] = (now, {
+            "connection_status": connection_status,
+            "latency_ms": latency_ms
+        })
+    
+    metadata = node.node_metadata.copy() if node.node_metadata else {}
+    metadata["connection_status"] = connection_status
+    metadata["latency_ms"] = latency_ms
+    
+    uname = (node.name or "").upper()
+    if metadata.get("role") == "iran" or "IRAN" in uname or uname.startswith("IR-") or uname.startswith("IR_") or uname.startswith("IR "):
+        metadata["country_code"] = "IR"
+        metadata["country_name"] = "Iran"
+    elif not metadata.get("country_code") or metadata.get("country_code") == "DE" and metadata.get("role") == "iran":
+        if "USA" in uname or "UNITED STATES" in uname or uname.startswith("US-") or uname.startswith("US ") or uname.startswith("US_"):
+            metadata["country_code"] = "US"
+        elif "TR-" in uname or uname.startswith("TR ") or uname.startswith("TR_") or "TURKEY" in uname:
+            metadata["country_code"] = "TR"
+        elif "FN-" in uname or "FI-" in uname or uname.startswith("FI ") or uname.startswith("FI_") or "FINLAND" in uname:
+            metadata["country_code"] = "FI"
+        elif "GERMANY" in uname or uname.startswith("DE-") or uname.startswith("DE ") or uname.startswith("DE_"):
+            metadata["country_code"] = "DE"
+        elif "NETHERLAND" in uname or uname.startswith("NL-") or uname.startswith("NL ") or uname.startswith("NL_"):
+            metadata["country_code"] = "NL"
+        elif "FRANCE" in uname or uname.startswith("FR-") or uname.startswith("FR ") or uname.startswith("FR_"):
+            metadata["country_code"] = "FR"
+        elif "GB-" in uname or "UK-" in uname or uname.startswith("GB ") or "ENGLAND" in uname or "BRITAIN" in uname:
+            metadata["country_code"] = "GB"
+        elif "HETZ" in uname:
+            metadata["country_code"] = "DE"
+        else:
+            parts = (node.name or "").split()
+            if len(parts) >= 2 and len(parts[0]) == 2 and parts[0].isupper():
+                metadata["country_code"] = parts[0]
+            elif metadata.get("role") == "iran":
+                metadata["country_code"] = "IR"
+            else:
+                metadata["country_code"] = "US"
+    
+    return NodeResponse(
+        id=node.id,
+        name=node.name,
+        fingerprint=node.fingerprint,
+        status=node.status,
+        registered_at=node.registered_at,
+        last_seen=node.last_seen,
+        metadata=metadata
+    )
+
+
 @router.get("", response_model=List[NodeResponse])
 async def list_nodes(db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
     """List all nodes with connection state and real-time latency"""
-    import asyncio
-    import time
     result = await db.execute(select(Node))
     nodes = result.scalars().all()
     
     client = NodeClient()
-    node_responses = []
-    
-    async def check_node_status(node):
-        now = time.time()
-        cached = _node_status_cache.get(node.id)
-        if cached and (now - cached[0]) < _NODE_STATUS_CACHE_TTL:
-            connection_status = cached[1].get("connection_status", "connected")
-            latency_ms = cached[1].get("latency_ms")
-        else:
-            connection_status = "failed"
-            latency_ms = None
-            t_start = time.perf_counter()
-            try:
-                # Direct bounded check to node agent (1.8s max timeout)
-                response = await asyncio.wait_for(client.get_tunnel_status(node.id, ""), timeout=1.8)
-                elapsed = int((time.perf_counter() - t_start) * 1000)
-                if response and response.get("status") == "ok":
-                    connection_status = "connected"
-                    # The HTTP RTT is the true network latency to node agent
-                    latency_ms = max(1, elapsed)
-                else:
-                    error_msg = response.get("message", "Node disconnected") if response else "Node not responding"
-                    if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                        if node.node_metadata and node.node_metadata.get("frp_connected"):
-                            connection_status = "connected"
-                            latency_ms = node.node_metadata.get("latency_ms") or 45
-                        else:
-                            connection_status = "reconnecting"
-                    else:
-                        connection_status = "failed"
-            except httpx.ConnectError:
-                if node.node_metadata and node.node_metadata.get("frp_connected"):
-                    connection_status = "connected"
-                    latency_ms = node.node_metadata.get("latency_ms") or 40
-                else:
-                    connection_status = "connecting"
-            except (httpx.TimeoutException, asyncio.TimeoutError):
-                if node.node_metadata and node.node_metadata.get("frp_connected"):
-                    connection_status = "connected"
-                    latency_ms = node.node_metadata.get("latency_ms") or 50
-                else:
-                    connection_status = "reconnecting"
-            except Exception:
-                if node.node_metadata and node.node_metadata.get("frp_connected"):
-                    connection_status = "connected"
-                    latency_ms = node.node_metadata.get("latency_ms") or 45
-                else:
-                    connection_status = "failed"
-
-            _node_status_cache[node.id] = (now, {
-                "connection_status": connection_status,
-                "latency_ms": latency_ms
-            })
-        
-        metadata = node.node_metadata.copy() if node.node_metadata else {}
-        metadata["connection_status"] = connection_status
-        metadata["latency_ms"] = latency_ms
-        
-        uname = (node.name or "").upper()
-        if metadata.get("role") == "iran" or "IRAN" in uname or uname.startswith("IR-") or uname.startswith("IR_") or uname.startswith("IR "):
-            metadata["country_code"] = "IR"
-            metadata["country_name"] = "Iran"
-        elif not metadata.get("country_code") or metadata.get("country_code") == "DE" and metadata.get("role") == "iran":
-            if "USA" in uname or "UNITED STATES" in uname or uname.startswith("US-") or uname.startswith("US ") or uname.startswith("US_"):
-                metadata["country_code"] = "US"
-            elif "TR-" in uname or uname.startswith("TR ") or uname.startswith("TR_") or "TURKEY" in uname:
-                metadata["country_code"] = "TR"
-            elif "FN-" in uname or "FI-" in uname or uname.startswith("FI ") or uname.startswith("FI_") or "FINLAND" in uname:
-                metadata["country_code"] = "FI"
-            elif "GERMANY" in uname or uname.startswith("DE-") or uname.startswith("DE ") or uname.startswith("DE_"):
-                metadata["country_code"] = "DE"
-            elif "NETHERLAND" in uname or uname.startswith("NL-") or uname.startswith("NL ") or uname.startswith("NL_"):
-                metadata["country_code"] = "NL"
-            elif "FRANCE" in uname or uname.startswith("FR-") or uname.startswith("FR ") or uname.startswith("FR_"):
-                metadata["country_code"] = "FR"
-            elif "GB-" in uname or "UK-" in uname or uname.startswith("GB ") or "ENGLAND" in uname or "BRITAIN" in uname:
-                metadata["country_code"] = "GB"
-            elif "HETZ" in uname:
-                metadata["country_code"] = "DE"
-            else:
-                parts = (node.name or "").split()
-                if len(parts) >= 2 and len(parts[0]) == 2 and parts[0].isupper():
-                    metadata["country_code"] = parts[0]
-                elif metadata.get("role") == "iran":
-                    metadata["country_code"] = "IR"
-                else:
-                    metadata["country_code"] = "US"
-        
-        return NodeResponse(
-            id=node.id,
-            name=node.name,
-            fingerprint=node.fingerprint,
-            status=node.status,
-            registered_at=node.registered_at,
-            last_seen=node.last_seen,
-            metadata=metadata
-        )
-    
-    tasks = [check_node_status(node) for node in nodes]
+    tasks = [check_node_status(node, client) for node in nodes]
     node_responses = await asyncio.gather(*tasks, return_exceptions=True)
     
     results = []

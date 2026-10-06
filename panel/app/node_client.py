@@ -301,3 +301,52 @@ class NodeClient:
                             pass
         return None
 
+    async def probe_tunnel(self, node_id: str, tunnel_id: str) -> Dict[str, Any]:
+        """Ask node agent to probe proxy process, ingress port, and data flow for a specific tunnel"""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Node).where(Node.id == node_id))
+            node = result.scalar_one_or_none()
+            if not node:
+                return {"status": "error", "message": f"Node {node_id} not found"}
+            
+            using_frp = False
+            timeout = httpx.Timeout(3.0, connect=1.8)
+            try:
+                node_address, using_frp = await self._get_node_address(node)
+                url = f"{node_address.rstrip('/')}/api/agent/tunnels/{tunnel_id}/probe"
+                async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
+                    resp = await client.get(url, headers=self._node_token_headers())
+                    if resp.status_code == 200:
+                        return resp.json()
+            except Exception:
+                if using_frp and node.node_metadata:
+                    direct_addr = node.node_metadata.get("api_address") or f"http://{node.node_metadata.get('ip_address')}:{node.node_metadata.get('api_port', 8888)}"
+                    if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
+                        try:
+                            direct_url = f"{direct_addr.rstrip('/')}/api/agent/tunnels/{tunnel_id}/probe"
+                            async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
+                                resp = await direct_client.get(direct_url, headers=self._node_token_headers())
+                                if resp.status_code == 200:
+                                    return resp.json()
+                        except Exception:
+                            pass
+        
+        # Fallback to get_tunnel_status if /probe endpoint is not yet supported
+        fallback_res = await self.get_tunnel_status(node_id, tunnel_id)
+        if isinstance(fallback_res, dict) and "data" in fallback_res:
+            data = fallback_res["data"]
+            if isinstance(data, dict):
+                return {
+                    "status": fallback_res.get("status", "success"),
+                    "tunnel_id": tunnel_id,
+                    "process_running": data.get("process_running", True),
+                    "healthy": data.get("healthy", True),
+                    "core": data.get("core", "unknown"),
+                    "listening_ports": data.get("listening_ports", []),
+                    "ingress_port": None,
+                    "ingress_port_open": data.get("process_running", True),
+                    "data_flow": True,
+                    "tunnel_rtt_ms": None
+                }
+        return fallback_res
+

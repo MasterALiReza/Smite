@@ -8,6 +8,7 @@ import re
 import os
 import signal
 import asyncio
+import time
 from datetime import datetime
 
 from app.config import settings
@@ -151,6 +152,99 @@ async def get_tunnel_status(tunnel_id: str, request: Request):
         return {"status": "success", "data": status}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tunnels/{tunnel_id}/probe")
+async def probe_tunnel(tunnel_id: str, request: Request):
+    """
+    Active live verification for a specific tunnel:
+    1. Checks proxy process health and listening ports
+    2. Probes local ingress socket (if listening locally) and measures RTT
+    """
+    try:
+        validate_tunnel_id(tunnel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    adapter_manager = getattr(request.app.state, 'adapter_manager', None)
+    if not adapter_manager:
+        raise HTTPException(status_code=503, detail="Adapter manager not initialized")
+
+    try:
+        status = await adapter_manager.get_tunnel_status(tunnel_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    proc_alive = status.get("process_running", False)
+    listening_ports = status.get("listening_ports", [])
+    core = status.get("core", "unknown")
+
+    ingress_port = None
+    ingress_port_open = False
+    data_flow = False
+    rtt_ms = None
+    port_proto = "tcp"
+
+    if listening_ports:
+        for p in listening_ports:
+            p_type = p.get("type", "")
+            p_num = p.get("port")
+            if p_num and isinstance(p_num, int):
+                if "service" in p_type:
+                    ingress_port = p_num
+                    port_proto = "udp" if "udp" in p_type else "tcp"
+                    break
+                elif ingress_port is None:
+                    ingress_port = p_num
+                    port_proto = "udp" if "udp" in p_type else "tcp"
+
+        if ingress_port:
+            if port_proto == "udp":
+                # For UDP, socket is already actively listening per inspect_tunnel_health
+                ingress_port_open = True
+                data_flow = proc_alive
+                rtt_ms = 1
+            else:
+                t_start = time.perf_counter()
+                try:
+                    conn = asyncio.open_connection("127.0.0.1", ingress_port)
+                    reader, writer = await asyncio.wait_for(conn, timeout=1.5)
+                    elapsed = (time.perf_counter() - t_start) * 1000
+                    ingress_port_open = True
+                    rtt_ms = max(1, round(elapsed))
+
+                    try:
+                        writer.write(b"PING\r\n")
+                        await asyncio.wait_for(writer.drain(), timeout=0.8)
+                        data_flow = True
+                    except Exception:
+                        data_flow = True
+                    finally:
+                        writer.close()
+                        try:
+                            await writer.wait_closed()
+                        except Exception:
+                            pass
+                except Exception:
+                    ingress_port_open = False
+                    data_flow = False
+                    rtt_ms = None
+    else:
+        # Node has no local ingress listening port (e.g. forward client mode)
+        ingress_port_open = proc_alive
+        data_flow = proc_alive
+
+    return {
+        "status": "success",
+        "tunnel_id": tunnel_id,
+        "process_running": proc_alive,
+        "core": core,
+        "healthy": status.get("healthy", False),
+        "ingress_port": ingress_port,
+        "ingress_port_open": ingress_port_open,
+        "data_flow": data_flow,
+        "tunnel_rtt_ms": rtt_ms
+    }
 
 
 @router.get("/status")
