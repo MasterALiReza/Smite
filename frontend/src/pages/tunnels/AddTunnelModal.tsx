@@ -231,7 +231,8 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
       }
       
       if (formData.core === 'rathole') {
-        const remoteHost = window.location.hostname
+        const selectedIran = nodes.find(n => n.id === (formData.iran_node_id || formData.node_id))
+        const remoteHost = selectedIran?.ip_address || selectedIran?.metadata?.ip_address || window.location.hostname
         const remotePort = formData.rathole_remote_addr || String(Math.floor(25000 + Math.random() * 25000))
         spec.remote_addr = `${remoteHost}:${remotePort}`
         spec.control_port = parseInt(remotePort)

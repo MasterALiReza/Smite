@@ -278,6 +278,10 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
     client_spec["token"] = token
     client_spec["ports"] = ports
 
+    if getattr(tunnel, "spec", None) is not None:
+        tunnel.spec["remote_addr"] = client_spec["remote_addr"]
+        tunnel.spec["control_port"] = control_port
+
     return server_spec, client_spec
 
 
@@ -664,6 +668,10 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     client_spec["tunnel_type"] = tunnel_type
     client_spec["ports"] = ports
     client_spec["token"] = token
+
+    if getattr(tunnel, "spec", None) is not None:
+        tunnel.spec["remote_addr"] = client_spec["remote_addr"]
+        tunnel.spec["control_port"] = control_port
 
     return server_spec, client_spec
 

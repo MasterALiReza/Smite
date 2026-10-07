@@ -259,7 +259,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
             : formData.rathole_remote_addr
           const parsedPort = parseInt(remotePort) || 23333
           updatedSpec.control_port = parsedPort
-          const remoteHost = window.location.hostname
+          const selectedIran = nodes.find(n => n.id === (formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id))
+          const remoteHost = selectedIran?.ip_address || selectedIran?.metadata?.ip_address || window.location.hostname
           updatedSpec.remote_addr = `${remoteHost}:${parsedPort}`
         }
         if (formData.rathole_token) {
