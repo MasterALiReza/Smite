@@ -485,8 +485,15 @@ async def check_node_status(node: Any, client: Optional[NodeClient] = None) -> N
             elapsed = int((time.perf_counter() - t_start) * 1000)
             if response and response.get("status") == "ok":
                 connection_status = "connected"
-                # The HTTP RTT is the true network latency to node agent
-                latency_ms = max(1, elapsed)
+                # Measure true wire network ping (ICMP / TCP handshake) instead of HTTP application overhead
+                node_ip = node.node_metadata.get("ip_address") if node.node_metadata else None
+                if node_ip:
+                    from app.utils import measure_precise_ping
+                    api_p = node.node_metadata.get("api_port", 8888) if node.node_metadata else 8888
+                    wire_ping = await measure_precise_ping(node_ip, fallback_ports=[api_p, 22, 443, 80])
+                    latency_ms = wire_ping if wire_ping is not None else max(1, elapsed)
+                else:
+                    latency_ms = max(1, elapsed)
             else:
                 latency_ms = None
                 if seconds_since_last_seen <= 90:
