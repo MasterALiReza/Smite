@@ -11,6 +11,7 @@ services:
       - ./panel/main.py:/app/main.py
       - ./panel/data:/app/data
       - ./panel/certs:/app/certs
+      - ./panel/static:/app/static
       - /etc/letsencrypt:/etc/letsencrypt
       - /var/www/html:/var/www/html
       - /var/www/certbot:/var/www/certbot
