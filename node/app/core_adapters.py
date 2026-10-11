@@ -1,5 +1,5 @@
 """Core adapters for different tunnel types"""
-from typing import Protocol, Dict, Any, Optional, List, Set, Iterable, Sequence
+from typing import Protocol, Dict, Any, Optional, List, Set, Iterable, Sequence, Tuple
 from pathlib import Path
 import subprocess
 import asyncio
@@ -14,8 +14,22 @@ import shutil
 import threading
 import uuid
 import re
+import contextvars
 
 logger = logging.getLogger(__name__)
+
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+# Idle time after which a UDP client session of a GOST tunnel is released
+UDP_SESSION_TTL = "120s"
+
+# Environment tags set on every core process this agent starts
+AGENT_TAG_ENV = "SMITE_NODE_AGENT"
+TUNNEL_TAG_ENV = "SMITE_TUNNEL_ID"
+# Several node instances may share one host (pid: host); each tags its processes
+# with its own instance id (the agent API port is unique per host).
+AGENT_INSTANCE_ID = os.environ.get("SMITE_AGENT_INSTANCE") or f"port-{os.environ.get('NODE_API_PORT', '8888')}"
+SAFE_TUNNEL_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 def sanitize_config_str(val: Any) -> str:
     """Sanitizes configuration strings by removing newlines and quotes to prevent config injection."""
@@ -63,12 +77,57 @@ def sanitize_cmd_for_log(cmd: List[str]) -> str:
             sanitized.append(arg)
     return " ".join(sanitized)
 
-def _find_pids_by_port_procfs(port: int) -> Set[int]:
-    """Find process IDs holding a port by scanning Linux /proc net entries and fds directly."""
+# Tunnel on whose behalf ports are currently being freed. Set by adapter
+# apply()/remove() entry points so free_ports() never kills a process that
+# belongs to a *different* live tunnel on this node.
+_PORT_OWNER: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("smite_port_owner", default=None)
+
+# Callable returning the set of tunnel ids that are currently configured on this
+# node. Registered by AdapterManager; processes of these tunnels are protected.
+_protected_tunnels_provider: Optional[Any] = None
+
+# Only processes started by this agent (their config lives here) may be killed
+# when freeing ports. Processes of the panel or other software are never touched.
+NODE_MANAGED_PATH_MARKERS = ("/etc/smite-node/",)
+
+
+def _set_port_owner(tunnel_id: Optional[str]) -> None:
+    _PORT_OWNER.set(tunnel_id)
+
+
+def _get_protected_tunnel_ids() -> Set[str]:
+    provider = _protected_tunnels_provider
+    if provider is None:
+        return set()
+    try:
+        return {str(t) for t in provider() if t}
+    except Exception:
+        return set()
+
+
+def _find_pids_by_port_procfs(port: int, listen_only: bool = True) -> Set[int]:
+    """Find process IDs holding a port by scanning Linux /proc net entries and fds directly.
+
+    With listen_only=True (default) only TCP sockets in LISTEN state and unconnected
+    UDP sockets match. Established connections whose *ephemeral* local port happens
+    to equal the target port (e.g. another tunnel's outbound pool connection) are
+    ignored, so freeing a port can never kill an unrelated tunnel.
+    """
+    inodes = _socket_inodes_for_port(port, listen_only)
+    if not inodes:
+        return set()
+    return _pids_owning_inodes(inodes)
+
+
+PROC_NET_ROOT = "/proc/net"
+
+
+def _socket_inodes_for_port(port: int, listen_only: bool = True) -> Set[str]:
+    """Socket inodes bound to `port` (see _find_pids_by_port_procfs for listen_only)."""
     hex_p = f"{port:04X}"
     inodes: Set[str] = set()
     for proto in ["tcp", "tcp6", "udp", "udp6"]:
-        path = f"/proc/net/{proto}"
+        path = f"{PROC_NET_ROOT}/{proto}"
         if not os.path.exists(path):
             continue
         try:
@@ -77,16 +136,25 @@ def _find_pids_by_port_procfs(port: int) -> Set[int]:
                     parts = line.strip().split()
                     if len(parts) >= 10:
                         local_addr = parts[1]
-                        if ":" in local_addr and local_addr.split(":")[1].upper() == hex_p:
+                        if ":" in local_addr and local_addr.rsplit(":", 1)[1].upper() == hex_p:
+                            if listen_only:
+                                if proto.startswith("tcp"):
+                                    if parts[3].upper() != "0A":  # TCP_LISTEN
+                                        continue
+                                else:
+                                    rem_port = parts[2].rsplit(":", 1)[-1] if ":" in parts[2] else ""
+                                    if rem_port and rem_port != "0000":  # connected UDP socket
+                                        continue
                             inode = parts[9]
                             if inode != "0":
                                 inodes.add(inode)
         except Exception:
             pass
-    
-    if not inodes:
-        return set()
-    
+    return inodes
+
+
+def _pids_owning_inodes(inodes: Set[str]) -> Set[int]:
+    """PIDs that hold any of the given socket inodes (Linux /proc/<pid>/fd scan)."""
     pids: Set[int] = set()
     if os.path.exists("/proc"):
         try:
@@ -172,12 +240,54 @@ def _get_pid_dir() -> Path:
 
 
 def _save_tunnel_pid(tunnel_id: str, pid: int) -> None:
-    """Save running tunnel process PID to disk for zero-downtime adoption across restarts."""
+    """Save running tunnel process PID (and its start time) to disk for zero-downtime adoption.
+
+    The start time lets later checks detect PID reuse: on long-running hosts a dead
+    tunnel's PID can be recycled by an unrelated process.
+    """
     try:
         pdir = _get_pid_dir()
-        (pdir / f"{tunnel_id}.pid").write_text(str(pid))
+        content = str(pid)
+        try:
+            content = f"{pid} {psutil.Process(pid).create_time():.3f}"
+        except Exception:
+            pass
+        (pdir / f"{tunnel_id}.pid").write_text(content)
     except Exception as e:
         logger.debug(f"Failed to save PID for tunnel {tunnel_id}: {e}")
+
+
+def _read_tunnel_pid_record(tunnel_id: str) -> Tuple[Optional[int], Optional[float]]:
+    """Return (pid, create_time) from the PID file; create_time is None for legacy files."""
+    try:
+        pdir = _get_pid_dir()
+        pid_file = pdir / f"{tunnel_id}.pid"
+        if pid_file.exists():
+            parts = pid_file.read_text().strip().split()
+            if parts and parts[0].isdigit():
+                ctime = None
+                if len(parts) > 1:
+                    try:
+                        ctime = float(parts[1])
+                    except ValueError:
+                        ctime = None
+                return int(parts[0]), ctime
+    except Exception:
+        pass
+    return None, None
+
+
+def _all_recorded_pids() -> Dict[str, int]:
+    """Map of tunnel-id (pid file stem) -> recorded PID for every PID file on disk."""
+    result: Dict[str, int] = {}
+    try:
+        for pf in _get_pid_dir().glob("*.pid"):
+            pid, _ = _read_tunnel_pid_record(pf.stem)
+            if pid:
+                result[pf.stem] = pid
+    except Exception:
+        pass
+    return result
 
 
 def _remove_tunnel_pid(tunnel_id: str) -> None:
@@ -193,21 +303,13 @@ def _remove_tunnel_pid(tunnel_id: str) -> None:
 
 def _get_tunnel_pid(tunnel_id: str) -> Optional[int]:
     """Retrieve recorded PID for a tunnel."""
-    try:
-        pdir = _get_pid_dir()
-        pid_file = pdir / f"{tunnel_id}.pid"
-        if pid_file.exists():
-            content = pid_file.read_text().strip()
-            if content.isdigit():
-                return int(content)
-    except Exception:
-        pass
-    return None
+    pid, _ = _read_tunnel_pid_record(tunnel_id)
+    return pid
 
 
 def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> bool:
     """Check if the detached tunnel process is still active and healthy on the host."""
-    pid = _get_tunnel_pid(tunnel_id)
+    pid, recorded_ctime = _read_tunnel_pid_record(tunnel_id)
     if not pid:
         return False
     try:
@@ -218,12 +320,154 @@ def _is_tunnel_pid_alive(tunnel_id: str, core_name: Optional[str] = None) -> boo
             return False
         if not _is_safe_core_process(pid):
             return False
+        if recorded_ctime is not None:
+            # Exact identity check: the PID must still belong to the process we started
+            return abs(p.create_time() - recorded_ctime) < 1.0
         cmdline = " ".join(p.cmdline()).lower()
-        if tunnel_id.lower() in cmdline or (core_name and core_name.lower() in p.name().lower()):
+        if tunnel_id.lower() in cmdline:
+            return True
+        # Legacy PID file without start time: chisel's command line does not carry
+        # the tunnel id, so fall back to the binary name for chisel only. For the
+        # other cores the config path always contains the tunnel id, so a missing id
+        # means the PID was recycled by another process.
+        if core_name and core_name.lower() == "chisel" and "chisel" in p.name().lower():
             return True
         return False
     except Exception:
         return False
+
+
+def _get_verified_tunnel_pid(tunnel_id: str, core_name: Optional[str] = None) -> Optional[int]:
+    """Recorded PID of a tunnel, but only if it provably still belongs to that tunnel.
+
+    Prevents killing an unrelated process that recycled the PID of a dead tunnel.
+    """
+    pid = _get_tunnel_pid(tunnel_id)
+    if not pid:
+        return None
+    if not _is_tunnel_pid_alive(tunnel_id, core_name):
+        return None
+    for stem, other_pid in _all_recorded_pids().items():
+        if other_pid == pid and stem != tunnel_id:
+            return None
+    return pid
+
+
+def _cmdline_of(pid: int) -> str:
+    try:
+        return " ".join(psutil.Process(pid).cmdline())
+    except Exception:
+        return ""
+
+
+def _process_tags(pid: int) -> Tuple[bool, Optional[str]]:
+    """(started_by_agent, tunnel_id) read from the environment tag of a core process."""
+    try:
+        env = psutil.Process(pid).environ()
+    except Exception:
+        return False, None
+    return env.get(AGENT_TAG_ENV) == AGENT_INSTANCE_ID, (env.get(TUNNEL_TAG_ENV) or None)
+
+
+def _is_node_managed_process(pid: int, recorded_pids: Optional[Dict[str, int]] = None) -> bool:
+    """True if the process was started by this node agent (tagged, recorded PID, or config under /etc/smite-node)."""
+    if recorded_pids is None:
+        recorded_pids = _all_recorded_pids()
+    if pid in recorded_pids.values():
+        return True
+    tagged, _ = _process_tags(pid)
+    if tagged:
+        return True
+    cmdline = _cmdline_of(pid)
+    return any(marker in cmdline for marker in NODE_MANAGED_PATH_MARKERS)
+
+
+def _owning_tunnels(pid: int, candidate_ids: Iterable[str], recorded_pids: Dict[str, int]) -> Set[str]:
+    """Return the tunnel ids (from candidate_ids) that the process belongs to."""
+    owners: Set[str] = set()
+    cmdline = _cmdline_of(pid)
+    _, tag = _process_tags(pid)
+    for tid in candidate_ids:
+        if not tid:
+            continue
+        if tag and tag == tid:
+            owners.add(tid)
+            continue
+        if tid in cmdline:
+            owners.add(tid)
+            continue
+        if recorded_pids.get(tid) == pid or recorded_pids.get(f"{tid}_provider") == pid:
+            owners.add(tid)
+    return owners
+
+
+def _find_tagged_core_processes(tunnel_id: Optional[str] = None) -> Dict[int, Optional[str]]:
+    """Core processes started by this agent: {pid: tunnel_id}. Filter by tunnel_id when given."""
+    found: Dict[int, Optional[str]] = {}
+    me = {os.getpid(), os.getppid(), 1}
+    try:
+        for p in psutil.process_iter(["pid", "name"]):
+            if p.pid in me:
+                continue
+            name = (p.info.get("name") or "").lower().replace(".exe", "")
+            if name not in ALLOWED_CORE_BINARIES:
+                continue
+            tagged, tag = _process_tags(p.pid)
+            if not tagged:
+                continue
+            if tunnel_id is not None and tag != tunnel_id:
+                continue
+            found[p.pid] = tag
+    except Exception:
+        pass
+    return found
+
+
+def _kill_pids(pids: Iterable[int], timeout: float = 3.0) -> None:
+    """SIGTERM, wait, then SIGKILL the given core processes (best effort)."""
+    procs = []
+    for pid in pids:
+        try:
+            if not _is_safe_core_process(pid):
+                continue
+            p = psutil.Process(pid)
+            p.terminate()
+            procs.append(p)
+        except Exception:
+            pass
+    if not procs:
+        return
+    try:
+        _, alive = psutil.wait_procs(procs, timeout=timeout)
+    except Exception:
+        alive = procs
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    try:
+        psutil.wait_procs(alive, timeout=1.0)
+    except Exception:
+        pass
+
+
+def _may_kill_port_holder(pid: int, owner: Optional[str], protected_ids: Set[str], recorded_pids: Dict[str, int]) -> bool:
+    """Decide whether a process holding a port may be killed to free it.
+
+    Rules (all must hold):
+    - it is a known proxy core binary (never python/sshd/docker/etc.)
+    - it was started by this node agent
+    - it does not belong to another tunnel that is configured on this node
+    """
+    if not _is_safe_core_process(pid):
+        return False
+    if not _is_node_managed_process(pid, recorded_pids):
+        return False
+    others = protected_ids - ({owner} if owner else set())
+    if others and _owning_tunnels(pid, others, recorded_pids):
+        return False
+    return True
 
 
 
@@ -316,56 +560,63 @@ async def free_ports(ports: Iterable[Any]) -> None:
 
     current_pid = os.getpid()
     ignored_pids = {current_pid, os.getppid(), 1}
+    owner = _PORT_OWNER.get()
+    protected_ids = _get_protected_tunnel_ids()
+    recorded_pids = _all_recorded_pids()
+    killed: Set[int] = set()
 
-    # Method 1: Linux /proc/net + /proc/{pid}/fd scan
+    def _try_kill(pid: int, port_num: int, source: str) -> None:
+        if pid in ignored_pids or pid in killed:
+            return
+        if not _may_kill_port_holder(pid, owner, protected_ids, recorded_pids):
+            logger.debug(f"{source}: port {port_num} is held by protected/foreign process {pid}; leaving it untouched")
+            return
+        logger.warning(f"{source}: terminating stale core process {pid} holding port {port_num} (owner={owner})")
+        try:
+            os.kill(pid, _SIGKILL)
+            killed.add(pid)
+        except Exception:
+            pass
+
+    # Method 1: Linux /proc/net + /proc/{pid}/fd scan (listening sockets only)
     for port_num in target_ports:
         try:
-            pids = _find_pids_by_port_procfs(port_num)
-            for pid in pids:
-                if pid not in ignored_pids and _is_safe_core_process(pid):
-                    logger.warning(f"Kernel socket scan: terminating core process {pid} holding port {port_num}")
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except Exception:
-                        pass
+            for pid in _find_pids_by_port_procfs(port_num, listen_only=True):
+                _try_kill(pid, port_num, "Kernel socket scan")
         except Exception as e:
             logger.debug(f"Error in procfs port scan for port {port_num}: {e}")
 
-    # Method 2: Single-pass psutil process and connection scanning
-    try:
-        for p in psutil.process_iter(['pid', 'name']):
-            if p.pid in ignored_pids:
-                continue
-            try:
-                if not _is_safe_core_process(p.pid):
+    # Method 2: psutil scan (non-Linux fallback). Only listening TCP / unconnected UDP sockets count.
+    if not os.path.exists("/proc/net/tcp"):
+        try:
+            for p in psutil.process_iter(['pid', 'name']):
+                if p.pid in ignored_pids or p.pid in killed:
                     continue
-                for conn in p.net_connections(kind='all'):
-                    if conn.laddr and conn.laddr.port in target_ports:
-                        logger.warning(f"psutil: Terminating core process {p.pid} ({p.name()}) holding port {conn.laddr.port}")
-                        p.kill()
-                        try:
-                            p.wait(timeout=0.5)
-                        except Exception:
-                            pass
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-            except Exception:
-                pass
-    except Exception as e:
-        logger.debug(f"Error freeing ports {target_ports} via psutil: {e}")
+                try:
+                    if not _is_safe_core_process(p.pid):
+                        continue
+                    conn_fn = getattr(p, "net_connections", None) or getattr(p, "connections")
+                    for conn in conn_fn(kind='inet'):
+                        if not conn.laddr or conn.laddr.port not in target_ports:
+                            continue
+                        if conn.type == socket.SOCK_STREAM and conn.status != psutil.CONN_LISTEN:
+                            continue
+                        if conn.type == socket.SOCK_DGRAM and conn.raddr:
+                            continue
+                        _try_kill(p.pid, conn.laddr.port, "psutil")
+                        break
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"Error freeing ports {target_ports} via psutil: {e}")
 
-    # Method 3: Tear down lingering half-open kernel TCP sockets on Linux via ss -K (SOCK_DESTROY)
-    if os.name == 'posix' and shutil.which("ss"):
-        for port_num in target_ports:
-            try:
-                proc_kill = await asyncio.create_subprocess_exec(
-                    "ss", "-K", f"( sport = :{port_num} or dport = :{port_num} )",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL
-                )
-                await asyncio.wait_for(proc_kill.wait(), timeout=0.8)
-            except Exception:
-                pass
+    # NOTE: established connections are intentionally never torn down here (no `ss -K`).
+    # Killing a process already closes its sockets; destroying sockets by port number
+    # also hit unrelated tunnels, user sessions and even SSH sharing that port number.
+    if killed:
+        await asyncio.sleep(0.1)
 
 
 async def free_port(port: Optional[Any]) -> None:
@@ -467,20 +718,43 @@ async def safe_stop_subprocess(
             except Exception:
                 pass
 
+def _open_core_log(path: Any):
+    """Truncate a core log file and reopen it in append mode for the child process.
+
+    O_APPEND is required so the watchdog can truncate oversized logs in place: with a
+    plain 'w' descriptor the child keeps writing at its old offset and the file never
+    actually shrinks (sparse file that keeps "growing").
+    """
+    p = Path(path)
+    with open(p, "w", encoding="utf-8"):
+        pass
+    return open(p, "a", buffering=1, encoding="utf-8")
+
+
 async def _spawn_core_subprocess(
     cmd: List[str],
     stdout: Any = None,
     stderr: Any = None,
     env: Optional[Dict[str, str]] = None,
 ) -> asyncio.subprocess.Process:
-    """Spawns a core process with a dedicated process group so signals never hit uvicorn"""
+    """Spawns a core process with a dedicated process group so signals never hit uvicorn.
+
+    Every core process is tagged with SMITE_TUNNEL_ID / SMITE_NODE_AGENT in its
+    environment (readable from /proc/<pid>/environ). The tag survives agent
+    reloads and lets removal find orphans whose command line does not carry the
+    tunnel id (e.g. chisel clients), even if their PID file was lost.
+    """
     if stdout is None:
         stdout = subprocess.DEVNULL
     if stderr is None:
         stderr = subprocess.DEVNULL
     kwargs = {"stdout": stdout, "stderr": stderr}
-    if env is not None:
-        kwargs["env"] = env
+    child_env = dict(env if env is not None else os.environ)
+    owner = _PORT_OWNER.get()
+    child_env[AGENT_TAG_ENV] = AGENT_INSTANCE_ID
+    if owner:
+        child_env[TUNNEL_TAG_ENV] = owner
+    kwargs["env"] = child_env
     if os.name == 'posix':
         kwargs["start_new_session"] = True
         kwargs["close_fds"] = True
@@ -913,7 +1187,7 @@ nodelay = true
             
         mode_flag = "-s" if mode == 'server' else "-c"
         log_path = self.config_dir / f"{tunnel_id}.log"
-        log_fh = log_path.open("w", buffering=1)
+        log_fh = _open_core_log(log_path)
         log_fh.write(f"Starting Rathole ({mode}) for tunnel {tunnel_id}\n")
         log_fh.flush()
 
@@ -961,7 +1235,8 @@ nodelay = true
     
     async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove Rathole tunnel and release bound ports"""
-        pid = _get_tunnel_pid(tunnel_id)
+        _set_port_owner(tunnel_id)
+        pid = _get_verified_tunnel_pid(tunnel_id, self.name)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
@@ -1288,7 +1563,7 @@ class BackhaulAdapter:
                     log_path.write_text("", encoding="utf-8")
                 except Exception:
                     pass
-            log_fh = log_path.open("w", buffering=1)
+            log_fh = _open_core_log(log_path)
             log_fh.write(f"Starting Backhaul server for tunnel {tunnel_id}\n")
             log_fh.write(self._render_toml(sanitize_spec_for_log({"server": server_config})))
             log_fh.flush()
@@ -1401,7 +1676,7 @@ class BackhaulAdapter:
                     log_path.write_text("", encoding="utf-8")
                 except Exception:
                     pass
-            log_fh = log_path.open("w", buffering=1)
+            log_fh = _open_core_log(log_path)
             log_fh.write(f"Starting Backhaul client for tunnel {tunnel_id}\n")
             log_fh.write(self._render_toml({"client": sanitize_spec_for_log(config_dict)}))
             log_fh.flush()
@@ -1436,7 +1711,8 @@ class BackhaulAdapter:
 
     async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove Backhaul tunnel and release bound ports"""
-        pid = _get_tunnel_pid(tunnel_id)
+        _set_port_owner(tunnel_id)
+        pid = _get_verified_tunnel_pid(tunnel_id, self.name)
         config_path = self.config_dir / f"{tunnel_id}.toml"
         cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
         key_path = self.config_dir / f"{tunnel_id}_key.pem"
@@ -1731,7 +2007,7 @@ class ChiselAdapter:
             except Exception:
                 pass
 
-            log_f = open(log_file, 'w', buffering=1)
+            log_f = _open_core_log(log_file)
             try:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
@@ -1921,7 +2197,7 @@ class ChiselAdapter:
             except Exception:
                 pass
 
-            log_f = open(log_file, 'w', buffering=1)
+            log_f = _open_core_log(log_file)
             try:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
@@ -1955,7 +2231,8 @@ class ChiselAdapter:
     
     async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove Chisel tunnel, free bound ports, and clean up associated key/cert files"""
-        pid = _get_tunnel_pid(tunnel_id)
+        _set_port_owner(tunnel_id)
+        pid = _get_verified_tunnel_pid(tunnel_id, self.name)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -1964,15 +2241,26 @@ class ChiselAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
+        # Ports are derived from the command line recorded in the log header only
+        # (never from log lines: timestamps like "22:15:03" used to be parsed as port 22).
         ports_to_free: Set[int] = set()
         log_file = self.config_dir / f"{tunnel_id}.log"
         if log_file.exists():
             try:
-                txt = log_file.read_text(encoding="utf-8", errors="ignore")
-                for m in re.finditer(r'(?:R:|\s:?)(\d{1,5}):', txt):
-                    p_val = int(m.group(1))
-                    if 0 < p_val <= 65535:
-                        ports_to_free.add(p_val)
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as lf:
+                    header = [lf.readline() for _ in range(3)]
+                for line in header:
+                    if not line.startswith("Command:"):
+                        continue
+                    for token in line.split()[1:]:
+                        m = re.match(r'^(?:R:)?(?:[0-9.]+:|\[[0-9a-fA-F:]+\]:)?(\d{1,5}):', token)
+                        if m:
+                            p_val = int(m.group(1))
+                            if 0 < p_val <= 65535:
+                                ports_to_free.add(p_val)
+                    m_port = re.search(r'--port\s+(\d{1,5})', line)
+                    if m_port:
+                        ports_to_free.add(int(m_port.group(1)))
             except Exception:
                 pass
 
@@ -2010,6 +2298,21 @@ class ChiselAdapter:
             "type": "chisel",
             "process_running": is_running
         }
+
+
+def _frp_tcp_mux(spec: Dict[str, Any]) -> bool:
+    """FRP stream multiplexing (default on).
+
+    The panel only sends tcp_mux=false for latency-sensitive tunnels after both
+    nodes confirmed they support it, because frps and frpc must agree. Without
+    multiplexing each proxy connection gets its own TCP stream, so a game's UDP
+    traffic never waits behind other traffic of the tunnel (no head-of-line
+    blocking inside the shared yamux session).
+    """
+    value = spec.get("tcp_mux", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "off")
+    return bool(value)
 
 
 class FrpAdapter:
@@ -2171,10 +2474,11 @@ bindPort: {bind_port}
                 hp = spec.get('vhost_https_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
                 config_content += f"vhostHTTPSPort: {hp}\n"
 
+            tcp_mux = _frp_tcp_mux(spec)
             config_content += f"""transport:
   maxPoolCount: 8
   heartbeatTimeout: 30
-  tcpMux: true
+  tcpMux: {'true' if tcp_mux else 'false'}
   tcpMuxKeepaliveInterval: 25
   tls:
     force: {'true' if force_tls else 'false'}
@@ -2217,7 +2521,7 @@ bindPort: {bind_port}
                     log_file.write_text("")
                 except Exception:
                     pass
-            log_f = open(log_file, 'w', buffering=1)
+            log_f = _open_core_log(log_file)
             try:
                 log_f.write(f"Starting FRP server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
@@ -2247,10 +2551,25 @@ bindPort: {bind_port}
                 provider_config_content = f"""serverAddr: "127.0.0.1"
 serverPort: {bind_port}
 loginFailExit: false
-auth:
+"""
+                if not tcp_mux:
+                    provider_config_content += """transport:
+  tcpMux: false
+"""
+                provider_config_content += f"""auth:
   method: token
   token: "{clean_token or ''}"
-proxies:
+"""
+                if clean_token:
+                    # frps above verifies the token on heartbeats and new work
+                    # connections; without the same scopes here frps rejected every
+                    # work connection of the provider, so direct-mode FRP tunnels
+                    # never carried traffic.
+                    provider_config_content += """  additionalScopes:
+    - HeartBeats
+    - NewWorkConns
+"""
+                provider_config_content += """proxies:
 """
                 use_encryption = spec.get('use_encryption', True)
                 use_compression = spec.get('use_compression', True)
@@ -2328,7 +2647,7 @@ proxies:
                 provider_binary = self._resolve_binary_path()
                 provider_cmd = [str(provider_binary), "-c", str(provider_config_file.resolve())]
                 provider_log_file = self.config_dir / f"{tunnel_id}_provider.log"
-                provider_log_f = open(provider_log_file, 'w', buffering=1)
+                provider_log_f = _open_core_log(provider_log_file)
                 try:
                     provider_log_f.write(f"Starting FRP provider for tunnel {tunnel_id}\n")
                     provider_log_f.write(f"Command: {' '.join(provider_cmd)}\n")
@@ -2471,7 +2790,7 @@ transport:
   dialServerTimeout: 15
 """
             if transport_proto != 'quic':
-                config_content += """  tcpMux: true
+                config_content += f"""  tcpMux: {'true' if _frp_tcp_mux(spec) else 'false'}
   tcpMuxKeepaliveInterval: 25
   poolCount: 5
 """
@@ -2622,7 +2941,7 @@ transport:
                     log_file.unlink()
                 except Exception:
                     pass
-            log_f = open(log_file, 'w', buffering=1)
+            log_f = _open_core_log(log_file)
             try:
                 log_f.write(f"Starting FRP client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {' '.join(cmd)}\n")
@@ -2669,6 +2988,7 @@ transport:
     
     async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove FRP tunnel (handles both server and client modes, and provider subprocess) and free bound ports"""
+        _set_port_owner(tunnel_id)
         ports_to_free: Set[int] = set()
         for sub_id in [tunnel_id, f"{tunnel_id}_provider"]:
             for cfg_name in [f"frps_{sub_id}.yaml", f"frpc_{sub_id}.yaml", f"frps_{sub_id}.toml", f"frpc_{sub_id}.toml"]:
@@ -2683,7 +3003,7 @@ transport:
                     except Exception:
                         pass
 
-            pid = _get_tunnel_pid(sub_id)
+            pid = _get_verified_tunnel_pid(sub_id, "frp")
             proc = self.processes.pop(sub_id, None)
             if sub_id in self.log_handles:
                 try:
@@ -2846,6 +3166,13 @@ class GostAdapter:
         is_reverse_mode = bool(is_reverse)
         # For reverse tunnels (rtcp), multiplexing (yamux) is mandatory to prevent socket closure after the first connection
         enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode or is_reverse_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
+        # Low-latency tuning for UDP/gaming tunnels. Everything here only changes how
+        # THIS side sends or buffers, so it is wire compatible with a peer running an
+        # older agent (safe during rolling updates).
+        low_latency = is_udp_mode or bool(spec.get("gaming_mode")) or spec.get("latency_profile") == "gaming-v1"
+        # Small mux frames: a game packet never waits behind a 32KB bulk-data frame
+        # on a shared session (smux frame size is chosen by the sender only).
+        mux_tuning = {"mux.maxFrameSize": 4096} if (low_latency and enable_mux) else {}
 
         config = {
             "services": [],
@@ -2921,9 +3248,12 @@ class GostAdapter:
                     listener_metadata["mux.type"] = mux_type
                     listener_metadata["mux"] = True
                     listener_metadata["nodelay"] = True
+                    listener_metadata.update(mux_tuning)
                 if gost_type == "kcp":
                     listener_metadata["nodelay"] = True
                     listener_metadata["interval"] = "20ms"
+                    if low_latency:
+                        listener_metadata["mode"] = "fast3"
                     listener_metadata["resend"] = 2
                     listener_metadata["nc"] = 1
                     kcp_key = spec.get("kcp_key") or auth_token or "smite-kcp-secure"
@@ -2947,8 +3277,13 @@ class GostAdapter:
                     listener_metadata["mux.type"] = mux_type
                     listener_metadata["mux"] = True
                     listener_metadata["nodelay"] = True
+                    listener_metadata.update(mux_tuning)
                 
-            server_listener_type = "sshd" if gost_type == "ssh" else gost_type
+            # SSH as a data channel for the relay protocol needs the "ssh" listener
+            # (client side uses the "ssh" dialer + relay connector). The "sshd"
+            # listener only speaks SSH port-forwarding and rejected every relay
+            # stream, so GOST SSH-transport tunnels never carried traffic.
+            server_listener_type = "ssh" if gost_type in ("ssh", "sshd") else gost_type
             listener = {"type": server_listener_type}
 
             if gost_type in ["ssh", "sshd"]:
@@ -2972,6 +3307,7 @@ class GostAdapter:
                         logger.warning(f"Could not generate SSH host key with openssl: {e}")
                 if ssh_key_path.exists():
                     listener_metadata["hostKey"] = str(ssh_key_path)
+                    listener_metadata["privateKeyFile"] = str(ssh_key_path)
                 if auth_token:
                     listener["auth"] = {
                         "username": "smite",
@@ -3026,6 +3362,7 @@ class GostAdapter:
                 handler_metadata["mux.type"] = mux_type
                 handler_metadata["mux"] = True
                 handler_metadata["nodelay"] = True
+                handler_metadata.update(mux_tuning)
                 
             handler = {
                 "type": handler_type
@@ -3206,6 +3543,8 @@ class GostAdapter:
                 if gost_type == "kcp":
                     dialer_metadata["nodelay"] = True
                     dialer_metadata["interval"] = "20ms"
+                    if low_latency:
+                        dialer_metadata["mode"] = "fast3"
                     dialer_metadata["resend"] = 2
                     dialer_metadata["nc"] = 1
                     kcp_key = spec.get("kcp_key") or auth_token or "smite-kcp-secure"
@@ -3215,6 +3554,7 @@ class GostAdapter:
                     dialer_metadata["mux.type"] = mux_type
                     dialer_metadata["mux"] = True
                     dialer_metadata["nodelay"] = True
+                    dialer_metadata.update(mux_tuning)
             else:
                 keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
                 dialer_metadata["keepAlive"] = True
@@ -3228,6 +3568,7 @@ class GostAdapter:
                     dialer_metadata["mux.type"] = mux_type
                     dialer_metadata["mux"] = True
                     dialer_metadata["nodelay"] = True
+                    dialer_metadata.update(mux_tuning)
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
@@ -3248,6 +3589,7 @@ class GostAdapter:
                 connector_metadata["mux"] = True
                 connector_metadata["nodelay"] = True
                 connector_metadata["keepAlive"] = True
+                connector_metadata.update(mux_tuning)
             
             connector_type = spec.get("connector_type") or spec.get("handler_type") or "relay"
             connector_primary = {"type": connector_type}
@@ -3434,9 +3776,15 @@ class GostAdapter:
                     config["services"].append(service_tcp)
                 
                 if tunnel_proto in ["udp", "tcp+udp"]:
+                    # UDP session handling (all local to this side):
+                    # - ttl: a client channel is only released after 120s of silence
+                    #   (was 10s/30s), so idle moments in a game no longer reset the
+                    #   session (new relay handshake + new source port = lag spike).
+                    # - readBufferSize 65535: no truncation of large datagrams (default 4-8KB).
+                    # - readQueueSize: absorbs bursts instead of dropping packets.
                     udp_handler_metadata = {
-                        "ttl": "30s",
-                        "readTimeout": "60s",
+                        "ttl": UDP_SESSION_TTL,
+                        "readTimeout": UDP_SESSION_TTL,
                         "bufferSize": 65536,
                         "retryDelay": "1s"
                     }
@@ -3446,11 +3794,13 @@ class GostAdapter:
                             "chain": f"chain-{tunnel_id}",
                             "metadata": {
                                 "keepAlive": True,
-                                "ttl": "10s",
+                                "ttl": UDP_SESSION_TTL,
                                 "keepalive.idle": "10s",
                                 "keepalive.interval": "10s",
-                                "readTimeout": "60s",
-                                "bufferSize": 65536
+                                "readTimeout": UDP_SESSION_TTL,
+                                "bufferSize": 65536,
+                                "readBufferSize": 65535,
+                                "readQueueSize": 2048,
                             }
                         }
                         handler_udp = {
@@ -3459,11 +3809,19 @@ class GostAdapter:
                             "metadata": udp_handler_metadata
                         }
                     else:
+                        # keepalive=true is essential: the GOST udp listener otherwise closes a
+                        # client channel after the FIRST response, so every following packet
+                        # opened a new relay connection (huge jitter, broken game sessions).
                         listener_udp = {
                             "type": "udp",
                             "metadata": {
-                                "readTimeout": "60s",
-                                "bufferSize": 65536
+                                "keepalive": True,
+                                "keepAlive": True,
+                                "ttl": UDP_SESSION_TTL,
+                                "readTimeout": UDP_SESSION_TTL,
+                                "bufferSize": 65536,
+                                "readBufferSize": 65535,
+                                "readQueueSize": 2048,
                             }
                         }
                         handler_udp = {
@@ -3516,7 +3874,7 @@ class GostAdapter:
                     log_file.write_text("")
                 except Exception:
                     pass
-        log_f = open(log_file, 'w', buffering=1)
+        log_f = _open_core_log(log_file)
         try:
             log_f.write(f"Starting GOST v3 forwarding for tunnel {tunnel_id} (Mode: {mode})\n")
             log_f.write(f"Command: {' '.join(cmd)}\n")
@@ -3554,7 +3912,8 @@ class GostAdapter:
     
     async def remove(self, tunnel_id: str, purge: bool = False):
         """Remove GOST tunnel and release bound ports"""
-        pid = _get_tunnel_pid(tunnel_id)
+        _set_port_owner(tunnel_id)
+        pid = _get_verified_tunnel_pid(tunnel_id, self.name)
         proc = self.processes.pop(tunnel_id, None)
         if tunnel_id in self.log_handles:
             try:
@@ -3648,7 +4007,28 @@ class AdapterManager:
         self.tunnel_configs: Dict[str, Dict[str, Any]] = {}
         self._tunnel_locks: Dict[str, asyncio.Lock] = {}
         self._io_lock = threading.Lock()
+        # Reconciliation safety: an orphan is only purged after it was reported
+        # missing by the panel in consecutive registrations (not on a single glitch).
+        self._orphan_strikes: Dict[str, int] = {}
+        # Set by _load_tunnels; the process sweep never kills anything unless the
+        # persisted configuration was read successfully.
+        self._configs_trusted = False
+        self._stray_strikes: Dict[int, int] = {}
         logger.info(f"Tunnel persistence file: {self.tunnels_file}")
+
+        # Every tunnel configured on this node is protected from cross-tunnel port freeing
+        global _protected_tunnels_provider
+        _protected_tunnels_provider = lambda: set(self.tunnel_configs.keys()) | set(self.active_tunnels.keys())
+
+    # Keys that never affect the generated core configuration. They are stripped
+    # before comparing/persisting specs so they can't trigger needless restarts.
+    VOLATILE_SPEC_KEYS = {"force_restart", "latency_ms", "_pending_reapply"}
+
+    @classmethod
+    def _normalize_spec(cls, spec: Any) -> Dict[str, Any]:
+        if not isinstance(spec, dict):
+            return {}
+        return {k: v for k, v in spec.items() if k not in cls.VOLATILE_SPEC_KEYS}
     
     def _get_tunnel_lock(self, tunnel_id: str) -> asyncio.Lock:
         if tunnel_id not in self._tunnel_locks:
@@ -3659,57 +4039,81 @@ class AdapterManager:
         """Get adapter for tunnel core"""
         return self.adapters.get(tunnel_core)
     
-    def _load_tunnels(self):
-        """Load persisted tunnel configurations"""
+    @property
+    def _tunnels_backup_file(self) -> Path:
+        return self.tunnels_file.with_name(self.tunnels_file.name + ".bak")
+
+    @staticmethod
+    def _read_tunnels_json(path: Path) -> Optional[Dict[str, Dict[str, Any]]]:
         import json
-        if self.tunnels_file.exists():
-            try:
-                file_size = self.tunnels_file.stat().st_size
-                logger.info(f"Found tunnel config file at {self.tunnels_file} (size: {file_size} bytes)")
-                
-                if file_size == 0:
-                    logger.warning(f"Tunnel config file {self.tunnels_file} is empty")
-                    self.tunnel_configs = {}
-                    return
-                
-                with open(self.tunnels_file, 'r') as f:
-                    content = f.read()
-                    if not content.strip():
-                        logger.warning(f"Tunnel config file {self.tunnels_file} contains only whitespace")
-                        self.tunnel_configs = {}
-                        return
-                    
-                    self.tunnel_configs = json.loads(content)
-                
-                logger.info(f"Loaded {len(self.tunnel_configs)} persisted tunnel configurations from {self.tunnels_file}")
-                for tunnel_id, config in self.tunnel_configs.items():
-                    core = config.get("core", "unknown")
-                    mode = config.get("spec", {}).get("mode", "N/A")
-                    logger.info(f"  - Tunnel {tunnel_id}: core={core}, mode={mode}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse tunnel configurations JSON from {self.tunnels_file}: {e}", exc_info=True)
-                self.tunnel_configs = {}
-            except Exception as e:
-                logger.error(f"Failed to load tunnel configurations from {self.tunnels_file}: {e}", exc_info=True)
-                self.tunnel_configs = {}
-        else:
+        if not path.exists() or path.stat().st_size == 0:
+            return None
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return None
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("tunnels file must contain a JSON object")
+        return data
+
+    def _load_tunnels(self):
+        """Load persisted tunnel configurations (falls back to the last good backup if the file is corrupt)"""
+        self.tunnel_configs = {}
+        self._configs_trusted = False
+        if not self.tunnels_file.exists() and not self._tunnels_backup_file.exists():
             logger.info(f"No tunnel configurations file found at {self.tunnels_file} (this is normal for new nodes)")
-            self.tunnel_configs = {}
-    
+            self._configs_trusted = True
+            return
+
+        for candidate in (self.tunnels_file, self._tunnels_backup_file):
+            try:
+                data = self._read_tunnels_json(candidate)
+            except Exception as e:
+                logger.error(f"Failed to load tunnel configurations from {candidate}: {e}")
+                continue
+            if data is None:
+                # Missing/zero-length file: _save_tunnels always writes at least "{}",
+                # so this indicates an interrupted write -> try the backup.
+                if candidate == self.tunnels_file and candidate.exists():
+                    logger.warning(f"Tunnel config file {candidate} is empty")
+                continue
+            self.tunnel_configs = data
+            self._configs_trusted = True
+            if candidate != self.tunnels_file:
+                logger.warning(f"Recovered {len(data)} tunnel configurations from backup {candidate}")
+            break
+
+        logger.info(f"Loaded {len(self.tunnel_configs)} persisted tunnel configurations from {self.tunnels_file}")
+        for tunnel_id, config in self.tunnel_configs.items():
+            core = config.get("core", "unknown") if isinstance(config, dict) else "invalid"
+            mode = (config.get("spec") or {}).get("mode", "N/A") if isinstance(config, dict) else "N/A"
+            logger.info(f"  - Tunnel {tunnel_id}: core={core}, mode={mode}")
+
     def _save_tunnels(self):
-        """Save tunnel configurations to disk"""
+        """Save tunnel configurations to disk (atomic write + fsync + last-good backup)"""
         import json
         with self._io_lock:
             temp_file = None
             try:
                 logger.info(f"Saving {len(self.tunnel_configs)} tunnel configurations to {self.tunnels_file}")
-                
+
                 temp_file = self.tunnels_file.with_name(f"tunnels_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp")
                 with open(temp_file, 'w') as f:
                     json.dump(self.tunnel_configs, f, indent=2)
                     f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except Exception:
+                        pass
                 try:
                     os.chmod(temp_file, 0o600)
+                except Exception:
+                    pass
+                # Keep the previous good copy so a corrupt/truncated write can never lose all tunnels
+                try:
+                    if self.tunnels_file.exists() and self.tunnels_file.stat().st_size > 0:
+                        self._read_tunnels_json(self.tunnels_file)
+                        shutil.copy2(self.tunnels_file, self._tunnels_backup_file)
                 except Exception:
                     pass
                 temp_file.replace(self.tunnels_file)
@@ -3746,58 +4150,75 @@ class AdapterManager:
             return
         
         logger.info(f"Restoring {len(self.tunnel_configs)} persisted tunnels...")
-        restored = 0
-        failed = 0
-        
-        for tunnel_id, config in self.tunnel_configs.items():
-            try:
-                tunnel_core = config.get("core")
-                spec = config.get("spec", {})
-                
-                if not tunnel_core:
-                    logger.warning(f"Tunnel {tunnel_id}: Missing core, skipping")
-                    failed += 1
-                    continue
-                
-                if not spec:
-                    logger.warning(f"Tunnel {tunnel_id}: Empty spec, skipping")
-                    failed += 1
-                    continue
-                
-                adapter = self.get_adapter(tunnel_core)
-                if not adapter:
-                    logger.warning(f"Tunnel {tunnel_id}: Unknown core {tunnel_core}, skipping")
-                    failed += 1
-                    continue
-                
-                # Check if process is ALREADY running and healthy (non-destructive adoption)
-                tunnel_status = adapter.status(tunnel_id)
-                if tunnel_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
-                    self.active_tunnels[tunnel_id] = adapter
-                    restored += 1
-                    logger.info(f"Tunnel {tunnel_id} core ({tunnel_core}) is ALREADY running healthy (PID {_get_tunnel_pid(tunnel_id)}). Preserved connection without restart.")
-                    continue
+        counters = {"restored": 0, "adopted": 0, "failed": 0}
+        # Bounded parallelism: after a container restart every tunnel is down, so
+        # restoring them one by one would keep the last tunnels offline for minutes.
+        semaphore = asyncio.Semaphore(6)
 
-                mode = spec.get('mode', 'N/A')
-                logger.info(f"Restoring tunnel {tunnel_id}: core={tunnel_core}, mode={mode}, spec_keys={list(spec.keys())}")
-                
-                if tunnel_core in ["rathole", "backhaul", "chisel", "frp", "gost"] and mode == 'N/A':
-                    logger.warning(f"Tunnel {tunnel_id}: Reverse tunnel missing mode field, defaulting to client")
-                    spec['mode'] = 'client'
-                
+        async def _restore_one(tunnel_id: str, config: Dict[str, Any]) -> None:
+            async with semaphore:
                 try:
-                    await adapter.apply(tunnel_id, spec)
-                    self.active_tunnels[tunnel_id] = adapter
-                    restored += 1
-                    logger.info(f"Successfully restored tunnel {tunnel_id} (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
-                except Exception as apply_error:
-                    logger.error(f"Failed to apply tunnel {tunnel_id} during restoration: {apply_error}", exc_info=True)
-                    failed += 1
-            except Exception as e:
-                logger.error(f"Failed to restore tunnel {tunnel_id}: {e}", exc_info=True)
-                failed += 1
-        
-        logger.info(f"Tunnel restoration completed: {restored} restored, {failed} failed")
+                    if not isinstance(config, dict):
+                        logger.warning(f"Tunnel {tunnel_id}: Invalid persisted entry, skipping")
+                        counters["failed"] += 1
+                        return
+                    tunnel_core = config.get("core")
+                    spec = config.get("spec", {})
+
+                    if not tunnel_core:
+                        logger.warning(f"Tunnel {tunnel_id}: Missing core, skipping")
+                        counters["failed"] += 1
+                        return
+
+                    if not spec:
+                        logger.warning(f"Tunnel {tunnel_id}: Empty spec, skipping")
+                        counters["failed"] += 1
+                        return
+
+                    adapter = self.get_adapter(tunnel_core)
+                    if not adapter:
+                        logger.warning(f"Tunnel {tunnel_id}: Unknown core {tunnel_core}, skipping")
+                        counters["failed"] += 1
+                        return
+
+                    async with self._get_tunnel_lock(tunnel_id):
+                        # Non-destructive adoption: keep a healthy running process untouched
+                        tunnel_status = adapter.status(tunnel_id)
+                        if tunnel_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                            self.active_tunnels[tunnel_id] = adapter
+                            counters["adopted"] += 1
+                            logger.info(f"Tunnel {tunnel_id} core ({tunnel_core}) is ALREADY running healthy (PID {_get_tunnel_pid(tunnel_id)}). Preserved connection without restart.")
+                            return
+
+                        mode = spec.get('mode', 'N/A')
+                        logger.info(f"Restoring tunnel {tunnel_id}: core={tunnel_core}, mode={mode}, spec_keys={list(spec.keys())}")
+
+                        if tunnel_core in ["rathole", "backhaul", "chisel", "frp", "gost"] and mode == 'N/A':
+                            logger.warning(f"Tunnel {tunnel_id}: Reverse tunnel missing mode field, defaulting to client")
+                            spec['mode'] = 'client'
+
+                        _set_port_owner(tunnel_id)
+                        try:
+                            await adapter.apply(tunnel_id, spec)
+                            self.active_tunnels[tunnel_id] = adapter
+                            counters["restored"] += 1
+                            logger.info(f"Successfully restored tunnel {tunnel_id} (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
+                        except Exception as apply_error:
+                            logger.error(f"Failed to apply tunnel {tunnel_id} during restoration: {apply_error}", exc_info=True)
+                            counters["failed"] += 1
+                except Exception as e:
+                    logger.error(f"Failed to restore tunnel {tunnel_id}: {e}", exc_info=True)
+                    counters["failed"] += 1
+
+        await asyncio.gather(
+            *[_restore_one(tid, cfg) for tid, cfg in list(self.tunnel_configs.items())],
+            return_exceptions=True,
+        )
+
+        logger.info(
+            f"Tunnel restoration completed: {counters['adopted']} adopted (no restart), "
+            f"{counters['restored']} restarted, {counters['failed']} failed"
+        )
         self.start_watchdog()
 
     @staticmethod
@@ -3881,33 +4302,33 @@ class AdapterManager:
         backoff_delay: Dict[str, int] = {}
         next_retry_at: Dict[str, float] = {}
         last_log_sweep: float = 0.0
+        cycle = 0
         
         while True:
             try:
                 await asyncio.sleep(15)
                 now = time.time()
+                cycle += 1
 
                 # Periodic log truncation check (every 5 minutes / 300s) to prevent VPS disk exhaustion
                 if now - last_log_sweep >= 300:
                     last_log_sweep = now
                     try:
-                        log_patterns = list(self.config_dir.glob("*.log")) + list(self.config_dir.glob("*/*.log"))
-                        for log_p in log_patterns:
-                            if log_p.is_file():
-                                try:
-                                    if log_p.stat().st_size > 10 * 1024 * 1024:
-                                        with open(log_p, "r+", encoding="utf-8", errors="ignore") as lf:
-                                            lf.seek(-256 * 1024, os.SEEK_END)
-                                            tail = lf.read()
-                                            lf.seek(0)
-                                            lf.write(f"[LOG ROTATED BY SMITE WATCHDOG AT {time.ctime()}]\n" + tail)
-                                            lf.truncate()
-                                            lf.flush()
-                                        logger.info(f"Watchdog: Rotated oversized log file {log_p} to last 256KB")
-                                except Exception as e_rot:
-                                    logger.debug(f"Watchdog: Could not rotate log file {log_p}: {e_rot}")
+                        await asyncio.to_thread(self._rotate_oversized_logs)
                     except Exception as e_sweep:
                         logger.debug(f"Watchdog: Error during log sweep: {e_sweep}")
+
+                # Reap exited adopted core processes (children of this PID after an
+                # in-place agent reload) so they never linger as zombies.
+                self._reap_adopted_children()
+
+                # Kill stray core processes (duplicates of a tunnel, or processes of a
+                # tunnel that is no longer configured here) once a minute
+                if cycle % 4 == 0:
+                    try:
+                        await self._sweep_stray_processes()
+                    except Exception as e_sw:
+                        logger.debug(f"Watchdog: stray process sweep failed: {e_sw}")
 
                 for tunnel_id in list(self.tunnel_configs.keys()):
                     # Respect exponential backoff window
@@ -3949,25 +4370,33 @@ class AdapterManager:
                                     pass
                         
                         if conflicting_active_tunnel:
-                            logger.error(
-                                f"Watchdog: SAFETY ABORT - Cannot auto-recover tunnel {tunnel_id} ({tunnel_core}) "
-                                f"because port {conflicting_active_tunnel[1]} is currently in use by ACTIVE tunnel "
-                                f"{conflicting_active_tunnel[0]}! Skipping recovery to prevent process kill loop."
+                            # The spec port sets include non-listening ports (remote
+                            # server ports, forward targets), so an overlap is often not
+                            # a real conflict. Recovery can no longer kill the other
+                            # tunnel (free_ports protects configured tunnels), so try
+                            # anyway: a real bind conflict just fails and backs off.
+                            logger.warning(
+                                f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) shares port "
+                                f"{conflicting_active_tunnel[1]} with active tunnel {conflicting_active_tunnel[0]} "
+                                f"in its spec; attempting recovery without touching the other tunnel."
                             )
-                            cur_delay = backoff_delay.get(tunnel_id, 30)
-                            next_delay = min(cur_delay * 2, 300)
-                            backoff_delay[tunnel_id] = next_delay
-                            next_retry_at[tunnel_id] = now + next_delay
-                            continue
                         
                         # 2. Proceed with safe recovery
                         cur_delay = backoff_delay.get(tunnel_id, 15)
                         logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering...")
                         try:
                             async with self._get_tunnel_lock(tunnel_id):
+                                # The tunnel may have been removed (or re-applied with a new
+                                # spec) while we were waiting for the lock: use the current
+                                # config, and never resurrect a removed tunnel.
+                                current = self.tunnel_configs.get(tunnel_id)
+                                if not current or current.get("core") != tunnel_core:
+                                    continue
+                                spec = current.get("spec") or {}
                                 status = adapter.status(tunnel_id)
                                 if not (status.get("process_running", False) or status.get("active", False)):
                                     # Cleanly remove old process/sockets and reapply
+                                    _set_port_owner(tunnel_id)
                                     await adapter.remove(tunnel_id)
                                     await asyncio.sleep(0.2)
                                     await adapter.apply(tunnel_id, spec)
@@ -3989,6 +4418,116 @@ class AdapterManager:
             except Exception as e:
                 logger.error(f"Unexpected error in AdapterManager watchdog loop: {e}", exc_info=True)
 
+    async def _sweep_stray_processes(self) -> List[int]:
+        """Kill core processes this agent started that no tunnel owns anymore.
+
+        - process of a tunnel that is not configured on this node (deleted tunnel
+          whose process survived) -> stray
+        - extra process of a configured tunnel (not its recorded/tracked PID, e.g. a
+          duplicate left by an interrupted apply) -> stray
+
+        Safety: tunnels whose lock is held (being applied/removed/restored) are
+        skipped, nothing happens unless tunnels.json was loaded successfully, and a
+        process must be seen as stray on two consecutive sweeps before it is killed.
+        """
+        if not self._configs_trusted:
+            return []
+        tagged = _find_tagged_core_processes()
+        if not tagged:
+            self._stray_strikes.clear()
+            return []
+        recorded = _all_recorded_pids()
+        tracked: Dict[str, Set[int]] = {}
+        for adapter in self.adapters.values():
+            for key, proc in list(getattr(adapter, "processes", {}).items()):
+                pid = getattr(proc, "pid", None)
+                if pid:
+                    tracked.setdefault(key, set()).add(pid)
+
+        stray_now: Set[int] = set()
+        for pid, tag in tagged.items():
+            if not tag:
+                continue
+            lock = self._tunnel_locks.get(tag)
+            if lock is not None and lock.locked():
+                continue
+            if tag not in self.tunnel_configs:
+                stray_now.add(pid)
+                continue
+            allowed = {recorded.get(tag), recorded.get(f"{tag}_provider")}
+            allowed |= tracked.get(tag, set()) | tracked.get(f"{tag}_provider", set())
+            if pid not in allowed:
+                stray_now.add(pid)
+
+        for pid in list(self._stray_strikes):
+            if pid not in stray_now:
+                self._stray_strikes.pop(pid, None)
+        to_kill = []
+        for pid in stray_now:
+            self._stray_strikes[pid] = self._stray_strikes.get(pid, 0) + 1
+            if self._stray_strikes[pid] >= 2:
+                to_kill.append(pid)
+        if to_kill:
+            logger.warning(f"Watchdog: killing stray core processes {sorted(to_kill)} (tunnels: {sorted({tagged[p] for p in to_kill})})")
+            await asyncio.to_thread(_kill_pids, to_kill)
+            for pid in to_kill:
+                self._stray_strikes.pop(pid, None)
+        return sorted(to_kill)
+
+    LOG_ROTATE_THRESHOLD = 10 * 1024 * 1024
+    LOG_ROTATE_KEEP = 256 * 1024
+
+    def _rotate_oversized_logs(self) -> None:
+        """Shrink oversized agent and core logs in place, keeping the newest 256KB.
+
+        Core logs live under /etc/smite-node/<core>/ and are written by long-running
+        processes; they are opened in O_APPEND mode so in-place truncation works.
+        """
+        roots = [self.config_dir, Path("/etc/smite-node")]
+        seen: Set[Path] = set()
+        for root in roots:
+            try:
+                if not root.exists():
+                    continue
+                candidates = list(root.glob("*.log")) + list(root.glob("*/*.log"))
+            except Exception:
+                continue
+            for log_p in candidates:
+                try:
+                    if log_p in seen or not log_p.is_file():
+                        continue
+                    seen.add(log_p)
+                    size = log_p.stat().st_size
+                    if size <= self.LOG_ROTATE_THRESHOLD:
+                        continue
+                    with open(log_p, "r+b") as lf:
+                        lf.seek(max(0, size - self.LOG_ROTATE_KEEP))
+                        tail = lf.read()
+                        lf.seek(0)
+                        lf.write(f"[LOG ROTATED BY SMITE WATCHDOG AT {time.ctime()}]\n".encode("utf-8") + tail)
+                        lf.truncate()
+                        lf.flush()
+                    logger.info(f"Watchdog: Rotated oversized log file {log_p} to last 256KB")
+                except Exception as e_rot:
+                    logger.debug(f"Watchdog: Could not rotate log file {log_p}: {e_rot}")
+
+    def _reap_adopted_children(self) -> None:
+        if os.name != 'posix':
+            return
+        tracked: Set[int] = set()
+        for adapter in self.adapters.values():
+            for proc in list(getattr(adapter, "processes", {}).values()):
+                pid = getattr(proc, "pid", None)
+                if pid:
+                    tracked.add(pid)
+        for pid in set(_all_recorded_pids().values()) - tracked:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            except Exception:
+                pass
+
     def start_watchdog(self):
         """Start watchdog background task"""
         if not hasattr(self, '_watchdog_task') or self._watchdog_task is None or self._watchdog_task.done():
@@ -4000,43 +4539,26 @@ class AdapterManager:
         if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
     
-    async def _remove_tunnel_unlocked(
-        self,
-        tunnel_id: str,
-        purge: bool = False,
-        ports: Optional[Iterable[Any]] = None,
-        control_port: Optional[int] = None,
-        core: Optional[str] = None
-    ):
-        """Internal unlocked tunnel removal helper with guaranteed complete process kill and port freeing"""
-        logger.info(f"Removing tunnel {tunnel_id} (purge={purge}, core={core})")
-
-        # 1. Gather all potential ports used by this tunnel
-        target_ports: Set[int] = set()
-
-        if ports:
-            for p in ports:
-                try:
-                    p_int = int(p)
-                    if 0 < p_int <= 65535:
-                        target_ports.add(p_int)
-                except (ValueError, TypeError):
-                    pass
-
-        if control_port:
+    def _is_tunnel_known_locally(self, tunnel_id: str) -> bool:
+        """True if anything of this tunnel exists on this node (config, process, PID, files or tagged process)."""
+        if tunnel_id in self.tunnel_configs or tunnel_id in self.active_tunnels:
+            return True
+        if _get_tunnel_pid(tunnel_id) or _get_tunnel_pid(f"{tunnel_id}_provider"):
+            return True
+        for adapter in self.adapters.values():
+            if tunnel_id in getattr(adapter, "processes", {}) or f"{tunnel_id}_provider" in getattr(adapter, "processes", {}):
+                return True
+            cfg_dir = getattr(adapter, "config_dir", None)
             try:
-                cp_int = int(control_port)
-                if 0 < cp_int <= 65535:
-                    target_ports.add(cp_int)
-            except (ValueError, TypeError):
+                if cfg_dir is not None and Path(cfg_dir).exists() and any(Path(cfg_dir).glob(f"*{tunnel_id}*")):
+                    return True
+            except Exception:
                 pass
+        return bool(_find_tagged_core_processes(tunnel_id))
 
-        # From stored config in memory
-        saved_spec = self.tunnel_configs.get(tunnel_id, {}).get("spec", {})
-        if saved_spec:
-            target_ports.update(_extract_ports_from_spec_dict(saved_spec))
-
-        # From all disk configuration files
+    @staticmethod
+    def _ports_from_disk_configs(tunnel_id: str) -> Set[int]:
+        found: Set[int] = set()
         core_dirs = [
             Path("/etc/smite-node/rathole"),
             Path("/etc/smite-node/backhaul"),
@@ -4055,23 +4577,74 @@ class AdapterManager:
                             for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr|addr|port|listen_port|proxy_port|remotePort|localPort|bindPort)\s*[:=]\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
                                 p_num = int(m.group(1))
                                 if 0 < p_num <= 65535:
-                                    target_ports.add(p_num)
+                                    found.add(p_num)
                             for m in re.finditer(r'["\'](\d{1,5})/(?:tcp|udp)["\']', content, re.IGNORECASE):
                                 p_num = int(m.group(1))
                                 if 0 < p_num <= 65535:
-                                    target_ports.add(p_num)
+                                    found.add(p_num)
                         except Exception:
                             pass
             except Exception:
                 pass
+        return found
 
-        # 2. Stop through primary adapter
+    async def _remove_tunnel_unlocked(
+        self,
+        tunnel_id: str,
+        purge: bool = False,
+        ports: Optional[Iterable[Any]] = None,
+        control_port: Optional[int] = None,
+        core: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Remove a tunnel completely: config, every process (by any identity) and its ports.
+
+        Order matters:
+        1. The tunnel is de-configured and persisted FIRST, so neither the watchdog
+           nor a restart can resurrect it while (or after) it is being killed.
+        2. Processes are stopped through every identity we have: the tracked asyncio
+           handle, the verified PID file, command-line patterns and the
+           SMITE_TUNNEL_ID environment tag (finds orphans that lost their PID file).
+        3. The listening ports are verified to be released; a process of this
+           tunnel that survived is killed again and reported back to the panel.
+        """
+        _set_port_owner(tunnel_id)
+        result: Dict[str, Any] = {"found": False, "killed_pids": [], "stuck_ports": []}
+        if not self._is_tunnel_known_locally(tunnel_id):
+            # Nothing of this tunnel exists here (e.g. fleet-wide ghost purge or a
+            # retried removal). Never kill anything by port number on its behalf:
+            # the same port numbers are usually used by other tunnels on this node.
+            logger.info(f"Remove request for tunnel {tunnel_id}: not present on this node, nothing to do")
+            return result
+
+        result["found"] = True
+        logger.info(f"Removing tunnel {tunnel_id} (purge={purge}, core={core})")
+        saved_config = self.tunnel_configs.get(tunnel_id, {}) or {}
+        t_core_name = core or saved_config.get("core")
+
+        # 1. Gather every port this tunnel may hold
+        target_ports: Set[int] = set()
+        for p in list(ports or []) + ([control_port] if control_port else []):
+            try:
+                p_int = int(p)
+                if 0 < p_int <= 65535:
+                    target_ports.add(p_int)
+            except (ValueError, TypeError):
+                pass
+        if saved_config.get("spec"):
+            target_ports.update(_extract_ports_from_spec_dict(saved_config.get("spec")))
+        target_ports.update(self._ports_from_disk_configs(tunnel_id))
+
+        # 2. De-configure first and persist (no resurrection by watchdog/restore)
+        if tunnel_id in self.tunnel_configs:
+            del self.tunnel_configs[tunnel_id]
+            self._save_tunnels()
+        self._orphan_strikes.pop(tunnel_id, None)
+
+        # 3. Stop through the primary adapter, then every other adapter that still
+        #    has something of this tunnel (covers core switches)
         primary_adapter = self.active_tunnels.pop(tunnel_id, None)
-        if not primary_adapter:
-            t_core = core or self.tunnel_configs.get(tunnel_id, {}).get("core")
-            if t_core:
-                primary_adapter = self.get_adapter(t_core)
-
+        if not primary_adapter and t_core_name:
+            primary_adapter = self.get_adapter(t_core_name)
         if primary_adapter:
             try:
                 await primary_adapter.remove(tunnel_id, purge=purge)
@@ -4080,7 +4653,6 @@ class AdapterManager:
             except Exception as e:
                 logger.warning(f"Error in primary adapter remove for {tunnel_id}: {e}")
 
-        # 3. Check and clean across ALL adapters (prevents ghost instances if core changed)
         for c_name, adapter in list(self.adapters.items()):
             if adapter is primary_adapter:
                 continue
@@ -4093,55 +4665,99 @@ class AdapterManager:
                 except Exception as e:
                     logger.warning(f"Error in secondary adapter remove for {tunnel_id} ({c_name}): {e}")
 
-        # 4. Sweep process table for any orphan core process matching tunnel_id
+        # 4. Orphans: PID files, command-line patterns and the environment tag
+        _set_port_owner(tunnel_id)
         patterns = [tunnel_id, f"{tunnel_id}.toml", f"{tunnel_id}.json", f"{tunnel_id}.yaml"]
-        rec_pid = _get_tunnel_pid(tunnel_id)
+        rec_pid = _get_verified_tunnel_pid(tunnel_id, t_core_name)
         await safe_stop_subprocess(patterns=patterns, pid=rec_pid)
         _remove_tunnel_pid(tunnel_id)
 
-        prov_pid = _get_tunnel_pid(f"{tunnel_id}_provider")
+        prov_pid = _get_verified_tunnel_pid(f"{tunnel_id}_provider", "frp")
         if prov_pid:
             await safe_stop_subprocess(pid=prov_pid)
-            _remove_tunnel_pid(f"{tunnel_id}_provider")
+        _remove_tunnel_pid(f"{tunnel_id}_provider")
 
-        # 5. Free and verify all target ports
+        tagged = _find_tagged_core_processes(tunnel_id)
+        if tagged:
+            logger.warning(f"Killing {len(tagged)} orphan process(es) of tunnel {tunnel_id} found by tag: {sorted(tagged)}")
+            await asyncio.to_thread(_kill_pids, list(tagged))
+            result["killed_pids"].extend(sorted(tagged))
+
+        # 5. Free the ports and verify they really are released
         if target_ports:
             logger.info(f"Freeing and verifying ports {sorted(list(target_ports))} for tunnel {tunnel_id}")
             await free_ports(target_ports)
-            await asyncio.sleep(0.2)
-
-            # Verification pass: check if any proxy process is still holding any port
-            for p in target_ports:
-                held_pids = _find_pids_by_port_procfs(p)
-                for hp in held_pids:
-                    if _is_safe_core_process(hp):
-                        logger.warning(f"Verification: killing core process {hp} still holding port {p}")
-                        try:
-                            os.kill(hp, signal.SIGKILL)
-                        except Exception:
-                            pass
-
-            if os.name == 'posix' and shutil.which("ss"):
+            stuck: Set[int] = set()
+            for attempt in range(6):
+                await asyncio.sleep(0.25 if attempt else 0.1)
+                protected_ids = _get_protected_tunnel_ids()
+                recorded_pids = _all_recorded_pids()
+                stuck = set()
                 for p in target_ports:
-                    try:
-                        proc_kill = await asyncio.create_subprocess_exec(
-                            "ss", "-K", f"( sport = :{p} or dport = :{p} )",
-                            stdout=asyncio.subprocess.DEVNULL,
-                            stderr=asyncio.subprocess.DEVNULL
-                        )
-                        await asyncio.wait_for(proc_kill.wait(), timeout=0.5)
-                    except Exception:
-                        pass
+                    for hp in _find_pids_by_port_procfs(p, listen_only=True):
+                        if hp in (os.getpid(), os.getppid(), 1):
+                            continue
+                        if _may_kill_port_holder(hp, tunnel_id, protected_ids, recorded_pids):
+                            stuck.add(p)
+                            logger.warning(f"Verification: killing stale core process {hp} still holding port {p}")
+                            try:
+                                os.kill(hp, _SIGKILL)
+                                result["killed_pids"].append(hp)
+                            except Exception:
+                                pass
+                if not stuck:
+                    break
+            result["stuck_ports"] = sorted(stuck)
+            if stuck:
+                logger.error(f"Tunnel {tunnel_id}: ports {sorted(stuck)} are still held after removal")
 
-        # 6. Delete config and persist
-        if tunnel_id in self.tunnel_configs:
-            del self.tunnel_configs[tunnel_id]
-            self._save_tunnels()
+        logger.info(f"Tunnel {tunnel_id} removal complete. Ports checked: {sorted(list(target_ports))}")
+        return result
 
-        logger.info(f"Tunnel {tunnel_id} removal complete. Ports freed: {sorted(list(target_ports))}")
+    async def _purge_conflicting_orphans(self, tunnel_id: str, spec: Dict[str, Any], authoritative_ids: Iterable[str]) -> None:
+        """Remove tunnels the panel no longer knows that use the ports of `spec`.
 
-    async def apply_tunnel(self, tunnel_id: str, tunnel_core: str, spec: Dict[str, Any]):
+        Typical case: a tunnel was deleted while this node was unreachable and a new
+        tunnel is created on the same port right away. Without this the leftover
+        (still configured here, so protected) would keep the port until the
+        periodic reconciliation, and the new tunnel would fail to start.
+        """
+        auth_set = {str(t) for t in authoritative_ids if t}
+        auth_set.add(tunnel_id)
+        wanted = self._extract_spec_ports(spec)
+        if not wanted:
+            return
+        for other_id in sorted(set(self.tunnel_configs.keys()) - auth_set):
+            # A tunnel with an operation in flight (e.g. another tunnel being created
+            # concurrently, so it is missing from this request's list) is left alone.
+            other_lock = self._tunnel_locks.get(other_id)
+            if other_lock is not None and other_lock.locked():
+                continue
+            other_spec = (self.tunnel_configs.get(other_id) or {}).get("spec") or {}
+            overlap = self._extract_spec_ports(other_spec) & wanted
+            if not overlap:
+                continue  # unrelated leftovers are handled by reconciliation/sweep
+            logger.warning(
+                f"Removing orphan tunnel {other_id} (unknown to the panel) before applying {tunnel_id}: "
+                f"it holds ports {sorted(overlap)}"
+            )
+            try:
+                async with self._get_tunnel_lock(other_id):
+                    if other_id in self.tunnel_configs:
+                        await self._remove_tunnel_unlocked(other_id, purge=True)
+            except Exception as e:
+                logger.error(f"Failed to remove orphan tunnel {other_id}: {e}")
+
+    async def apply_tunnel(
+        self,
+        tunnel_id: str,
+        tunnel_core: str,
+        spec: Dict[str, Any],
+        authoritative_ids: Optional[Iterable[str]] = None,
+    ):
         """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
+        if authoritative_ids is not None:
+            await self._purge_conflicting_orphans(tunnel_id, spec, authoritative_ids)
         async with self._get_tunnel_lock(tunnel_id):
             import logging
             logger = logging.getLogger(__name__)
@@ -4166,32 +4782,43 @@ class AdapterManager:
                         logger.warning(f"Error purging old {old_core} adapter for {tunnel_id}: {e}")
                 self.active_tunnels.pop(tunnel_id, None)
 
-            # Check if already running with exact same configuration (Idempotent Apply)
+            # Check if already running with exact same configuration (Idempotent Apply).
+            # Volatile bookkeeping keys (force_restart, latency_ms, _pending_reapply) are
+            # ignored so that they can never cause an unnecessary tunnel restart.
+            _set_port_owner(tunnel_id)
             force_restart = bool(spec.get("force_restart", False))
-            if tunnel_id in self.active_tunnels and not force_restart:
-                if existing_config.get("core") == tunnel_core and existing_config.get("spec") == spec:
-                    t_status = adapter.status(tunnel_id)
-                    if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
-                        logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
-                        return
-                
-                logger.info(f"Tunnel {tunnel_id} configuration changed or process inactive, applying new configuration")
-                if tunnel_id in self.active_tunnels:
-                    old_adapter = self.active_tunnels[tunnel_id]
-                    try:
-                        await old_adapter.remove(tunnel_id)
-                    except Exception as e:
-                        logger.warning(f"Error removing old adapter process for tunnel {tunnel_id}: {e}")
-                    del self.active_tunnels[tunnel_id]
-            
+            clean_spec = self._normalize_spec(spec)
+            same_config = (
+                existing_config.get("core") == tunnel_core
+                and self._normalize_spec(existing_config.get("spec")) == clean_spec
+            )
+            if same_config and not force_restart:
+                t_status = adapter.status(tunnel_id)
+                if t_status.get("process_running", False) or _is_tunnel_pid_alive(tunnel_id, tunnel_core):
+                    self.active_tunnels[tunnel_id] = adapter
+                    if existing_config.get("spec") != clean_spec:
+                        self.tunnel_configs[tunnel_id] = {"core": tunnel_core, "spec": dict(clean_spec)}
+                        self._save_tunnels()
+                    logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
+                    return
+
+            if tunnel_id in self.active_tunnels:
+                logger.info(f"Tunnel {tunnel_id} configuration changed, restart forced, or process inactive; applying new configuration")
+                old_adapter = self.active_tunnels[tunnel_id]
+                try:
+                    await old_adapter.remove(tunnel_id)
+                except Exception as e:
+                    logger.warning(f"Error removing old adapter process for tunnel {tunnel_id}: {e}")
+                del self.active_tunnels[tunnel_id]
+
             adapter_name = getattr(adapter, "name", tunnel_core)
             logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
-            await adapter.apply(tunnel_id, spec)
+            await adapter.apply(tunnel_id, clean_spec)
             self.active_tunnels[tunnel_id] = adapter
-            
+
             self.tunnel_configs[tunnel_id] = {
                 "core": tunnel_core,
-                "spec": spec.copy()
+                "spec": dict(clean_spec)
             }
             logger.info(f"Saving tunnel {tunnel_id} to persistent storage (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
             self._save_tunnels()
@@ -4207,15 +4834,22 @@ class AdapterManager:
         core: Optional[str] = None
     ):
         """Remove tunnel and guarantee complete process termination and port freeing"""
-        async with self._get_tunnel_lock(tunnel_id):
-            await self._remove_tunnel_unlocked(
+        lock = self._get_tunnel_lock(tunnel_id)
+        async with lock:
+            result = await self._remove_tunnel_unlocked(
                 tunnel_id,
                 purge=purge,
                 ports=ports,
                 control_port=control_port,
                 core=core
             )
-        self._tunnel_locks.pop(tunnel_id, None)
+        # Drop the lock object only when nobody else is queued on it; otherwise a
+        # waiter (watchdog, re-apply) and a new caller would hold two different
+        # locks for the same tunnel and run concurrently.
+        if not lock.locked() and not getattr(lock, "_waiters", None):
+            if self._tunnel_locks.get(tunnel_id) is lock:
+                self._tunnel_locks.pop(tunnel_id, None)
+        return result
 
     async def reconcile_active_tunnels(self, authoritative_ids: List[str]):
         """Reconcile local tunnels against authoritative list from panel.
@@ -4228,7 +4862,12 @@ class AdapterManager:
         # 1. Gather all local tunnel IDs currently tracked in memory / disk json
         local_ids = set(self.tunnel_configs.keys()) | set(self.active_tunnels.keys())
         
-        # 2. Check recorded PID files (e.g. detached processes)
+        # 2. Orphan core processes started by this agent that lost config and PID file
+        for tag in _find_tagged_core_processes().values():
+            if tag and SAFE_TUNNEL_ID_RE.match(tag):
+                local_ids.add(tag)
+
+        # 3. Check recorded PID files (e.g. detached processes)
         pdir = _get_pid_dir()
         if pdir.exists():
             try:
@@ -4241,12 +4880,35 @@ class AdapterManager:
             except Exception:
                 pass
 
-        orphans = [tid for tid in local_ids if tid not in auth_set]
+        candidates = [tid for tid in local_ids if tid not in auth_set]
+        # Forget strikes of tunnels that are authoritative again
+        for tid in list(self._orphan_strikes.keys()):
+            if tid not in candidates:
+                self._orphan_strikes.pop(tid, None)
+        if not candidates:
+            return
+
+        # Safety net against a glitchy/partial panel answer: a tunnel is only purged
+        # after it was missing in consecutive reconciliations (~1 minute apart). An
+        # empty authoritative list (panel DB restored/reset?) needs even more evidence
+        # because it would otherwise take every tunnel on this node down at once.
+        required_strikes = 3 if not auth_set else 2
+        orphans = []
+        for tid in candidates:
+            self._orphan_strikes[tid] = self._orphan_strikes.get(tid, 0) + 1
+            if self._orphan_strikes[tid] >= required_strikes:
+                orphans.append(tid)
+            else:
+                logger.warning(
+                    f"Reconciliation: tunnel {tid} is not in the panel authoritative list "
+                    f"(strike {self._orphan_strikes[tid]}/{required_strikes}); keeping it for now"
+                )
         if not orphans:
             return
-            
+
         logger.warning(f"Reconciliation: detected {len(orphans)} orphan/ghost tunnel(s) not in panel authoritative list: {orphans}. Purging cleanly...")
         for orphan_id in orphans:
+            self._orphan_strikes.pop(orphan_id, None)
             try:
                 await self.remove_tunnel(orphan_id, purge=True)
                 logger.info(f"Reconciliation: successfully purged orphan tunnel {orphan_id}")

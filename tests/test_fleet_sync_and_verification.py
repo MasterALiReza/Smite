@@ -305,11 +305,42 @@ async def test_adapter_manager_reconcile_active_tunnels(tmp_path):
     manager.remove_tunnel = AsyncMock()
 
     with patch("node.app.core_adapters._get_pid_dir", return_value=tmp_path):
-        # Reconcile with panel having only active-tun-1
+        # Reconcile with panel having only active-tun-1. A single report is not
+        # enough evidence: the orphan is kept on the first strike...
+        await manager.reconcile_active_tunnels(["active-tun-1"])
+        manager.remove_tunnel.assert_not_called()
+        # ...and purged when the next registration confirms it is gone.
         await manager.reconcile_active_tunnels(["active-tun-1"])
 
-    # orphan-tun-2 must be purged
+    # orphan-tun-2 must be purged, active-tun-1 untouched
     manager.remove_tunnel.assert_called_once_with("orphan-tun-2", purge=True)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_strikes_reset_and_empty_list_guard(tmp_path):
+    """An orphan that reappears in the authoritative list loses its strikes, and an
+    empty authoritative list needs three consecutive confirmations."""
+    manager = AdapterManager()
+    manager.tunnel_configs = {
+        "tun-a": {"core": "rathole", "spec": {}},
+        "tun-b": {"core": "gost", "spec": {}},
+    }
+    manager.active_tunnels = {}
+    manager.remove_tunnel = AsyncMock()
+
+    with patch("node.app.core_adapters._get_pid_dir", return_value=tmp_path):
+        await manager.reconcile_active_tunnels(["tun-a"])           # tun-b strike 1
+        await manager.reconcile_active_tunnels(["tun-a", "tun-b"])  # tun-b back -> reset
+        await manager.reconcile_active_tunnels(["tun-a"])           # tun-b strike 1 again
+        manager.remove_tunnel.assert_not_called()
+
+        manager.tunnel_configs = {"tun-c": {"core": "gost", "spec": {}}}
+        manager._orphan_strikes.clear()
+        await manager.reconcile_active_tunnels([])
+        await manager.reconcile_active_tunnels([])
+        manager.remove_tunnel.assert_not_called()
+        await manager.reconcile_active_tunnels([])
+    manager.remove_tunnel.assert_called_once_with("tun-c", purge=True)
 
 
 @pytest.mark.asyncio

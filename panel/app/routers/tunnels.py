@@ -18,6 +18,17 @@ from app.routers.auth import get_current_user
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Strong references to fire-and-forget tasks; asyncio only keeps weak references,
+# so an unreferenced task (e.g. a fleet-wide purge) could be garbage collected mid-run.
+_BACKGROUND_TASKS: Set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
 
 def prepare_frp_spec_for_node(spec: dict, node: Node, request: Request) -> dict:
     """Prepare FRP spec for node by determining correct server_addr from node metadata"""
@@ -695,6 +706,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 await db.refresh(db_tunnel)
                 return db_tunnel
 
+            from app.tunnel_planning import prepare_tunnel_for_apply
+            await prepare_tunnel_for_apply(db, db_tunnel, client, [iran_node.id, foreign_node.id])
             iran_spec, foreign_spec = build_tunnel_node_specs(db_tunnel, iran_node_ip, foreign_node_ip)
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(db_tunnel, "spec")
@@ -1709,11 +1722,16 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
         all_nodes = result.scalars().all()
         if tunnel.foreign_node_id:
             foreign_node = next((n for n in all_nodes if n.id == tunnel.foreign_node_id), None)
+            if not foreign_node:
+                # Never silently re-target another node: its ports belong to other tunnels
+                raise HTTPException(status_code=404, detail=f"Foreign node {tunnel.foreign_node_id} of this tunnel no longer exists. Edit the tunnel and select a foreign node.")
             
         if not foreign_node:
             foreign_nodes = [n for n in all_nodes if n.node_metadata and n.node_metadata.get("role") == "foreign"]
             if not foreign_nodes:
                 raise HTTPException(status_code=404, detail="No foreign node found. Please ensure at least one node has role='foreign' (set NODE_ROLE=foreign on the foreign node).")
+            if len(foreign_nodes) > 1:
+                raise HTTPException(status_code=400, detail="This tunnel has no foreign node assigned and several foreign nodes exist. Edit the tunnel and select its foreign node.")
             foreign_node = foreign_nodes[0]
         
         if iran_node.node_metadata.get("role") != "iran":
@@ -1728,14 +1746,13 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 active_node_ids = {iran_node.id, foreign_node.id}
                 other_nodes = [n for n in all_nodes if n.id not in active_node_ids]
                 if other_nodes:
-                    g_ports = list(extract_all_tunnel_ports(tunnel.spec or {}).get("all_ports", set()))
-                    g_ctrl = (tunnel.spec or {}).get("control_port")
+                    # Identify the ghost by tunnel id ONLY. Sending this tunnel's port
+                    # numbers made every other node kill whatever listened on them,
+                    # i.e. healthy tunnels that reuse the same ports on other servers.
                     g_payload = {
                         "tunnel_id": tunnel.id,
                         "purge": True,
                         "core": tunnel.core,
-                        "ports": g_ports,
-                        "control_port": g_ctrl,
                     }
                     async def _purge_ghost_node(n_obj):
                         try:
@@ -1749,7 +1766,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     async def _purge_all_ghosts():
                         await asyncio.gather(*[_purge_ghost_node(n) for n in other_nodes], return_exceptions=True)
                     
-                    asyncio.create_task(_purge_all_ghosts())
+                    _spawn_background(_purge_all_ghosts())
                 
                 iran_node_ip = iran_node.node_metadata.get("ip_address")
                 if not iran_node_ip:
@@ -1766,6 +1783,8 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                     raise HTTPException(status_code=400, detail="Foreign node has no IP address")
 
                 from app.spec_builder import build_tunnel_node_specs, parse_ports_list
+                from app.tunnel_planning import prepare_tunnel_for_apply
+                await prepare_tunnel_for_apply(db, tunnel, client, [iran_node.id, foreign_node.id])
                 iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
                 ports = parse_ports_list(tunnel.spec)
                 from sqlalchemy.orm.attributes import flag_modified
@@ -2147,23 +2166,33 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     failed_nodes: List[str] = []
 
     async def _notify_node(n_id: str) -> bool:
+        last_error: Any = None
         for attempt in range(3):
             try:
-                await asyncio.wait_for(
+                resp = await asyncio.wait_for(
                     client.send_to_node(
                         node_id=n_id,
                         endpoint="/api/agent/tunnels/remove",
                         data=remove_payload
                     ),
-                    timeout=5.0
+                    timeout=8.0
                 )
-                return True
-            except Exception as e:
-                if attempt < 2:
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                # send_to_node reports failures in the payload instead of raising
+                if isinstance(resp, dict) and resp.get("status") == "error":
+                    last_error = resp.get("message")
                 else:
-                    logger.warning(f"Failed to notify node {n_id} during tunnel removal after 3 attempts: {e}")
-                    return False
+                    stuck = (resp or {}).get("stuck_ports") if isinstance(resp, dict) else None
+                    if stuck:
+                        logger.error(f"Tunnel {tunnel.id}: node {n_id} could not release ports {stuck} after removal")
+                    killed = (resp or {}).get("killed_pids") if isinstance(resp, dict) else None
+                    if killed:
+                        logger.warning(f"Tunnel {tunnel.id}: node {n_id} killed leftover processes {killed}")
+                    return True
+            except Exception as e:
+                last_error = e
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+        logger.warning(f"Failed to notify node {n_id} during tunnel removal after 3 attempts: {last_error}")
         return False
 
     if nodes_to_notify:
@@ -2196,6 +2225,28 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     await db.delete(tunnel)
     await db.commit()
     logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database, notified nodes {nodes_to_notify} (failed: {failed_nodes}), freed ports: {all_tunnel_ports}")
+
+    # Stray copies of this tunnel can exist on other nodes (older panel versions
+    # re-targeted tunnels to "the first" node). Ask every other node to drop it by
+    # id only; a node that never had it does nothing (ports are not sent).
+    try:
+        other_res = await db.execute(select(Node.id))
+        other_ids = [nid for nid in other_res.scalars().all() if nid not in nodes_to_notify]
+        if other_ids:
+            ghost_payload = {"tunnel_id": tunnel_id, "purge": True}
+
+            async def _purge_everywhere():
+                async def _one(nid: str):
+                    try:
+                        await asyncio.wait_for(client.send_to_node(nid, "/api/agent/tunnels/remove", ghost_payload), timeout=8.0)
+                    except Exception:
+                        pass
+                await asyncio.gather(*[_one(nid) for nid in other_ids], return_exceptions=True)
+
+            _spawn_background(_purge_everywhere())
+    except Exception as e:
+        logger.debug(f"Could not schedule fleet-wide purge for tunnel {tunnel_id}: {e}")
+
     return {"status": "deleted"}
 
 

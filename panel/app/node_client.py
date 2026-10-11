@@ -6,9 +6,9 @@ import asyncio
 from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from app.database import AsyncSessionLocal
-from app.models import Node, Settings
+from app.models import Node, Settings, Tunnel
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,49 @@ def _local_addresses() -> list:
     return [a.strip() for a in settings.panel_local_ips.split(",") if a.strip()]
 
 
+# Panel-side bookkeeping keys stored in tunnel.spec that must never reach a node:
+# they don't change the core configuration but would make the node think the
+# config changed and restart the tunnel. (force_restart is an explicit command and
+# is therefore kept.)
+VOLATILE_SPEC_KEYS = ("latency_ms", "_pending_reapply")
+
+# Node metadata keys holding secrets: never returned by the API, never accepted
+# from node-supplied registration payloads.
+RESERVED_NODE_METADATA_KEYS = ("agent_token", "agent_token_pending", "agent_token_mode", "agent_token_error")
+
+
+_CAPABILITY_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+
+
+def _strip_volatile_spec_keys(endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    if not endpoint.endswith("/tunnels/apply") or not isinstance(data, dict):
+        return data
+    spec = data.get("spec")
+    if not isinstance(spec, dict) or not any(k in spec for k in VOLATILE_SPEC_KEYS):
+        return data
+    cleaned = dict(data)
+    cleaned["spec"] = {k: v for k, v in spec.items() if k not in VOLATILE_SPEC_KEYS}
+    return cleaned
+
+
+def node_agent_token(node: Optional[Node]) -> str:
+    """Token the panel must present to this node's agent API."""
+    meta = (node.node_metadata or {}) if node is not None else {}
+    if meta.get("agent_token_mode") != "env":
+        token = meta.get("agent_token") or meta.get("agent_token_pending")
+        if token:
+            return str(token)
+    return settings.node_api_token or ""
+
+
+def public_node_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Node metadata safe to return to API clients (secrets removed)."""
+    cleaned = dict(meta or {})
+    for key in RESERVED_NODE_METADATA_KEYS:
+        cleaned.pop(key, None)
+    return cleaned
+
+
 class NodeClient:
     """Client to send requests to nodes via HTTP/HTTPS or FRP"""
     
@@ -26,10 +69,15 @@ class NodeClient:
         self.timeout = httpx.Timeout(30.0)
     
     @staticmethod
-    def _node_token_headers() -> Dict[str, str]:
-        """Optional shared-secret header for node agent API authentication."""
-        if settings.node_api_token:
-            return {"X-Node-Token": settings.node_api_token}
+    def _node_token_headers(node: Optional[Node] = None) -> Dict[str, str]:
+        """Shared-secret header for node agent API authentication.
+
+        Uses the per-node token provisioned by the panel when available (or the one
+        currently being provisioned), otherwise the global NODE_API_TOKEN.
+        """
+        token = node_agent_token(node)
+        if token:
+            return {"X-Node-Token": token}
         return {}
 
     @staticmethod
@@ -64,7 +112,8 @@ class NodeClient:
 
         # Local or collocated Iran node running on the exact same host
         if node_ip in _local_addresses():
-            return ("http://127.0.0.1:8888", False)
+            api_port = node.node_metadata.get("api_port", 8888) if node.node_metadata else 8888
+            return (f"http://127.0.0.1:{api_port}", False)
 
         # Foreign nodes always have public static IPs and direct connectivity
         # (FRP management traffic across international borders into Iran is blocked by DPI)
@@ -114,6 +163,19 @@ class NodeClient:
             
             node_address, using_frp = await self._get_node_address(node)
             url = f"{node_address.rstrip('/')}{endpoint}"
+            data = _strip_volatile_spec_keys(endpoint, data)
+            if endpoint.endswith("/tunnels/apply") and isinstance(data, dict) and "authoritative_ids" not in data:
+                # Lets the node drop leftovers of deleted tunnels that still hold
+                # the ports of the tunnel being applied (older agents ignore it).
+                try:
+                    t_res = await session.execute(
+                        select(Tunnel.id).where(
+                            or_(Tunnel.node_id == node_id, Tunnel.foreign_node_id == node_id, Tunnel.iran_node_id == node_id)
+                        )
+                    )
+                    data = {**data, "authoritative_ids": list(t_res.scalars().all())}
+                except Exception as e:
+                    logger.debug(f"Could not compute authoritative tunnel ids for node {node_id}: {e}")
             
             comm_type = "FRP" if using_frp else "HTTP"
             logger.debug(f"[{comm_type}] Sending request to node {node_id}: {endpoint}")
@@ -135,7 +197,7 @@ class NodeClient:
                             verify=self._get_verify(),
                             limits=httpx.Limits(max_keepalive_connections=0 if using_frp else 5)  # Disable keep-alive for FRP
                         ) as client:
-                            response = await client.post(url, json=data, headers=self._node_token_headers())
+                            response = await client.post(url, json=data, headers=self._node_token_headers(node))
                             response.raise_for_status()
                             return response.json()
                     except httpx.RequestError as e:
@@ -148,7 +210,7 @@ class NodeClient:
                                 try:
                                     direct_url = f"{direct_addr.rstrip('/')}{endpoint}"
                                     async with httpx.AsyncClient(timeout=self.timeout, verify=self._get_verify()) as direct_client:
-                                        direct_resp = await direct_client.post(direct_url, json=data, headers=self._node_token_headers())
+                                        direct_resp = await direct_client.post(direct_url, json=data, headers=self._node_token_headers(node))
                                         direct_resp.raise_for_status()
                                         return direct_resp.json()
                                 except Exception as fallback_err:
@@ -196,7 +258,7 @@ class NodeClient:
             try:
                 timeout = httpx.Timeout(4.0, connect=2.5)
                 async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
-                    response = await client.get(url, headers=self._node_token_headers())
+                    response = await client.get(url, headers=self._node_token_headers(node))
                     response.raise_for_status()
                     return response.json()
             except httpx.RequestError as e:
@@ -209,7 +271,7 @@ class NodeClient:
                             else:
                                 direct_url = f"{direct_addr.rstrip('/')}/api/agent/status"
                             async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
-                                direct_resp = await direct_client.get(direct_url, headers=self._node_token_headers())
+                                direct_resp = await direct_client.get(direct_url, headers=self._node_token_headers(node))
                                 direct_resp.raise_for_status()
                                 return direct_resp.json()
                         except Exception:
@@ -224,6 +286,52 @@ class NodeClient:
             except Exception as e:
                 return {"status": "error", "message": f"Error: {str(e)}"}
     
+    async def get_capabilities(self, node_id: str, max_age: float = 300.0) -> List[str]:
+        """Agent feature flags of a node (cached). Empty for old agents or unreachable nodes."""
+        import time as _time
+        cached = _CAPABILITY_CACHE.get(node_id)
+        if cached and _time.time() - cached[0] < max_age:
+            return cached[1]
+        caps: List[str] = []
+        try:
+            resp = await self.get_tunnel_status(node_id, "")
+            if isinstance(resp, dict) and resp.get("status") == "ok":
+                raw = resp.get("capabilities") or []
+                caps = [str(c) for c in raw if isinstance(c, str)]
+                _CAPABILITY_CACHE[node_id] = (_time.time(), caps)
+        except Exception:
+            pass
+        return caps
+
+    async def nodes_support(self, capability: str, *node_ids: str) -> bool:
+        """True only if every given node advertises the capability."""
+        ids = [n for n in node_ids if n]
+        if not ids:
+            return False
+        for nid in ids:
+            if capability not in await self.get_capabilities(nid):
+                return False
+        return True
+
+    async def bootstrap_agent_token(self, node: Node, token: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        """Push the per-node agent token. Returns (HTTP status, body); status 0 = unreachable."""
+        from app.node_auth_manager import bootstrap_request
+        node_address, using_frp = await self._get_node_address(node)
+        candidates = [node_address]
+        if using_frp and node.node_metadata:
+            direct_addr = node.node_metadata.get("api_address")
+            if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
+                candidates.append(direct_addr)
+        for base in candidates:
+            try:
+                return await bootstrap_request(f"{base.rstrip('/')}/api/agent/auth/bootstrap", token, self._get_verify())
+            except httpx.RequestError:
+                continue
+            except Exception as e:
+                logger.debug(f"Token bootstrap to node {node.id} failed: {e}")
+                return 0, None
+        return 0, None
+
     async def apply_tunnel(self, node_id: str, tunnel_data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply tunnel to node"""
         return await self.send_to_node(node_id, "/api/agent/tunnels/apply", tunnel_data)
@@ -283,7 +391,7 @@ class NodeClient:
             try:
                 timeout = httpx.Timeout(2.5, connect=1.5)
                 async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
-                    resp = await client.get(url, headers=self._node_token_headers())
+                    resp = await client.get(url, headers=self._node_token_headers(node))
                     if resp.status_code == 200:
                         data = resp.json()
                         return data.get("latency_ms")
@@ -294,7 +402,7 @@ class NodeClient:
                         try:
                             direct_url = f"{direct_addr.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
                             async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
-                                resp = await direct_client.get(direct_url, headers=self._node_token_headers())
+                                resp = await direct_client.get(direct_url, headers=self._node_token_headers(node))
                                 if resp.status_code == 200:
                                     return resp.json().get("latency_ms")
                         except Exception:
@@ -315,7 +423,7 @@ class NodeClient:
                 node_address, using_frp = await self._get_node_address(node)
                 url = f"{node_address.rstrip('/')}/api/agent/tunnels/{tunnel_id}/probe"
                 async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as client:
-                    resp = await client.get(url, headers=self._node_token_headers())
+                    resp = await client.get(url, headers=self._node_token_headers(node))
                     if resp.status_code == 200:
                         return resp.json()
             except Exception:
@@ -325,7 +433,7 @@ class NodeClient:
                         try:
                             direct_url = f"{direct_addr.rstrip('/')}/api/agent/tunnels/{tunnel_id}/probe"
                             async with httpx.AsyncClient(timeout=timeout, verify=self._get_verify()) as direct_client:
-                                resp = await direct_client.get(direct_url, headers=self._node_token_headers())
+                                resp = await direct_client.get(direct_url, headers=self._node_token_headers(node))
                                 if resp.status_code == 200:
                                     return resp.json()
                         except Exception:

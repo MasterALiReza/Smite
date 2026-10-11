@@ -223,7 +223,8 @@ def cmd_restart(args):
     """Restart node container(s)."""
     nodes = discover_nodes()
     targets = select_target_node(nodes, args.target, prompt_action="restart")
-    
+    print("Note: a container restart interrupts the tunnels of the node for a few seconds.")
+    print("      To apply new agent code without interruption use: smite-node reload")
     for n in targets:
         print(f"\nRestarting {n['container_name']} (Port {n['port']})...")
         run_compose_for_node(n, ["stop", n["container_name"]])
@@ -234,31 +235,309 @@ def cmd_restart(args):
         print(f"✓ {n['container_name']} restarted.")
 
 
+DEFAULT_REPO = os.environ.get("SMITE_REPO", "MasterALiReza/Smite")
+DEFAULT_BRANCH = os.environ.get("SMITE_BRANCH", "main")
+
+# Every Python file of the node agent. They are bind-mounted into the container,
+# so updating them on disk + an in-place reload updates the agent without
+# restarting the container (tunnel processes keep running).
+NODE_CODE_FILES = [
+    "main.py",
+    "app/__init__.py",
+    "app/config.py",
+    "app/agent_auth.py",
+    "app/hot_reload.py",
+    "app/core_adapters.py",
+    "app/frp_comm_client.py",
+    "app/panel_client.py",
+    "app/routers/__init__.py",
+    "app/routers/agent.py",
+]
+
+
+LOW_LATENCY_SYSCTL_FILE = Path("/etc/sysctl.d/99-smite-lowlatency.conf")
+LOW_LATENCY_SYSCTL = """# Smite low-latency network profile (managed by smite-node; safe to apply at runtime)
+# BBR + fq pacing: low queueing delay on lossy long-distance links (persisted across reboots)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+# Keep the unsent part of TCP send buffers small: interactive packets (games, VoIP)
+# do not queue behind megabytes of bulk data inside the same tunnel connection
+net.ipv4.tcp_notsent_lowat = 16384
+# Long-lived tunnel connections keep their congestion window after idle periods
+net.ipv4.tcp_slow_start_after_idle = 0
+# Recover from path-MTU black holes instead of stalling (common on tunnelled paths)
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_fastopen = 3
+# UDP: no drops on short bursts
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_budget = 600
+"""
+
+
+def apply_low_latency_profile(verbose=True):
+    """Install and apply the kernel network profile. Never interrupts existing connections:
+    a new congestion control / qdisc default only applies to new connections."""
+    if os.name != "posix" or os.geteuid() != 0:
+        if verbose:
+            print("⚠️ Low-latency kernel profile needs root on Linux; skipped")
+        return False
+    try:
+        subprocess.run(["modprobe", "tcp_bbr"], capture_output=True, check=False)
+        modules_conf = Path("/etc/modules-load.d/smite.conf")
+        try:
+            existing = modules_conf.read_text() if modules_conf.exists() else ""
+            if "tcp_bbr" not in existing:
+                modules_conf.parent.mkdir(parents=True, exist_ok=True)
+                modules_conf.write_text(existing + ("" if existing.endswith("\n") or not existing else "\n") + "tcp_bbr\n")
+        except Exception:
+            pass
+        LOW_LATENCY_SYSCTL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LOW_LATENCY_SYSCTL_FILE.write_text(LOW_LATENCY_SYSCTL)
+        res = subprocess.run(["sysctl", "-e", "-p", str(LOW_LATENCY_SYSCTL_FILE)], capture_output=True, text=True, check=False)
+        cc = subprocess.run(["sysctl", "-n", "net.ipv4.tcp_congestion_control"], capture_output=True, text=True, check=False).stdout.strip()
+        if verbose:
+            print(f"✓ Low-latency network profile applied (congestion control: {cc or 'unknown'})")
+            if res.returncode != 0 and res.stderr.strip():
+                print(f"  note: {res.stderr.strip().splitlines()[-1]}")
+        return True
+    except Exception as e:
+        if verbose:
+            print(f"⚠️ Could not apply low-latency profile: {e}")
+        return False
+
+
+def cmd_tune(args):
+    """Apply the low-latency kernel network profile on this host."""
+    apply_low_latency_profile(verbose=True)
+
+
+def _fetch(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": "smite-node-cli", "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status} for {url}")
+        return resp.read()
+
+
+def _download_node_code(repo, branch):
+    """Download and syntax-check every node file. All-or-nothing."""
+    import ast
+    files = {}
+    for rel in NODE_CODE_FILES:
+        url = f"https://raw.githubusercontent.com/{repo}/{branch}/node/{rel}"
+        content = _fetch(url)
+        ast.parse(content, filename=rel)
+        files[rel] = content
+    return files
+
+
+def _agent_status(port, timeout=2.5):
+    try:
+        req = urllib.request.Request(f"http://localhost:{port}/api/agent/status")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode())
+    except Exception:
+        return None
+    return None
+
+
+def _wait_for_agent(port, previous_started_at=None, timeout=90):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = _agent_status(port)
+        if st and (previous_started_at is None or st.get("agent_started_at") != previous_started_at):
+            return st
+        time.sleep(1.5)
+    return None
+
+
+def _write_code_atomically(app_root, files):
+    """Back up current files then atomically replace them."""
+    import time
+    backup_dir = app_root / f".backup-{time.strftime('%Y%m%d-%H%M%S')}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    for rel in files:
+        cur = app_root / rel
+        if cur.exists():
+            dest = backup_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cur, dest)
+    for rel, content in files.items():
+        target = app_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if "/" not in rel and target.exists():
+            # main.py is a single-file bind mount: the container keeps seeing the
+            # old inode after a rename, so rewrite the existing file in place.
+            with open(target, "r+b") as f:
+                f.write(content)
+                f.truncate()
+                f.flush()
+                os.fsync(f.fileno())
+            continue
+        tmp = target.with_name(f".{target.name}.new")
+        tmp.write_bytes(content)
+        os.replace(tmp, target)
+    return backup_dir
+
+
+def _restore_backup(app_root, backup_dir):
+    for src in backup_dir.rglob("*"):
+        if src.is_file():
+            rel = src.relative_to(backup_dir)
+            dest = app_root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+
+
+def _confirm(prompt, assume_yes):
+    if assume_yes:
+        return True
+    try:
+        return input(f"{prompt} [y/N]: ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def _hot_reload(n):
+    """Reload the agent in place (SIGHUP). Returns True when the new agent is up."""
+    before = _agent_status(n["port"])
+    started_at = (before or {}).get("agent_started_at")
+    res = subprocess.run(["docker", "kill", "--signal=HUP", n["container_name"]], capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"  ⚠️ Could not signal container: {res.stderr.strip()}")
+        return False
+    st = _wait_for_agent(n["port"], previous_started_at=started_at, timeout=90)
+    return bool(st)
+
+
+def _self_update_cli(repo, branch):
+    try:
+        import ast
+        content = _fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/cli/smite-node.py")
+        ast.parse(content)
+        target = Path("/usr/local/bin/smite-node")
+        if target.exists():
+            tmp = target.with_name(".smite-node.new")
+            tmp.write_bytes(content)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, target)
+            print("✓ smite-node CLI updated")
+    except Exception as e:
+        print(f"⚠️ Could not update the CLI itself: {e}")
+
+
 def cmd_update(args):
-    """Safely update node container(s) and core adapters."""
+    """Update node agent code with zero tunnel downtime (in-place reload).
+
+    Default: sync all agent code files from GitHub, then hot-reload the agent. The
+    container and every tunnel process keep running. Nodes still running an old
+    agent (without hot reload) need ONE container restart; you are asked first.
+    --image additionally pulls the container image (core binaries) and recreates the
+    container, which always interrupts tunnels briefly.
+    """
     nodes = discover_nodes()
     targets = select_target_node(nodes, args.target, prompt_action="update")
-    
+    repo = args.repo or DEFAULT_REPO
+    branch = args.branch or DEFAULT_BRANCH
+
+    print(f"Downloading node agent code from {repo}@{branch} ...")
+    try:
+        files = _download_node_code(repo, branch)
+    except Exception as e:
+        print(f"✗ Download/validation failed, nothing was changed: {e}")
+        sys.exit(1)
+    print(f"✓ {len(files)} files downloaded and syntax-checked")
+    if not args.no_tune:
+        apply_low_latency_profile(verbose=True)
+
     for n in targets:
         print(f"\nUpdating {n['container_name']} in {n['dir']}...")
-        app_dir = n["dir"] / "app"
-        if app_dir.exists():
-            try:
-                url = "https://raw.githubusercontent.com/MasterALiReza/Smite/main/node/app/core_adapters.py"
-                req = urllib.request.Request(url, headers={"User-Agent": "smite-node-cli"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    if resp.status == 200:
-                        content = resp.read()
-                        import ast
-                        ast.parse(content)  # Validate AST syntax before writing
-                        (app_dir / "core_adapters.py").write_bytes(content)
-                        print("  ✓ Latest verified core adapters synced")
-            except Exception as e:
-                print(f"  ⚠️ Could not sync core_adapters directly: {e}")
-        
-        run_compose_for_node(n, ["pull"], capture_output=True)
-        run_compose_for_node(n, ["up", "-d", "--force-recreate"])
-        print(f"✓ {n['container_name']} updated.")
+        app_root = n["dir"]
+        if not (app_root / "app").exists():
+            print("  ✗ Node code directory not found, skipping")
+            continue
+
+        status = _agent_status(n["port"])
+        can_hot_reload = bool(status and status.get("hot_reload"))
+
+        backup_dir = _write_code_atomically(app_root, files)
+        print(f"  ✓ Code updated (backup: {backup_dir})")
+
+        if args.image:
+            if not _confirm("  --image recreates the container: tunnels on this node drop for a few seconds. Continue?", args.yes):
+                print("  Skipped image update.")
+            else:
+                run_compose_for_node(n, ["pull"], capture_output=True)
+                run_compose_for_node(n, ["up", "-d", "--force-recreate"])
+                st = _wait_for_agent(n["port"], timeout=120)
+                print(f"  {'✓' if st else '⚠️'} Container recreated{'' if st else ' but agent is not answering yet'}")
+                continue
+
+        if can_hot_reload:
+            print("  Reloading agent in place (tunnels keep running)...")
+            if _hot_reload(n):
+                print(f"  ✓ {n['container_name']} updated with zero tunnel downtime")
+                continue
+            print("  ✗ Agent did not come back after reload. Rolling back code...")
+            _restore_backup(app_root, backup_dir)
+            subprocess.run(["docker", "kill", "--signal=HUP", n["container_name"]], capture_output=True)
+            print("  Rolled back. Check logs: smite-node logs")
+            continue
+
+        print("  This node runs an older agent without in-place reload.")
+        print("  A ONE-TIME container restart is needed to load the new agent; tunnels on")
+        print("  this node are interrupted for a few seconds while they are restored.")
+        print("  All later updates are applied without any interruption.")
+        if not _confirm("  Restart this node's agent container now?", args.yes):
+            print("  Code is updated on disk; it becomes active on the next container restart.")
+            continue
+        res = subprocess.run(["docker", "restart", n["container_name"]], capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"  ✗ docker restart failed: {res.stderr.strip()}")
+            continue
+        st = _wait_for_agent(n["port"], timeout=120)
+        if st:
+            print(f"  ✓ {n['container_name']} restarted with the new agent ({st.get('active_tunnels', 0)} tunnels active)")
+        else:
+            print("  ⚠️ Agent is not answering yet; check: smite-node logs")
+
+    _self_update_cli(repo, branch)
+
+
+def cmd_reload(args):
+    """Reload agent code in place without touching tunnels."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="reload")
+    for n in targets:
+        st = _agent_status(n["port"])
+        if not (st and st.get("hot_reload")):
+            print(f"✗ {n['container_name']}: agent does not support in-place reload (run `smite-node update` first)")
+            continue
+        print(f"Reloading {n['container_name']}...")
+        print("✓ reloaded" if _hot_reload(n) else "⚠️ agent did not come back in time; check logs")
+
+
+def cmd_reset_token(args):
+    """Forget the panel-provisioned agent API token of a node so the panel can re-pair it."""
+    nodes = discover_nodes()
+    targets = select_target_node(nodes, args.target, prompt_action="reset the agent token of")
+    for n in targets:
+        res = subprocess.run(
+            ["docker", "exec", n["container_name"], "rm", "-f", "/var/lib/smite-node/agent_token"],
+            capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            print(f"✗ {n['container_name']}: {res.stderr.strip()}")
+            continue
+        st = _agent_status(n["port"])
+        if st and st.get("hot_reload"):
+            _hot_reload(n)
+        print(f"✓ {n['container_name']}: token removed; the panel will provision a new one within ~2 minutes")
 
 
 def cmd_logs(args):
@@ -367,8 +646,24 @@ def main():
     restart_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
     
     # Update
-    update_p = subparsers.add_parser("update", help="Update node instance")
+    update_p = subparsers.add_parser("update", help="Update node agent code (zero tunnel downtime)")
     update_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
+    update_p.add_argument("--branch", default=None, help=f"Git branch to update from (default: {DEFAULT_BRANCH}, env SMITE_BRANCH)")
+    update_p.add_argument("--repo", default=None, help=f"GitHub repo owner/name (default: {DEFAULT_REPO}, env SMITE_REPO)")
+    update_p.add_argument("--image", action="store_true", help="Also pull the container image and recreate the container (interrupts tunnels)")
+    update_p.add_argument("-y", "--yes", action="store_true", help="Do not ask for confirmation")
+    update_p.add_argument("--no-tune", action="store_true", help="Do not (re)apply the low-latency kernel network profile")
+
+    # Tune
+    subparsers.add_parser("tune", help="Apply the low-latency kernel network profile (BBR, fq, UDP buffers)")
+
+    # Reload
+    reload_p = subparsers.add_parser("reload", help="Reload agent code in place (tunnels keep running)")
+    reload_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
+
+    # Reset token
+    reset_p = subparsers.add_parser("reset-token", help="Remove the panel-provisioned agent API token (re-pair with panel)")
+    reset_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
     
     # Logs
     logs_p = subparsers.add_parser("logs", help="View logs")
@@ -398,6 +693,9 @@ def main():
         "status": cmd_status,
         "restart": cmd_restart,
         "update": cmd_update,
+        "reload": cmd_reload,
+        "reset-token": cmd_reset_token,
+        "tune": cmd_tune,
         "logs": cmd_logs,
         "edit": cmd_edit,
         "edit-env": cmd_edit_env,

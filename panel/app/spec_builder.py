@@ -70,6 +70,16 @@ if is_safe_backend_url is None:
 
 
 
+GAMING_PROFILE = "gaming-v1"
+
+
+def _has_gaming_profile(tunnel, spec: Dict[str, Any]) -> bool:
+    """Low-latency profile marker, set by the panel on create / manual re-apply of
+    UDP and gaming tunnels (never by background re-applies, so a running tunnel's
+    spec - and therefore its process - is never changed behind the user's back)."""
+    return (spec or {}).get("latency_profile") == GAMING_PROFILE
+
+
 def is_valid_ipv6(addr: str) -> bool:
     """Check if address is IPv6"""
     if not addr:
@@ -558,6 +568,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         getattr(tunnel, "gaming_mode", False)
         or server_spec.get("gaming_mode")
         or client_spec.get("gaming_mode")
+        or _has_gaming_profile(tunnel, server_spec)
     )
     if is_gaming_mode:
         server_spec["gaming_mode"] = True
@@ -773,8 +784,10 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     custom_headers = getattr(tunnel, "custom_headers", None) or spec.get("custom_headers")
 
     # 6. Stability Tuning (Keepalive, Max Retry Interval, Proxy, Key)
-    keepalive = getattr(tunnel, "keepalive", None) or spec.get("keepalive") or "15s"
-    max_retry_interval = spec.get("max_retry_interval") or "10s"
+    gaming_profile = _has_gaming_profile(tunnel, spec)
+    keepalive = getattr(tunnel, "keepalive", None) or spec.get("keepalive") or ("10s" if gaming_profile else "15s")
+    # Reconnect backoff cap: after a network blip the client is back in <=3s instead of <=10s
+    max_retry_interval = spec.get("max_retry_interval") or ("3s" if gaming_profile else "10s")
     max_retry_count = spec.get("max_retry_count")
     proxy = spec.get("proxy") or spec.get("upstream_proxy")
     key = spec.get("key")
@@ -1528,6 +1541,8 @@ def build_gost_node_specs(
         "selector_strategy": getattr(tunnel, "selector_strategy", None) or spec.get("selector_strategy") or "fifo",
         "keepalive_interval": getattr(tunnel, "keepalive_interval", None) or spec.get("keepalive_interval") or 15,
     }
+    if _has_gaming_profile(tunnel, spec):
+        base_spec["latency_profile"] = GAMING_PROFILE
 
     target_host = spec.get("target_host") or getattr(tunnel, "target_host", None)
     if target_host:
@@ -1608,3 +1623,27 @@ def build_tunnel_node_specs(
         return build_gost_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     else:
         raise ValueError(f"Unsupported tunnel core: {core}")
+
+
+async def persist_generated_spec(session, tunnel, spec_snapshot) -> bool:
+    """Persist values the spec builder generated into tunnel.spec (tokens, keys,
+    TLS certificates, control ports).
+
+    Without this, background re-applies that never committed would generate fresh
+    certificates/tokens on every run, so the nodes saw a "changed" spec and
+    restarted the tunnel each cycle. Returns True when something was saved.
+    """
+    try:
+        if tunnel.spec == spec_snapshot:
+            return False
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(tunnel, "spec")
+        await session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Could not persist generated spec values for tunnel {getattr(tunnel, 'id', '?')}: {e}")
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return False

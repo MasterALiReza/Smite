@@ -355,7 +355,10 @@ async def test_gost_ssh_server_auth_and_cert_cleanup(tmp_path, monkeypatch):
 
         config = json.loads((tmp_path / "ssh-server-test.json").read_text())
         srv_listener = config["services"][0]["listener"]
-        assert srv_listener["type"] == "sshd"
+        # relay-over-SSH data channel: "ssh" listener (pairs with the client's ssh dialer);
+        # "sshd" is GOST's port-forwarding listener and rejects relay streams.
+        assert srv_listener["type"] == "ssh"
+        assert srv_listener["metadata"]["privateKeyFile"].endswith("ssh_host_key_ssh-server-test.pem")
         assert srv_listener["auth"]["username"] == "smite"
         assert srv_listener["auth"]["password"] == "secret-ssh-token"
 

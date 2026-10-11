@@ -531,12 +531,36 @@ EOF
     if modprobe -n tcp_bbr 2>/dev/null; then
         if ! grep -q "tcp_bbr" /etc/modules-load.d/*.conf 2>/dev/null && ! grep -q "tcp_bbr" /etc/modules 2>/dev/null; then
             echo "tcp_bbr" | tee -a /etc/modules-load.d/smite.conf > /dev/null 2>&1 || echo "tcp_bbr" >> /etc/modules 2>/dev/null || true
-            modprobe tcp_bbr 2>/dev/null || true
-            sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1 || true
-            sysctl -w net.core.default_qdisc=fq > /dev/null 2>&1 || true
-            progress "BBR congestion control enabled"
         fi
+        modprobe tcp_bbr 2>/dev/null || true
     fi
+
+    # Low-latency profile for games/VoIP over every core. Persisted in sysctl.d (the
+    # previous `sysctl -w` for BBR was lost on reboot). Keep in sync with
+    # LOW_LATENCY_SYSCTL in cli/smite-node.py (`smite-node tune`).
+    mkdir -p /etc/sysctl.d
+    cat > /etc/sysctl.d/99-smite-lowlatency.conf << 'EOF'
+# Smite low-latency network profile (managed by smite-node; safe to apply at runtime)
+# BBR + fq pacing: low queueing delay on lossy long-distance links (persisted across reboots)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+# Keep the unsent part of TCP send buffers small: interactive packets (games, VoIP)
+# do not queue behind megabytes of bulk data inside the same tunnel connection
+net.ipv4.tcp_notsent_lowat = 16384
+# Long-lived tunnel connections keep their congestion window after idle periods
+net.ipv4.tcp_slow_start_after_idle = 0
+# Recover from path-MTU black holes instead of stalling (common on tunnelled paths)
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_fastopen = 3
+# UDP: no drops on short bursts
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_budget = 600
+EOF
+    sysctl -e -p /etc/sysctl.d/99-smite-lowlatency.conf > /dev/null 2>&1 || true
+    progress "Low-latency network profile applied (BBR + fq, UDP buffers)"
 }
 
 # -------------------------------------------------------------
@@ -984,17 +1008,25 @@ update_existing_node() {
         return
     fi
 
-    local ver=${SMITE_VERSION:-latest}
-    docker pull "ghcr.io/masteralireza/smite-node:${ver}" 2>/dev/null || true
-
-    (
-        cd "$target_dir"
-        run_compose pull 2>/dev/null || true
-        run_compose up -d --force-recreate
-    )
-
+    # Install the latest CLI first, then let it update the agent code in place.
+    # The agent is hot-reloaded inside the running container, so tunnel processes
+    # keep forwarding traffic (no `--force-recreate`, which dropped every tunnel).
     install_cli_tool "$target_dir"
-    progress "Node ${c_name} successfully updated!"
+
+    if [ -x /usr/local/bin/smite-node ]; then
+        local update_branch="main"
+        if [ "${SMITE_VERSION:-latest}" = "next" ]; then
+            update_branch="next"
+        fi
+        if /usr/local/bin/smite-node update "$c_name" --branch "$update_branch"; then
+            progress "Node ${c_name} successfully updated!"
+        else
+            warn "Agent update for ${c_name} reported a problem. Check: smite-node logs"
+        fi
+    else
+        warn "smite-node CLI is not available; agent code was not updated."
+    fi
+    info "Core binaries (container image) are unchanged. To update them too (brief tunnel interruption): smite-node update ${c_name} --image"
 }
 
 # -------------------------------------------------------------
