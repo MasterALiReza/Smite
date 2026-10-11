@@ -5,6 +5,7 @@ from sqlalchemy import select
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+import copy
 import logging
 import asyncio
 import time
@@ -356,11 +357,14 @@ async def _reset_core(core: str, app_or_request, db: AsyncSession):
             else:
                 is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else True
 
+            spec_snapshot = copy.deepcopy(tunnel.spec)
             try:
                 iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
             except Exception as e:
                 logger.error(f"Spec builder failed for tunnel {tunnel.id} during reset: {e}")
                 continue
+            from app.spec_builder import persist_generated_spec
+            await persist_generated_spec(db, tunnel, spec_snapshot)
             
             if not iran_node.node_metadata.get("api_address"):
                 iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"

@@ -13,12 +13,52 @@ import asyncio
 
 from app.database import get_db
 from app.models import Node, Settings, Admin, Tunnel
-from app.node_client import NodeClient
+from app.node_client import NodeClient, public_node_metadata, RESERVED_NODE_METADATA_KEYS
 from app.routers.auth import get_current_user, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _strip_reserved_metadata(meta: Optional[dict]) -> dict:
+    """Drop secret/bookkeeping keys a registering node (or the UI) must never set."""
+    cleaned = dict(meta or {})
+    for key in RESERVED_NODE_METADATA_KEYS:
+        cleaned.pop(key, None)
+    return cleaned
+
+
+def _provisioned_node_token(node: Optional[Node]) -> str:
+    """Per-node agent token the panel provisioned for this node ('' if none)."""
+    if node is None or not node.node_metadata:
+        return ""
+    if node.node_metadata.get("agent_token_mode") == "env":
+        return ""
+    return str(node.node_metadata.get("agent_token") or "")
+
+
+def _token_matches(provided: Optional[str], expected: Optional[str]) -> bool:
+    import hmac
+    if not provided or not expected:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _node_request_trust(request: Request, node: Optional[Node]) -> Tuple[bool, bool]:
+    """Return (authenticated, legacy_open) for a node-originated request.
+
+    authenticated: the request carries the node's provisioned token (or the global
+    NODE_API_TOKEN). legacy_open: no token exists for this node yet, so old
+    unauthenticated behavior is kept until the panel provisions one.
+    """
+    from app.config import settings as app_settings
+    provided = request.headers.get("X-Node-Token", "")
+    node_token = _provisioned_node_token(node)
+    global_token = app_settings.node_api_token or ""
+    authenticated = _token_matches(provided, node_token) or _token_matches(provided, global_token)
+    legacy_open = not node_token and not global_token
+    return authenticated, legacy_open
 
 
 class NodeCreate(BaseModel):
@@ -89,14 +129,16 @@ async def enrich_node_response_metadata(db: AsyncSession, node_id: str, metadata
     
     # 1. Authoritative active tunnels
     try:
+        # Every tunnel that still exists in the database is authoritative, whatever
+        # its status. Excluding e.g. "error" tunnels made nodes purge (kill) tunnels
+        # that only had a transient apply failure.
         t_res = await db.execute(
             select(Tunnel.id).where(
                 or_(
                     Tunnel.node_id == node_id,
                     Tunnel.foreign_node_id == node_id,
                     Tunnel.iran_node_id == node_id
-                ),
-                Tunnel.status.in_(["active", "pending", "stopped", "running"])
+                )
             )
         )
         enriched["active_tunnel_ids"] = list(t_res.scalars().all())
@@ -142,7 +184,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
-                if resp.status_code == 200:
+                if resp.status_code in (200, 401):
                     client_conn_status = "connected"
                     break
         except Exception as e:
@@ -167,7 +209,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     result = await db.execute(select(Node).where(Node.fingerprint == fingerprint))
     existing = result.scalar_one_or_none()
 
-    metadata = payload.metadata.copy() if payload.metadata else {}
+    metadata = _strip_reserved_metadata(payload.metadata)
     metadata["api_address"] = f"http://{payload.ip_address}:{payload.api_port}"
     metadata["ip_address"] = payload.ip_address
     metadata["api_port"] = payload.api_port
@@ -223,11 +265,15 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
             existing.name = final_name
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
-        existing.node_metadata.update(metadata)
+        merged_meta = dict(existing.node_metadata or {})
+        merged_meta.update(metadata)
+        existing.node_metadata = merged_meta
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(existing, "node_metadata")
         await db.commit()
         await db.refresh(existing)
         invalidate_node_status_cache(existing.id)
-        resp_meta = await enrich_node_response_metadata(db, existing.id, existing.node_metadata)
+        resp_meta = public_node_metadata(await enrich_node_response_metadata(db, existing.id, existing.node_metadata))
         return NodeResponse(
             id=existing.id,
             name=existing.name,
@@ -248,7 +294,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         await db.commit()
         await db.refresh(db_node)
         invalidate_node_status_cache(db_node.id)
-        resp_meta = await enrich_node_response_metadata(db, db_node.id, db_node.node_metadata)
+        resp_meta = public_node_metadata(await enrich_node_response_metadata(db, db_node.id, db_node.node_metadata))
         return NodeResponse(
             id=db_node.id,
             name=db_node.name,
@@ -303,8 +349,19 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
             status_code=401,
             detail="Unauthenticated registration of new nodes is disabled. Use Auto Join with a valid registration token."
         )
+
+    # Node heartbeat authentication: once the panel has provisioned an agent token
+    # for this node, a registration must carry it. Otherwise anybody knowing the
+    # node's IP:port could impersonate it and receive the FRP comm credentials and
+    # its pending tunnel removals.
+    if existing and current_user is None:
+        authenticated, legacy_open = _node_request_trust(request, existing)
+        if not authenticated and not legacy_open:
+            client_host = request.client.host if request.client else "unknown"
+            logger.warning(f"Rejected unauthenticated registration for node {existing.id} from {client_host}")
+            raise HTTPException(status_code=401, detail="Invalid or missing node token")
     
-    metadata = node.metadata.copy() if node.metadata else {}
+    metadata = _strip_reserved_metadata(node.metadata)
     metadata["api_address"] = f"http://{node.ip_address}:{node.api_port}"
     metadata["ip_address"] = node.ip_address
     metadata["api_port"] = node.api_port
@@ -330,8 +387,12 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
         if current_user is not None:
-            existing.node_metadata.update(metadata)
-            existing.node_metadata["role"] = existing_role
+            merged_meta = dict(existing.node_metadata or {})
+            merged_meta.update(metadata)
+            merged_meta["role"] = existing_role
+            existing.node_metadata = merged_meta
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(existing, "node_metadata")
         else:
             # Unauthenticated re-registration (legacy node): keep existing
             # metadata to prevent node-hijack via fingerprint overwrite.
@@ -372,7 +433,12 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
                 "token": frp_setting.value.get("token")
             }
         
-        response_metadata = await enrich_node_response_metadata(db, existing.id, response_metadata)
+        response_metadata = public_node_metadata(await enrich_node_response_metadata(db, existing.id, response_metadata))
+        try:
+            from app.node_auth_manager import node_auth_manager
+            node_auth_manager.schedule_soon(existing.id, existing.node_metadata)
+        except Exception:
+            pass
         return NodeResponse(
             id=existing.id,
             name=existing.name,
@@ -427,7 +493,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
             "token": frp_setting.value.get("token")
         }
     
-    response_metadata = await enrich_node_response_metadata(db, db_node.id, response_metadata)
+    response_metadata = public_node_metadata(await enrich_node_response_metadata(db, db_node.id, response_metadata))
     return NodeResponse(
         id=db_node.id,
         name=db_node.name,
@@ -524,7 +590,7 @@ async def check_node_status(node: Any, client: Optional[NodeClient] = None) -> N
             "latency_ms": latency_ms
         })
     
-    metadata = node.node_metadata.copy() if node.node_metadata else {}
+    metadata = public_node_metadata(node.node_metadata)
     metadata["connection_status"] = connection_status
     metadata["latency_ms"] = latency_ms
     
@@ -583,7 +649,7 @@ async def list_nodes(db: AsyncSession = Depends(get_db), current_user: Admin = D
     for i, response in enumerate(node_responses):
         if isinstance(response, Exception):
             node = nodes[i]
-            metadata = node.node_metadata.copy() if node.node_metadata else {}
+            metadata = public_node_metadata(node.node_metadata)
             metadata["connection_status"] = "failed"
             metadata["latency_ms"] = None
             if not metadata.get("country_code"):
@@ -633,7 +699,7 @@ async def get_node(node_id: str, db: AsyncSession = Depends(get_db), current_use
         status=node.status,
         registered_at=node.registered_at,
         last_seen=node.last_seen,
-        metadata=node.node_metadata or {}
+        metadata=public_node_metadata(node.node_metadata)
     )
 
 
@@ -651,9 +717,9 @@ async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depe
         node.name = payload.name.strip()
         
     if payload.metadata is not None:
-        if not node.node_metadata:
-            node.node_metadata = {}
-        node.node_metadata.update(payload.metadata)
+        merged_meta = dict(node.node_metadata or {})
+        merged_meta.update(_strip_reserved_metadata(payload.metadata))
+        node.node_metadata = merged_meta
         flag_modified(node, "node_metadata")
         
     await db.commit()
@@ -667,15 +733,56 @@ async def update_node(node_id: str, payload: NodeUpdate, db: AsyncSession = Depe
         status=node.status,
         registered_at=node.registered_at,
         last_seen=node.last_seen,
-        metadata=node.node_metadata or {}
+        metadata=public_node_metadata(node.node_metadata)
     )
+
+
+@router.post("/{node_id}/reset-agent-token")
+async def reset_agent_token(node_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Forget the panel-side agent token of a node so it is provisioned again.
+
+    Use after re-installing a node (or after `smite-node reset-token` on a node that
+    reports a token conflict). The node is re-paired automatically within ~2 minutes.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.node_auth_manager import node_auth_manager
+
+    result = await db.execute(select(Node).where(Node.id == node_id))
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    meta = dict(node.node_metadata or {})
+    for key in RESERVED_NODE_METADATA_KEYS:
+        meta.pop(key, None)
+    node.node_metadata = meta
+    flag_modified(node, "node_metadata")
+    await db.commit()
+    node_auth_manager._last_check.pop(node_id, None)
+    return {"status": "success", "message": "Agent token cleared; it will be re-provisioned automatically"}
+
+
+@router.get("/{node_id}/agent-auth")
+async def get_agent_auth_status(node_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Report whether the node's agent API is protected by a provisioned token."""
+    result = await db.execute(select(Node).where(Node.id == node_id))
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    meta = node.node_metadata or {}
+    if meta.get("agent_token_mode") == "env":
+        state = "static_env_token"
+    elif meta.get("agent_token"):
+        state = "provisioned"
+    elif meta.get("agent_token_pending"):
+        state = "pending"
+    else:
+        state = "not_provisioned"
+    return {"node_id": node_id, "state": state, "error": meta.get("agent_token_error")}
 
 
 @router.put("/{node_id}/frp-status")
 async def update_frp_status(node_id: str, frp_status: dict, request: Request, db: AsyncSession = Depends(get_db)):
     """Update node FRP connection status with authentication & input validation"""
-    import hmac
-    from app.config import settings
     from sqlalchemy.orm.attributes import flag_modified
     
     result = await db.execute(select(Node).where(Node.id == node_id))
@@ -683,21 +790,23 @@ async def update_frp_status(node_id: str, frp_status: dict, request: Request, db
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    # Security check: Validate caller if NODE_API_TOKEN is configured
-    if settings.node_api_token:
+    # Security check: this endpoint redirects all panel->node traffic for the node
+    # (frp_remote_port), so it must only be accepted from the node itself.
+    authenticated, legacy_open = _node_request_trust(request, node)
+    if not authenticated and not legacy_open:
         provided_token = request.headers.get("X-Node-Token")
-        if provided_token:
-            if not hmac.compare_digest(provided_token, settings.node_api_token):
-                raise HTTPException(status_code=403, detail="Invalid node token")
-        else:
-            # Fallback for collocated or registered IP
-            client_ip = request.client.host if request.client else ""
-            allowed_ips = {"127.0.0.1", "::1", "localhost"}
-            if node.ip_address:
-                allowed_ips.add(node.ip_address)
-            if client_ip not in allowed_ips:
-                logger.warning(f"[FRP] Unauthenticated FRP status update rejected for node {node_id} from {client_ip}")
-                raise HTTPException(status_code=401, detail="X-Node-Token header required")
+        node_ip = (node.node_metadata or {}).get("ip_address")
+        client_ip = request.client.host if request.client else ""
+        # Legacy fallback (global token configured, node not provisioned yet): accept
+        # only from the node's own registered IP or a collocated node.
+        ip_ok = (
+            not provided_token
+            and not _provisioned_node_token(node)
+            and client_ip in ({"127.0.0.1", "::1"} | ({node_ip} if node_ip else set()))
+        )
+        if not ip_ok:
+            logger.warning(f"[FRP] Unauthenticated FRP status update rejected for node {node_id} from {client_ip}")
+            raise HTTPException(status_code=401, detail="Invalid or missing node token")
     
     if not node.node_metadata:
         node.node_metadata = {}
@@ -796,14 +905,16 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_
                     "control_port": ctrl_port,
                 }
                 try:
-                    await asyncio.wait_for(
+                    cascade_resp = await asyncio.wait_for(
                         client.send_to_node(
                             node_id=counterpart_id,
                             endpoint="/api/agent/tunnels/remove",
                             data=remove_payload
                         ),
-                        timeout=5.0
+                        timeout=8.0
                     )
+                    if isinstance(cascade_resp, dict) and cascade_resp.get("status") == "error":
+                        raise RuntimeError(cascade_resp.get("message") or "node returned an error")
                     logger.info(f"[Cascade] Notified counterpart node {counterpart_id} to release ports for tunnel {tunnel.id}")
                 except Exception as peer_err:
                     logger.warning(f"[Cascade] Failed to notify counterpart node {counterpart_id}: {peer_err}")

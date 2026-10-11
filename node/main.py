@@ -14,6 +14,8 @@ from app.config import settings
 from app.routers import agent
 from app.panel_client import PanelClient
 from app.core_adapters import AdapterManager
+from app import agent_auth
+from app.hot_reload import install_reload_handler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,10 +64,14 @@ async def lifespan(app: FastAPI):
     
     adapter_manager = AdapterManager()
     app.state.adapter_manager = adapter_manager
-    
-    if not settings.node_api_token:
-        logger.warning("SECURITY WARNING: NODE_API_TOKEN is empty. Node agent API (/api/agent/*) is accepting unauthenticated requests. Set NODE_API_TOKEN in .env for production.")
-    
+
+    if not agent_auth.get_effective_token():
+        logger.warning("SECURITY WARNING: no agent API token yet (NODE_API_TOKEN empty and none provisioned by the panel). The agent API accepts unauthenticated requests until the panel provisions a token.")
+    else:
+        logger.info(f"Agent API authentication enforced (token source: {agent_auth.token_source()})")
+
+    install_reload_handler(app)
+
     try:
         await adapter_manager.restore_tunnels()
     except Exception as e:
@@ -137,6 +143,7 @@ app.add_middleware(
 
 
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
+app.include_router(agent.auth_router, prefix="/api/agent", tags=["agent"])
 
 
 @app.get("/")

@@ -1,6 +1,7 @@
 """
 Smite Panel - Central Controller
 """
+import copy
 import os
 import re
 import asyncio
@@ -99,6 +100,11 @@ async def lifespan(app: FastAPI):
     
     restore_tunnels_task = asyncio.create_task(_restore_node_tunnels())
     app.state.restore_tunnels_task = restore_tunnels_task
+
+    # Automatically secure every node agent API with its own token
+    from app.node_auth_manager import node_auth_manager
+    await node_auth_manager.start()
+    app.state.node_auth_manager = node_auth_manager
     
     gost_forwarder.start_monitor()
     
@@ -131,6 +137,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     
+    if hasattr(app.state, 'node_auth_manager'):
+        await app.state.node_auth_manager.stop()
+
     if hasattr(app.state, 'h2_server'):
         await app.state.h2_server.stop()
     
@@ -390,10 +399,13 @@ async def _restore_node_tunnels():
                         if matched_foreign:
                             foreign_node = matched_foreign[0]
                     
-                    if not foreign_node and foreign_nodes_fallback:
+                    # Only fall back to "the" foreign/iran node for legacy tunnels that never
+                    # recorded one, and only when it is unambiguous. Applying a tunnel to an
+                    # arbitrary node would bind its ports there and break other tunnels.
+                    if not foreign_node and not foreign_node_id and len(foreign_nodes_fallback) == 1:
                         foreign_node = foreign_nodes_fallback[0]
                     
-                    if not iran_node and iran_nodes_fallback:
+                    if not iran_node and not iran_node_id and len(iran_nodes_fallback) == 1:
                         iran_node = iran_nodes_fallback[0]
                     
                     if not foreign_node or not iran_node:
@@ -425,12 +437,15 @@ async def _restore_node_tunnels():
                     else:
                         is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else True
 
+                    spec_snapshot = copy.deepcopy(tunnel.spec)
                     try:
                         iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
                     except Exception as e:
                         logger.error(f"Spec builder failed for tunnel {tunnel.id} during sync: {e}")
                         skipped_count += 1
                         continue
+                    from app.spec_builder import persist_generated_spec
+                    await persist_generated_spec(db, tunnel, spec_snapshot)
                     
                     if not iran_node.node_metadata.get("api_address"):
                         iran_node.node_metadata["api_address"] = f"http://{iran_node.node_metadata.get('ip_address', iran_node.fingerprint)}:{iran_node.node_metadata.get('api_port', 8888)}"

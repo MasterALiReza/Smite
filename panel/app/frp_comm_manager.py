@@ -59,14 +59,23 @@ class FrpCommManager:
             self.port = port
             self.token = token
             
-            config_content = f"""bindPort: {port}
+            # Node agent APIs are exposed through this server on remote ports
+            # 10000-19999 (see node frp_comm_client). They are only meant for the
+            # panel itself, so bind them to loopback and refuse any other port:
+            # previously every node API was reachable on the panel's public IP.
+            config_content = f"""bindPort: {int(port)}
 kcpBindPort: 0
 quicBindPort: 0
+proxyBindAddr: "127.0.0.1"
+allowPorts:
+  - start: 10000
+    end: 19999
 """
             if token:
+                safe_token = str(token).replace(chr(92), chr(92) * 2).replace('"', chr(92) + '"').replace(chr(13), '').replace(chr(10), '')
                 config_content += f"""auth:
   method: token
-  token: "{token}"
+  token: "{safe_token}"
 """
             
             with open(self.config_file, 'w') as f:

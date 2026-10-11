@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 from app.config import settings
 from app.frp_comm_client import frp_comm_client
+from . import agent_auth
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,6 @@ class PanelClient:
         
         await self._generate_fingerprint()
         
-        default_headers = {}
-        if getattr(settings, "node_api_token", ""):
-            default_headers["X-Node-Token"] = settings.node_api_token
-        
         # Verify TLS against panel CA certificate if available
         verify_opt = False
         if self.ca_path.exists() and self.ca_path.stat().st_size > 0:
@@ -46,13 +43,22 @@ class PanelClient:
             logger.warning("Panel CA cert empty or missing; TLS verification disabled as fallback")
 
         self.client = httpx.AsyncClient(
-            headers=default_headers,
             timeout=httpx.Timeout(30.0),
             verify=verify_opt
         )
         
         logger.info(f"Node client ready, panel address: {self.panel_address}")
     
+    @staticmethod
+    def _auth_headers() -> dict:
+        """Token proving to the panel that requests really come from this node.
+
+        Evaluated per request so a token provisioned by the panel at runtime is
+        used immediately.
+        """
+        token = agent_auth.get_effective_token()
+        return {"X-Node-Token": token} if token else {}
+
     async def stop(self):
         """Stop client"""
         await frp_comm_client.stop()
@@ -114,7 +120,7 @@ class PanelClient:
                 logger.info(f"[HTTP] Registering with panel at {url}...")
             else:
                 logger.debug(f"[HTTP] Re-registering with panel at {url}...")
-            response = await self.client.post(url, json=registration_data, timeout=10.0)
+            response = await self.client.post(url, json=registration_data, headers=self._auth_headers(), timeout=10.0)
             
             if response.status_code in [200, 201]:
                 data = response.json()
@@ -247,7 +253,7 @@ class PanelClient:
             response = await self.client.put(url, json={
                 "connected": True,
                 "remote_port": remote_port
-            }, timeout=10.0)
+            }, headers=self._auth_headers(), timeout=10.0)
             
             if response.status_code == 200:
                 logger.info(f"[HTTP] FRP status reported to panel: remote_port={remote_port} (last HTTP call)")

@@ -81,6 +81,12 @@ _TRUSTED_PROXIES = {"127.0.0.1", "::1", "localhost"}
 def _client_ip(request: Request) -> str:
     direct_ip = request.client.host if request.client else "unknown"
     if direct_ip in _TRUSTED_PROXIES:
+        # nginx sets X-Real-IP to the real peer address; the left-most
+        # X-Forwarded-For entry is client-controlled and can be spoofed to
+        # bypass the login rate limiter.
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip and real_ip.strip():
+            return real_ip.strip()
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
             client_candidate = forwarded.split(",")[0].strip()

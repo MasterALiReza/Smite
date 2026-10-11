@@ -1,4 +1,5 @@
 """Tunnel auto reapply manager"""
+import copy
 import asyncio
 import logging
 from typing import Optional
@@ -266,12 +267,14 @@ class TunnelReapplyManager:
             
             foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
             
-            from app.spec_builder import build_tunnel_node_specs
+            from app.spec_builder import build_tunnel_node_specs, persist_generated_spec
+            spec_snapshot = copy.deepcopy(tunnel.spec)
             try:
                 iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
             except Exception as e:
                 logger.error(f"Spec builder failed for tunnel {tunnel.id}: {e}")
                 return False
+            await persist_generated_spec(session, tunnel, spec_snapshot)
             
             if iran_spec.get("mode") == "server":
                 first_node, first_spec, first_role = iran_node, iran_spec, "iran node"

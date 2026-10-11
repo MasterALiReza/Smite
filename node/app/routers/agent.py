@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional, List
-import hmac
 import logging
 import re
 import os
@@ -11,11 +10,26 @@ import asyncio
 import time
 from datetime import datetime
 
-from app.config import settings
+from .. import agent_auth
 
 logger = logging.getLogger(__name__)
 
 SAFE_TUNNEL_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+# Bumped whenever the agent gains capabilities the panel/CLI need to detect.
+AGENT_API_VERSION = 3
+# Feature flags the panel checks before sending options an older agent would
+# silently ignore (options that must be identical on both ends of a tunnel).
+AGENT_CAPABILITIES = [
+    "hot_reload",
+    "token_bootstrap",
+    "apply_authoritative_ids",
+    "remove_report",
+    "frp_tcp_mux_option",
+    "udp_low_latency",
+]
+# Changes on every (re)start of the agent process; lets the CLI confirm a hot reload.
+AGENT_STARTED_AT = time.time()
 
 
 def validate_tunnel_id(v: str) -> str:
@@ -26,19 +40,69 @@ def validate_tunnel_id(v: str) -> str:
 
 
 def verify_node_token(request: Request):
-    """Optional shared-secret gate for the agent API.
+    """Shared-secret gate for the agent API.
 
-    Enforced only when NODE_API_TOKEN is configured on the node. Older panels
-    that do not send X-Node-Token keep working when the token is not set.
+    Enforced when a token is configured on the node: either NODE_API_TOKEN in .env
+    or the per-node token provisioned by the panel (/api/agent/auth/bootstrap).
+    Read-only GET /status from the node itself (Docker healthcheck, smite-node CLI)
+    is allowed without a token.
     """
-    if not settings.node_api_token:
+    expected = agent_auth.get_effective_token()
+    if not expected:
         return
+    if request.method == "GET" and request.url.path.rstrip("/").endswith("/api/agent/status"):
+        if agent_auth.is_loopback(request.client.host if request.client else None):
+            return
     provided = request.headers.get("X-Node-Token", "")
-    if not provided or not hmac.compare_digest(provided, settings.node_api_token):
+    if not agent_auth.tokens_match(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid node token")
 
 
 router = APIRouter(dependencies=[Depends(verify_node_token)])
+
+# Token provisioning is authorized inside the handler (it must work before a token exists)
+auth_router = APIRouter()
+
+
+class TokenBootstrap(BaseModel):
+    token: str
+
+
+@auth_router.post("/auth/bootstrap")
+async def bootstrap_token(data: TokenBootstrap, request: Request):
+    """Provision or rotate the per-node agent token.
+
+    - No token configured yet: the token is accepted and enforced from now on.
+    - Token already configured: the request must carry the current token in
+      X-Node-Token (idempotent re-provisioning / rotation by the owning panel).
+    - NODE_API_TOKEN set in .env: the static token always wins (409).
+    """
+    new_token = (data.token or "").strip()
+    if not agent_auth.is_valid_token_format(new_token):
+        raise HTTPException(status_code=400, detail="Invalid token format")
+
+    if agent_auth.get_env_token():
+        provided = request.headers.get("X-Node-Token", "")
+        if agent_auth.tokens_match(provided, agent_auth.get_env_token()):
+            return {"status": "success", "mode": "env", "enforced": True}
+        raise HTTPException(status_code=409, detail="Node uses a static NODE_API_TOKEN from .env")
+
+    current = agent_auth.get_file_token()
+    if current:
+        provided = request.headers.get("X-Node-Token", "")
+        if not agent_auth.tokens_match(provided, current):
+            raise HTTPException(status_code=401, detail="Node token already provisioned")
+        if agent_auth.tokens_match(new_token, current):
+            return {"status": "success", "mode": "panel", "enforced": True, "changed": False}
+
+    try:
+        agent_auth.set_file_token(new_token)
+    except Exception as e:
+        logger.error(f"Failed to persist agent token: {e}")
+        raise HTTPException(status_code=500, detail="Failed to persist token")
+    client_host = request.client.host if request.client else "unknown"
+    logger.warning(f"Agent API token {'rotated' if current else 'provisioned'} by {client_host}; unauthenticated agent API access is now disabled")
+    return {"status": "success", "mode": "panel", "enforced": True, "changed": True}
 
 
 
@@ -47,6 +111,9 @@ class TunnelApply(BaseModel):
     core: str
     type: str
     spec: Dict[str, Any]
+    # All tunnel ids the panel has for this node; lets the node drop leftovers
+    # that occupy the ports of the tunnel being applied.
+    authoritative_ids: Optional[List[str]] = None
 
     @field_validator("tunnel_id")
     @classmethod
@@ -108,10 +175,14 @@ async def apply_tunnel(data: TunnelApply, request: Request):
     
     logger.info(f"Applying tunnel {data.tunnel_id}: core={data.core}, type={data.type}")
     try:
+        auth_ids = None
+        if data.authoritative_ids is not None:
+            auth_ids = [t for t in data.authoritative_ids if isinstance(t, str) and SAFE_TUNNEL_ID_REGEX.match(t)]
         await adapter_manager.apply_tunnel(
             tunnel_id=data.tunnel_id,
             tunnel_core=data.core,
-            spec=data.spec
+            spec=data.spec,
+            authoritative_ids=auth_ids,
         )
         logger.info(f"Tunnel {data.tunnel_id} applied successfully")
         return {"status": "success", "message": "Tunnel applied"}
@@ -126,15 +197,23 @@ async def remove_tunnel(data: TunnelRemove, request: Request):
     adapter_manager = request.app.state.adapter_manager
     
     try:
-        await adapter_manager.remove_tunnel(
+        result = await adapter_manager.remove_tunnel(
             data.tunnel_id,
             purge=bool(data.purge),
             ports=data.ports,
             control_port=data.control_port,
             core=data.core
         )
-        return {"status": "success", "message": "Tunnel removed"}
+        response = {"status": "success", "message": "Tunnel removed"}
+        if isinstance(result, dict):
+            response.update({
+                "found": result.get("found", False),
+                "killed_pids": result.get("killed_pids", []),
+                "stuck_ports": result.get("stuck_ports", []),
+            })
+        return response
     except Exception as e:
+        logger.error(f"Failed to remove tunnel {data.tunnel_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -250,12 +329,19 @@ async def probe_tunnel(tunnel_id: str, request: Request):
 @router.get("/status")
 async def get_status(request: Request):
     """Get node status"""
-    adapter_manager = request.app.state.adapter_manager
-    
+    adapter_manager = getattr(request.app.state, "adapter_manager", None)
+    active = adapter_manager.active_tunnels if adapter_manager else {}
+
     return {
         "status": "ok",
-        "active_tunnels": len(adapter_manager.active_tunnels),
-        "tunnels": list(adapter_manager.active_tunnels.keys())
+        "active_tunnels": len(active),
+        "tunnels": list(active.keys()),
+        "api_version": AGENT_API_VERSION,
+        "capabilities": AGENT_CAPABILITIES,
+        "agent_started_at": AGENT_STARTED_AT,
+        "hot_reload": True,
+        "token_enforced": bool(agent_auth.get_effective_token()),
+        "token_source": agent_auth.token_source(),
     }
 
 
@@ -325,8 +411,12 @@ async def _measure_precise_ping(ip_or_host: str, fallback_ports: list = None) ->
 @router.get("/ping")
 async def ping_target(target: str, port: int = None):
     """Measures precise ping/RTT from this node to target IP/host"""
-    if not target or not re.match(r"^[a-zA-Z0-9.\-_:\[\]]+$", target.strip()):
+    target = (target or "").strip()
+    # Leading '-' would be parsed by ping(8) as an option (argument injection)
+    if not target or target.startswith("-") or len(target) > 255 or not re.match(r"^[a-zA-Z0-9.\-_:\[\]]+$", target):
         raise HTTPException(status_code=400, detail="Invalid target address")
+    if port is not None and not (1 <= int(port) <= 65535):
+        raise HTTPException(status_code=400, detail="Invalid port")
     fallback_ports = []
     if port:
         fallback_ports.append(port)
