@@ -598,16 +598,16 @@ const Tunnels = () => {
         }`}
       >
         {selectedTunnelIds.size > 0 ? (
-          /* ── Contextual Bulk Selection Mode (Linear / Gmail Pattern) ── */
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-1 py-0.5 animate-fade-in">
-            {/* Top row on mobile / Left side on desktop: Master Toggle Checkbox + Counter Pill + Clear Button */}
+          /* ── Contextual Bulk Selection Mode (Mobile-Optimized Grid + Desktop Inline) ── */
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 px-0.5 py-0.5 animate-fade-in">
+            {/* Top row on mobile / Left side on desktop: Master Toggle + Counter + Clear */}
             <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
                 <button
                   type="button"
                   onClick={toggleSelectAllFiltered}
                   aria-label={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
-                  className="min-h-[44px] h-11 sm:h-9 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                  className="min-h-[42px] h-10 sm:h-9 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                   title={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
                 >
                   <CheckSquare size={16} />
@@ -618,39 +618,38 @@ const Tunnels = () => {
                   </span>
                 </button>
 
-                <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-500/10 dark:bg-indigo-500/20 px-2.5 py-2 sm:py-1.5 rounded-xl border border-indigo-500/20 shrink-0 min-h-[44px] sm:min-h-0">
+                <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-500/10 dark:bg-indigo-500/20 px-2.5 py-2 sm:py-1.5 rounded-xl border border-indigo-500/20 shrink-0 min-h-[42px] sm:min-h-0">
                   <span className="text-sm tabular-nums">{selectedTunnelIds.size}</span>
                   <span className="font-sans font-medium text-slate-500 dark:text-slate-400 text-xs">
                     / {filteredTunnels.length}
                   </span>
-                  <span className="font-sans font-medium text-slate-600 dark:text-slate-300 text-xs hidden sm:inline">
-                    {t.tunnels.selectedCount || 'selected'}
-                  </span>
                 </div>
               </div>
 
+              {/* Clear button on mobile */}
               <button
                 type="button"
                 onClick={() => setSelectedTunnelIds(new Set())}
-                className="text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors sm:hidden px-2 py-2 min-h-[44px] flex items-center cursor-pointer"
+                className="text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors sm:hidden px-2.5 py-2 min-h-[42px] flex items-center gap-1 cursor-pointer"
               >
-                {t.tunnels.clearSelection || 'Clear selection'}
+                <X size={14} />
+                <span>{t.tunnels.clearSelection || 'Clear selection'}</span>
               </button>
             </div>
 
-            {/* Bottom row on mobile / Right side on desktop: Actions on Selected Tunnels */}
-            <div className="flex items-center justify-end gap-2 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-indigo-200/50 dark:border-indigo-500/15">
+            {/* Bottom row on mobile (2 equal 50/50 columns) / Right side on desktop (inline flex) */}
+            <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-indigo-200/50 dark:border-indigo-500/15">
               <button
                 type="button"
                 onClick={handleReapplySelected}
                 disabled={!!reapplyAllProgress && !reapplyAllDone}
                 aria-label={t.tunnels.reapplySelected || 'Reapply Selected'}
-                className="flex-1 sm:flex-initial min-h-[44px] h-11 sm:h-9 px-3 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                className="w-full sm:w-auto min-h-[42px] h-11 sm:h-9 px-3 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 sm:gap-2 transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
                 title={t.tunnels.reapplySelected || 'Reapply Selected'}
               >
                 <RotateCw size={15} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-                <span>{t.tunnels.reapplySelected || 'Reapply'}</span>
-                <span className="font-mono tabular-nums bg-white/20 px-1.5 py-0.5 rounded-md text-[11px]">
+                <span className="truncate">{t.tunnels.reapplySelected || 'Reapply'}</span>
+                <span className="font-mono tabular-nums bg-white/20 px-1.5 py-0.5 rounded-md text-[11px] shrink-0">
                   {selectedTunnelIds.size}
                 </span>
               </button>
@@ -659,18 +658,19 @@ const Tunnels = () => {
                 type="button"
                 onClick={() => setShowAssignCategoryModal(true)}
                 aria-label={t.tunnels.moveToCategory || 'Move to Category'}
-                className="flex-1 sm:flex-initial min-h-[44px] h-11 sm:h-9 px-3 rounded-xl bg-white dark:bg-[#161c28] hover:bg-slate-50 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-white/[0.08] font-semibold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                className="w-full sm:w-auto min-h-[42px] h-11 sm:h-9 px-3 rounded-xl bg-white dark:bg-[#161c28] hover:bg-slate-50 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-white/[0.08] font-semibold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                 title={t.tunnels.moveToCategory || 'Move to Category'}
               >
                 <Folder size={15} />
-                <span>{t.tunnels.moveToCategory || 'Category'}</span>
+                <span className="truncate">{t.tunnels.moveToCategory || 'Category'}</span>
               </button>
 
+              {/* Desktop Clear Button */}
               <button
                 type="button"
                 onClick={() => setSelectedTunnelIds(new Set())}
                 aria-label={t.tunnels.deselectAll || 'Cancel selection'}
-                className="min-h-[44px] h-11 sm:h-9 w-11 sm:w-9 rounded-xl bg-white dark:bg-[#161c28] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-white/[0.08] flex items-center justify-center transition-all active:scale-95 cursor-pointer shrink-0"
+                className="hidden sm:flex min-h-[36px] h-9 w-9 rounded-xl bg-white dark:bg-[#161c28] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-white/[0.08] items-center justify-center transition-all active:scale-95 cursor-pointer shrink-0"
                 title={t.tunnels.deselectAll || 'Cancel selection'}
               >
                 <X size={16} />
@@ -2182,73 +2182,6 @@ const Tunnels = () => {
             fetchData()
           }}
         />
-      )}
-    
-      {/* ── Mobile Floating Selection Action Bar (Docked above Mobile Bottom Nav) ── */}
-      {selectedTunnelIds.size > 0 && (
-        <div
-          className="sm:hidden fixed bottom-[5.25rem] left-3 right-3 z-40 max-w-md mx-auto animate-in slide-in-from-bottom-4 fade-in duration-200"
-          role="region"
-          aria-label="Selection actions"
-        >
-          <div className="bg-slate-900/95 dark:bg-[#121624]/95 text-white backdrop-blur-2xl border border-indigo-500/35 rounded-2xl p-2 shadow-2xl flex items-center justify-between gap-1.5 ring-1 ring-white/10">
-            {/* Left: Close button + Selection count */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              <button
-                type="button"
-                onClick={() => setSelectedTunnelIds(new Set())}
-                className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-slate-300 hover:text-white flex items-center justify-center transition-all cursor-pointer shrink-0"
-                title={t.tunnels.clearSelection || 'Clear selection'}
-                aria-label={t.tunnels.clearSelection || 'Clear selection'}
-              >
-                <X size={17} />
-              </button>
-
-              <div className="flex items-center gap-1 font-mono text-xs font-bold text-white bg-indigo-500/30 px-2.5 py-1.5 rounded-xl border border-indigo-400/30 shrink-0">
-                <span className="text-sm tabular-nums text-indigo-300 font-extrabold">{selectedTunnelIds.size}</span>
-                <span className="font-sans font-medium text-slate-400 text-xs">
-                  / {filteredTunnels.length}
-                </span>
-              </div>
-            </div>
-
-            {/* Right: Select All + Category + Reapply actions */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={toggleSelectAllFiltered}
-                className="h-10 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                title={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
-              >
-                <CheckSquare size={15} />
-                <span className="text-[11px] whitespace-nowrap">
-                  {filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (isRTL ? 'لغو همه' : 'None') : (isRTL ? 'همه' : 'All')}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowAssignCategoryModal(true)}
-                className="h-10 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                title={t.tunnels.moveToCategory || 'Category'}
-              >
-                <Folder size={15} />
-                <span className="text-[11px] whitespace-nowrap">{isRTL ? 'دسته' : 'Category'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleReapplySelected}
-                disabled={!!reapplyAllProgress && !reapplyAllDone}
-                className="h-10 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
-                title={t.tunnels.reapplySelected || 'Reapply'}
-              >
-                <RotateCw size={14} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-                <span className="whitespace-nowrap">{isRTL ? 'اعمال' : 'Reapply'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   )
