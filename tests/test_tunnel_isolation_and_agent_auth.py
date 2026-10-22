@@ -530,11 +530,36 @@ def test_cli_node_manifest_covers_every_agent_module():
 
 def test_hot_reload_exec_argv_for_uvicorn(monkeypatch):
     from node.app import hot_reload
+    monkeypatch.setattr(hot_reload.sys, "orig_argv", [], raising=False)
     monkeypatch.setattr(hot_reload.sys, "argv", ["/usr/local/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8888"])
     argv = hot_reload._build_exec_argv()
     assert argv[0] == hot_reload.sys.executable
     assert argv[1:4] == ["-m", "uvicorn", "main:app"]
     assert argv[-2:] == ["--port", "8888"]
+
+
+@pytest.mark.parametrize("orig_argv,argv,expected_tail", [
+    # first reload of a container started by start.sh ("exec uvicorn main:app ...")
+    (["/usr/local/bin/python3.11", "/usr/local/bin/uvicorn", "main:app", "--port", "8888"],
+     ["/usr/local/bin/uvicorn", "main:app", "--port", "8888"],
+     ["/usr/local/bin/uvicorn", "main:app", "--port", "8888"]),
+    # every later reload: the agent now runs as "python -m uvicorn", whose sys.argv[0]
+    # is uvicorn/__main__.py; exec'ing that file directly crashed the agent
+    (["/usr/local/bin/python3.11", "-m", "uvicorn", "main:app", "--port", "8888"],
+     ["/usr/local/lib/python3.11/site-packages/uvicorn/__main__.py", "main:app", "--port", "8888"],
+     ["-m", "uvicorn", "main:app", "--port", "8888"]),
+    # interpreter without orig_argv
+    ([], ["/usr/local/lib/python3.11/site-packages/uvicorn/__main__.py", "main:app", "--port", "8888"],
+     ["-m", "uvicorn", "main:app", "--port", "8888"]),
+])
+def test_hot_reload_exec_argv_survives_repeated_reloads(monkeypatch, orig_argv, argv, expected_tail):
+    from node.app import hot_reload
+    monkeypatch.setattr(hot_reload.sys, "orig_argv", orig_argv, raising=False)
+    monkeypatch.setattr(hot_reload.sys, "argv", argv)
+    built = hot_reload._build_exec_argv()
+    assert built[0] == hot_reload.sys.executable
+    assert built[1:] == expected_tail
+    assert not any(a.endswith("__main__.py") for a in built)
 
 
 @pytest.mark.asyncio

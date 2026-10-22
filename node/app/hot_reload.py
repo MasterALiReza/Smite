@@ -22,11 +22,22 @@ _reload_in_progress = False
 
 
 def _build_exec_argv() -> List[str]:
-    argv0 = os.path.basename(sys.argv[0] or "")
-    if argv0 in ("uvicorn", "uvicorn.exe") or argv0.endswith("uvicorn"):
+    # sys.orig_argv is the interpreter's real command line ("python -m uvicorn ..."
+    # or "python /usr/local/bin/uvicorn ..."), so re-exec reproduces it exactly.
+    # sys.argv is not safe for this: after "python -m uvicorn" its argv[0] is
+    # ".../site-packages/uvicorn/__main__.py", and running that file as a script
+    # puts the uvicorn package dir first on sys.path, where uvicorn/logging.py
+    # shadows the stdlib logging module and the new agent crashes on startup
+    # (which, as container PID 1, stopped the container and all its tunnels).
+    orig = list(getattr(sys, "orig_argv", None) or [])
+    if len(orig) > 1:
+        return [sys.executable, *orig[1:]]
+    argv0 = sys.argv[0] if sys.argv else ""
+    base = os.path.basename(argv0)
+    if base == "__main__.py":
+        return [sys.executable, "-m", os.path.basename(os.path.dirname(argv0)), *sys.argv[1:]]
+    if base in ("uvicorn", "uvicorn.exe") or base.endswith("uvicorn"):
         return [sys.executable, "-m", "uvicorn", *sys.argv[1:]]
-    if sys.argv and sys.argv[0] == "-m":
-        return [sys.executable, *sys.argv]
     return [sys.executable, *sys.argv]
 
 

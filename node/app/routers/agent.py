@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 SAFE_TUNNEL_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
 # Bumped whenever the agent gains capabilities the panel/CLI need to detect.
-AGENT_API_VERSION = 3
+AGENT_API_VERSION = 4
 # Feature flags the panel checks before sending options an older agent would
 # silently ignore (options that must be identical on both ends of a tunnel).
 AGENT_CAPABILITIES = [
@@ -27,6 +27,8 @@ AGENT_CAPABILITIES = [
     "remove_report",
     "frp_tcp_mux_option",
     "udp_low_latency",
+    # hot reload re-execs from sys.orig_argv, so repeated reloads are safe
+    "safe_reexec",
 ]
 # Changes on every (re)start of the agent process; lets the CLI confirm a hot reload.
 AGENT_STARTED_AT = time.time()
