@@ -152,9 +152,12 @@ async def test_gost_adapter_reverse_client_foreign_host_safety(tmp_path, monkeyp
         config_path = tmp_path / "test-tunnel-2.json"
         config = json.loads(config_path.read_text())
 
-        # Check rate limiter parsed float properly
+        # Check rate limiter parsed float properly, in GOST v3 "<scope> <in> <out>" form
         assert "limiters" in config
-        assert config["limiters"][0]["limits"][0] == f"{int(50.5 * 125000)}B"
+        rate = int(50.5 * 125000)
+        assert config["limiters"][0]["limits"][0] == f"$ {rate}B {rate}B"
+        # Reverse tunnels are limited on the relay server; foreign client services are not
+        assert all("limiter" not in s for s in config["services"])
 
         # Check failover IPs were not character-split
         hop = config["chains"][0]["hops"][0]
@@ -330,6 +333,71 @@ async def test_gost_mtcp_and_mtls_transport(tmp_path, monkeypatch):
         config = json.loads((tmp_path / "mtls-server.json").read_text())
         assert config["services"][0]["listener"]["type"] == "mtls"
         assert "tls" in config["services"][0]["listener"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [True, False])
+async def test_gost_rate_limit_attached_where_enforced(tmp_path, monkeypatch, reverse):
+    """Reverse: limiter on the relay server service. Direct: limiter on the Iran-side client services."""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+    base = {"is_reverse": reverse, "control_port": 8820, "transport_type": "tcp", "security_type": "none",
+            "auth_token": "tok", "ports": [8080], "type": "tcp+udp", "rate_limit_mbps": 8}
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=336, returncode=None)
+        await adapter.apply("rl-server", dict(base, mode="server"))
+        await adapter.apply("rl-client", dict(base, mode="client", server_ip="2.2.2.2"))
+
+    server = json.loads((tmp_path / "rl-server.json").read_text())
+    client = json.loads((tmp_path / "rl-client.json").read_text())
+    assert server["limiters"][0]["limits"] == ["$ 1000000B 1000000B"]
+    relay = server["services"][0]
+    client_ports = client["services"]
+    assert len(client_ports) == 2
+    if reverse:
+        assert relay["limiter"] == "limiter-rl-server"
+        assert all("limiter" not in s for s in client_ports)
+    else:
+        assert "limiter" not in relay
+        assert all(s["limiter"] == "limiter-rl-client" for s in client_ports)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport,security,expected", [
+    ("mws", "none", "ws"),
+    ("mws", "tls", "wss"),
+    ("mwss", "none", "wss"),
+    ("mwss", "tls", "wss"),
+])
+async def test_gost_mws_mwss_use_ws_with_mux(tmp_path, monkeypatch, transport, security, expected):
+    """GOST rc10's mws/mwss pair fails every stream ("websocket: bad MASK"); both ends must use ws/wss + mux"""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+    base = {"is_reverse": False, "control_port": 8810, "transport_type": transport, "security_type": security,
+            "auth_token": "tok", "ports": [8080],
+            "tls_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+            "tls_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"}
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=335, returncode=None)
+        await adapter.apply("mws-server", dict(base, mode="server"))
+        await adapter.apply("mws-client", dict(base, mode="client", server_ip="2.2.2.2"))
+
+    listener = json.loads((tmp_path / "mws-server.json").read_text())["services"][0]["listener"]
+    assert listener["type"] == expected
+    assert listener["metadata"]["mux"] is True
+    dialer = json.loads((tmp_path / "mws-client.json").read_text())["chains"][0]["hops"][-1]["nodes"][0]["dialer"]
+    assert dialer["type"] == expected
+    assert dialer["metadata"]["mux"] is True
+    if expected == "wss":
+        assert "tls" in listener and "tls" in dialer
 
 
 @pytest.mark.asyncio

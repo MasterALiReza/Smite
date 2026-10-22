@@ -2703,7 +2703,8 @@ loginFailExit: false
             bandwidth_limit = spec.get('bandwidth_limit')
             rate_limit_mbps = spec.get('rate_limit_mbps')
             if not bandwidth_limit and rate_limit_mbps and float(rate_limit_mbps) > 0:
-                bandwidth_limit = f"{int(float(rate_limit_mbps))}MB"
+                # Mbps (megabits) -> FRP bytes/sec units: 1 Mbps = 125 KB/s
+                bandwidth_limit = f"{max(1, int(float(rate_limit_mbps) * 125))}KB"
             if bandwidth_limit:
                 clean_bw = str(bandwidth_limit).strip().upper().replace(" ", "")
                 if clean_bw.isdigit():
@@ -3157,7 +3158,15 @@ class GostAdapter:
             gost_type = "tls"
         elif transport_type == "mtcp" and security_type in ["tls", "utls"]:
             gost_type = "mtls"
-        
+
+        # The dedicated mws/mwss listener+dialer of GOST 3.0.0-rc10 is broken: every
+        # stream fails with "websocket: bad MASK" (mwss: "tls: received record with
+        # version 0"), so MWS/MWSS tunnels never carried traffic. ws/wss with
+        # mux=true on both ends is the same multiplexed WebSocket and works.
+        ws_mux = gost_type in ("mws", "mwss")
+        if ws_mux:
+            gost_type = "wss" if gost_type == "mwss" else "ws"
+
         tunnel_proto = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
         if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
             tunnel_proto = "tcp"
@@ -3205,6 +3214,22 @@ class GostAdapter:
                 "matchers": raw_bypass
             }]
         
+        # Rate limit (traffic limiter). GOST v3 limits are "<scope> <in> <out>" with
+        # "$" = whole service; the old bare "<n>B" entry had no rate, so GOST ignored
+        # it and limited tunnels ran at full speed. The limit is enforced where
+        # the tunnel's traffic is metered reliably: on the Iran-side client services
+        # in direct mode, and on the relay server service in reverse mode (the
+        # rudp services of the foreign client do not apply limiters).
+        limiter_name = None
+        try:
+            mbps_val = float(spec.get("rate_limit_mbps") or 0)
+        except (ValueError, TypeError):
+            mbps_val = 0
+        if mbps_val > 0:
+            rate_bytes = int(mbps_val * 125000)  # Mbps to bytes/sec
+            limiter_name = f"limiter-{tunnel_id}"
+            config["limiters"] = [{"name": limiter_name, "limits": [f"$ {rate_bytes}B {rate_bytes}B"]}]
+
         if mode == 'server':
             # 1. Server Configuration (Foreign Node in direct mode, Iran Node in reverse mode)
             if control_port:
@@ -3271,6 +3296,8 @@ class GostAdapter:
                 }
                 if spec.get("ws_path"):
                     listener_metadata["path"] = spec.get("ws_path")
+                if ws_mux:
+                    listener_metadata["mux"] = True
                 if is_reverse:
                     listener_metadata["bind"] = True
                 if enable_mux:
@@ -3387,6 +3414,8 @@ class GostAdapter:
             }
             if adm_name:
                 service["admission"] = adm_name
+            if limiter_name and is_reverse:
+                service["limiter"] = limiter_name
 
             config["services"].append(service)
             
@@ -3504,23 +3533,6 @@ class GostAdapter:
                 
                 dialer_metadata["header"] = headers_dict
 
-            # 2. Rate Limit (Limiter)
-            if spec.get("rate_limit_mbps"):
-                try:
-                    mbps_val = float(spec.get("rate_limit_mbps"))
-                    if mbps_val > 0:
-                        rate_bytes = int(mbps_val * 125000) # Mbps to Bytes/sec
-                        config["limiters"] = [
-                            {
-                                "name": f"limiter-{tunnel_id}",
-                                "limits": [
-                                    f"{rate_bytes}B"
-                                ]
-                            }
-                        ]
-                except (ValueError, TypeError):
-                    pass
-                
             dialer_client_type = "ssh" if gost_type in ["ssh", "sshd"] else gost_type
             dialer = {"type": dialer_client_type}
             if gost_type in ["ssh", "sshd"] and auth_token:
@@ -3564,6 +3576,8 @@ class GostAdapter:
                 dialer_metadata["idleTimeout"] = "120s"
                 dialer_metadata["nodelay"] = True
                 dialer_metadata["bufferSize"] = 65536
+                if ws_mux:
+                    dialer_metadata["mux"] = True
                 if enable_mux:
                     dialer_metadata["mux.type"] = mux_type
                     dialer_metadata["mux"] = True
@@ -3770,8 +3784,8 @@ class GostAdapter:
                             ]
                         }
                     }
-                    if spec.get("rate_limit_mbps"):
-                        service_tcp["limiter"] = f"limiter-{tunnel_id}"
+                    if limiter_name and not is_reverse:
+                        service_tcp["limiter"] = limiter_name
                     
                     config["services"].append(service_tcp)
                 
@@ -3842,8 +3856,8 @@ class GostAdapter:
                             ]
                         }
                     }
-                    if spec.get("rate_limit_mbps"):
-                        service_udp["limiter"] = f"limiter-{tunnel_id}"
+                    if limiter_name and not is_reverse:
+                        service_udp["limiter"] = limiter_name
                     
                     config["services"].append(service_udp)
 
