@@ -161,7 +161,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
       {isOpen && (
         <div
           role="listbox"
-          className={`absolute start-0 w-full z-[120] rounded-2xl border shadow-2xl backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 bg-white dark:bg-[#161c28] border-slate-200/90 dark:border-white/[0.1] py-1.5 flex flex-col ${
+          className={`absolute left-0 rtl:left-auto rtl:right-0 w-full z-[120] rounded-2xl border shadow-2xl backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 bg-white dark:bg-[#161c28] border-slate-200/90 dark:border-white/[0.1] py-1.5 flex flex-col ${
             openUpward ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
           } ${menuClassName}`}
           style={{ minWidth: '100%' }}
@@ -170,14 +170,14 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
           {isSearchable && (
             <div className="px-2 pt-1 pb-2 border-b border-slate-100 dark:border-white/[0.06] shrink-0">
               <div className="relative">
-                <Search size={13} className="absolute start-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <Search size={13} className="absolute left-2.5 rtl:left-auto rtl:right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={searchPlaceholder}
-                  className="w-full h-8 ps-8 pe-3 bg-slate-50 dark:bg-black/30 border border-slate-200 dark:border-white/[0.08] rounded-lg text-xs font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:border-blue-500 transition-colors"
+                  className="w-full h-8 pl-8 pr-3 rtl:pl-3 rtl:pr-8 bg-slate-50 dark:bg-black/30 border border-slate-200 dark:border-white/[0.08] rounded-lg text-xs font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>

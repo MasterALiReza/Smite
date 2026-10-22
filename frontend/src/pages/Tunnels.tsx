@@ -683,22 +683,22 @@ const Tunnels = () => {
             {/* Row 1 on mobile: Search Input (flex-1) + View Mode Toggle on mobile (shrink-0) */}
             <div className="flex items-center gap-2 w-full sm:w-auto">
               {/* Search Input */}
-              <div className="relative flex-1 sm:w-56 md:w-64 sm:flex-initial">
-                <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <div className="relative flex-1 sm:w-64 md:w-72 sm:flex-initial">
+                <Search size={16} className="absolute left-3.5 rtl:left-auto rtl:right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t.tunnels.searchPlaceholder || 'Search name or port...'}
                   aria-label={t.tunnels.searchPlaceholder || 'Search name or port'}
-                  className="w-full h-11 sm:h-9 ps-9.5 pe-10 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-[16px] sm:text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
+                  className="w-full h-11 sm:h-9 pl-10 pr-9 rtl:pl-9 rtl:pr-10 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-[16px] sm:text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all focus:outline-none shadow-2xs"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
                     aria-label={t.tunnels.clearSearch || 'Clear search'}
-                    className="absolute end-1 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
+                    className="absolute right-1.5 rtl:right-auto rtl:left-1.5 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
                     title={t.tunnels.clearSearch || 'Clear search'}
                   >
                     <X size={15} />
@@ -794,7 +794,7 @@ const Tunnels = () => {
 
                       {/* Dropdown Menu Popover */}
                       {showCategoryDropdown && (
-                        <div className="absolute start-0 top-full mt-1.5 w-64 max-w-[calc(100vw-2.5rem)] bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto custom-scrollbar">
+                        <div className="absolute left-0 rtl:left-auto rtl:right-0 top-full mt-1.5 w-64 max-w-[calc(100vw-2.5rem)] bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto custom-scrollbar">
                           {/* Header */}
                           <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                             {t.tunnels.categories || 'Categories'}
