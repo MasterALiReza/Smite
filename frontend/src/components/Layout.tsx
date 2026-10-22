@@ -249,7 +249,7 @@ const Layout = ({ children }: LayoutProps) => {
           </header>
           
           {/* Scrollable Page Content Container */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 pb-28 lg:pb-8">
+          <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 lg:p-8 pb-mobile-nav lg:pb-8">
             {children || <Outlet />}
           </div>
 

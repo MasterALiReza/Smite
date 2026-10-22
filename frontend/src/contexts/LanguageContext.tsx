@@ -95,6 +95,30 @@ interface Translations {
     clearSearch: string
     listView: string
     gridView: string
+    networkInfra: string
+    livePing: string
+    livePingOff: string
+    testLiveConnection: string
+    reapplyTunnel: string
+    editTunnel: string
+    deleteTunnel: string
+    portsLabel: string
+    corePortLabel: string
+    irNodeLabel: string
+    extServerLabel: string
+    pendingChanges: string
+    confirmDeleteTunnelTitle: string
+    confirmDeleteTunnelMessage: string
+    confirmDeleteCategoryMessage: string
+    deleteConfirmBtn: string
+    colorTag: string
+    clearSelection: string
+    reapplyComplete: string
+    applyingTunnels: string
+    waiting: string
+    running: string
+    failed: string
+    done: string
   }
   coreHealth: {
     title: string
@@ -286,11 +310,35 @@ const translations: Record<Language, Translations> = {
       confirmReapplySelected: 'Are you sure you want to reapply the selected tunnels?',
       deleteCategory: 'Delete Category',
       categoryCreated: 'Category created successfully',
-      searchPlaceholder: 'Search by name or port...',
+      searchPlaceholder: 'Search name or port...',
       noMatchingTunnels: 'No tunnels match your search',
       clearSearch: 'Clear search',
       listView: 'List View',
       gridView: 'Grid View',
+      networkInfra: 'Network Infrastructure',
+      livePing: 'Live Ping:',
+      livePingOff: 'OFF',
+      testLiveConnection: 'Test Ping',
+      reapplyTunnel: 'Reapply',
+      editTunnel: 'Edit',
+      deleteTunnel: 'Delete',
+      portsLabel: 'Ports:',
+      corePortLabel: 'Core Port:',
+      irNodeLabel: 'IR',
+      extServerLabel: 'EXT',
+      pendingChanges: 'Pending',
+      confirmDeleteTunnelTitle: 'Delete Tunnel',
+      confirmDeleteTunnelMessage: 'Are you sure you want to delete this tunnel? The connection will be permanently stopped and removed.',
+      confirmDeleteCategoryMessage: 'Delete this category? Tunnels in this category will become uncategorized.',
+      deleteConfirmBtn: 'Delete Tunnel',
+      colorTag: 'Color Tag',
+      clearSelection: 'Clear selection',
+      reapplyComplete: 'Reapply Complete',
+      applyingTunnels: 'Applying Tunnels...',
+      waiting: 'Waiting',
+      running: 'Running',
+      failed: 'Failed',
+      done: 'Done',
     },
     coreHealth: {
       title: 'Core Health',
@@ -469,7 +517,7 @@ const translations: Record<Language, Translations> = {
       reapplySelected: 'اعمال مجدد انتخاب‌شده‌ها',
       selectedCount: 'مورد انتخاب شد',
       categories: 'دسته‌بندی‌ها',
-      allTunnels: 'همه تانل‌ها',
+      allTunnels: 'همه تونل‌ها',
       uncategorized: 'بدون دسته‌بندی',
       newCategory: 'دسته‌بندی جدید',
       categoryName: 'نام دسته‌بندی',
@@ -477,14 +525,38 @@ const translations: Record<Language, Translations> = {
       moveToCategory: 'انتقال به دسته‌بندی',
       selectAll: 'انتخاب همه',
       deselectAll: 'لغو انتخاب',
-      confirmReapplySelected: 'آیا از اعمال مجدد تانل‌های انتخاب شده مطمئن هستید؟',
+      confirmReapplySelected: 'آیا از اعمال مجدد تونل‌های انتخاب شده مطمئن هستید؟',
       deleteCategory: 'حذف دسته‌بندی',
       categoryCreated: 'دسته‌بندی با موفقیت ایجاد شد',
-      searchPlaceholder: 'جستجو بر اساس نام یا پورت...',
+      searchPlaceholder: 'جستجوی نام یا پورت...',
       noMatchingTunnels: 'هیچ تونلی مطابق با جستجو یافت نشد',
       clearSearch: 'پاک کردن جستجو',
       listView: 'نمای لیستی',
       gridView: 'نمای شبکه‌ای',
+      networkInfra: 'زیرساخت شبکه',
+      livePing: 'پینگ زنده:',
+      livePingOff: 'خاموش',
+      testLiveConnection: 'تست پینگ',
+      reapplyTunnel: 'اعمال مجدد',
+      editTunnel: 'ویرایش',
+      deleteTunnel: 'حذف',
+      portsLabel: 'پورت‌ها:',
+      corePortLabel: 'پورت اصلی:',
+      irNodeLabel: 'ایران',
+      extServerLabel: 'خارج',
+      pendingChanges: 'در انتظار اعمال',
+      confirmDeleteTunnelTitle: 'حذف تونل',
+      confirmDeleteTunnelMessage: 'آیا از حذف این تونل اطمینان دارید؟ اتصال به طور کامل متوقف و حذف خواهد شد.',
+      confirmDeleteCategoryMessage: 'آیا از حذف این دسته‌بندی اطمینان دارید؟ تونل‌های این دسته بدون دسته‌بندی خواهند شد.',
+      deleteConfirmBtn: 'حذف تونل',
+      colorTag: 'رنگ برچسب',
+      clearSelection: 'پاک کردن انتخاب',
+      reapplyComplete: 'اعمال مجدد انجام شد',
+      applyingTunnels: 'در حال اعمال تونل‌ها...',
+      waiting: 'در انتظار',
+      running: 'در حال اجرا',
+      failed: 'ناموفق',
+      done: 'تکمیل',
     },
     coreHealth: {
       title: 'سلامت هسته',

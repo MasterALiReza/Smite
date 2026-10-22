@@ -78,8 +78,8 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
     <ToastContext.Provider value={{ showToast, showConfirm }}>
       {children}
       
-      {/* Floating Dynamic Toasts */}
-      <div className="fixed bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-[200] space-y-2.5 flex flex-col items-center sm:items-end pointer-events-none">
+      {/* Floating Dynamic Toasts (elevated on mobile so it doesn't overlap mobile bottom navigation) */}
+      <div className="fixed bottom-24 lg:bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-[200] space-y-2.5 flex flex-col items-center sm:items-end pointer-events-none">
         {toasts.map(toast => {
           const styleConfig = {
             success: {

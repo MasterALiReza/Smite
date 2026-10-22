@@ -233,4 +233,11 @@ select:-webkit-autofill:focus {
   }
 }
 
+/* Mobile Safe-Area Bottom Padding Utility for Floating Navigation Bar */
+@layer utilities {
+  .pb-mobile-nav {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 9.5rem);
+  }
+}
+
 

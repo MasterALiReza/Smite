@@ -21,7 +21,7 @@ let _cachedTunnelsIranNodes: any[] = []
 let _cachedTunnelsForeignServers: any[] = []
 
 const Tunnels = () => {
-  const { t } = useLanguage()
+  const { t, isRTL } = useLanguage()
   const { showToast, showConfirm } = useToast()
   const [tunnels, setTunnels] = useState<Tunnel[]>(_cachedTunnels)
   const [nodes, setNodes] = useState<any[]>(_cachedTunnelsIranNodes)
@@ -205,18 +205,21 @@ const Tunnels = () => {
   const deleteCategory = async (name: string) => {
     const ok = await showConfirm({
       title: t.tunnels.deleteCategory || 'Delete Category',
-      message: `Delete "${name}" category? Tunnels in this category will become uncategorized.`,
+      message: isRTL
+        ? `آیا از حذف دسته‌بندی «${name}» اطمینان دارید؟ تونل‌های این دسته بدون دسته‌بندی خواهند شد.`
+        : `Delete "${name}" category? Tunnels in this category will become uncategorized.`,
       variant: 'danger',
-      confirmText: 'Delete'
+      confirmText: t.tunnels.deleteTunnel || 'Delete',
+      cancelText: t.tunnels.cancel || 'Cancel',
     })
     if (!ok) return
     try {
       await api.delete(`/tunnels/categories/${encodeURIComponent(name)}`)
       fetchData()
       if (activeCategoryTab === name) setActiveCategoryTab('all')
-      showToast('success', 'Deleted', `Category "${name}" deleted`)
+      showToast('success', isRTL ? 'دسته‌بندی حذف شد' : 'Deleted', isRTL ? `دسته‌بندی «${name}» حذف شد.` : `Category "${name}" deleted`)
     } catch (e: any) {
-      showToast('error', 'Error', e.response?.data?.detail || 'Failed to delete category')
+      showToast('error', isRTL ? 'خطا در حذف' : 'Error', e.response?.data?.detail || (isRTL ? 'حذف دسته‌بندی با خطا مواجه شد' : 'Failed to delete category'))
     }
   }
 
@@ -399,15 +402,18 @@ const Tunnels = () => {
     const targetName = target?.name || 'this tunnel'
 
     const confirmed = await showConfirm({
-      title: 'Delete Tunnel',
-      message: `Are you sure you want to delete "${targetName}"? The connection will be permanently stopped and removed.`,
+      title: t.tunnels.confirmDeleteTunnelTitle || 'Delete Tunnel',
+      message: isRTL
+        ? `آیا از حذف تونل «${targetName}» اطمینان دارید؟ این اتصال به طور دائمی متوقف و حذف خواهد شد.`
+        : `Are you sure you want to delete "${targetName}"? The connection will be permanently stopped and removed.`,
       variant: 'danger',
-      confirmText: 'Delete Tunnel'
+      confirmText: t.tunnels.deleteConfirmBtn || 'Delete Tunnel',
+      cancelText: t.tunnels.cancel || 'Cancel',
     })
     if (!confirmed) return
     
     setDeletingTunnelId(id)
-    showToast('info', 'Deleting Tunnel', `Removing "${targetName}"...`, 2500)
+    showToast('info', isRTL ? 'در حال حذف تونل' : 'Deleting Tunnel', isRTL ? `در حال حذف «${targetName}»...` : `Removing "${targetName}"...`, 2500)
 
     try {
       await api.delete(`/tunnels/${id}`)
@@ -418,12 +424,12 @@ const Tunnels = () => {
         next.delete(id)
         return next
       })
-      showToast('success', 'Tunnel Deleted', `"${targetName}" was deleted successfully`)
+      showToast('success', isRTL ? 'تونل حذف شد' : 'Tunnel Deleted', isRTL ? `تونل «${targetName}» با موفقیت حذف شد.` : `"${targetName}" was deleted successfully`)
       fetchData()
     } catch (error: any) {
       console.error('Failed to delete tunnel:', error)
-      const errorMsg = error.response?.data?.detail || error.message || 'Failed to delete tunnel'
-      showToast('error', 'Delete Failed', errorMsg)
+      const errorMsg = error.response?.data?.detail || error.message || (isRTL ? 'حذف تونل با خطا مواجه شد' : 'Failed to delete tunnel')
+      showToast('error', isRTL ? 'خطا در حذف تونل' : 'Delete Failed', errorMsg)
       fetchData()
     } finally {
       setDeletingTunnelId(null)
@@ -437,15 +443,15 @@ const Tunnels = () => {
       const response = await api.post(`/tunnels/${tunnel.id}/apply`)
       const isSuccess = response.data && (response.data.status === 'success' || response.data.status === 'applied' || !response.data.status)
       if (isSuccess) {
-        showToast('success', 'Tunnel Reapplied', `${tunnel.name} reapplied successfully`)
+        showToast('success', isRTL ? 'اعمال مجدد انجام شد' : 'Tunnel Reapplied', isRTL ? `تونل «${tunnel.name}» با موفقیت مجدداً اعمال شد.` : `${tunnel.name} reapplied successfully`)
         fetchData()
       } else {
-        throw new Error(response.data?.message || 'Failed to reapply tunnel')
+        throw new Error(response.data?.message || (isRTL ? 'اعمال مجدد تونل ناموفق بود' : 'Failed to reapply tunnel'))
       }
     } catch (error: any) {
       console.error('Failed to reapply tunnel:', error)
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to reapply tunnel'
-      showToast('error', 'Reapply Failed', errorMessage)
+      const errorMessage = error.response?.data?.detail || error.message || (isRTL ? 'اعمال مجدد تونل با خطا مواجه شد' : 'Failed to reapply tunnel')
+      showToast('error', isRTL ? 'خطا در اعمال مجدد' : 'Reapply Failed', errorMessage)
     } finally {
       setReapplyingTunnelId(null)
     }
@@ -541,35 +547,36 @@ const Tunnels = () => {
   return (
     <div className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in">
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200/60 dark:border-white/[0.06]">
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200/60 dark:border-white/[0.06]">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center justify-center p-1.5 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-              <Network className="w-4 h-4" />
+          <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5 sm:mb-1">
+            <span className="inline-flex items-center justify-center p-1 sm:p-1.5 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+              <Network className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </span>
-            <span className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-              Network Infrastructure
+            <span className="text-[10px] sm:text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+              {t.tunnels.networkInfra || 'Network Infrastructure'}
             </span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+          <h1 className="text-xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
             {t.tunnels.title}
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          <p className="hidden sm:block text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {t.tunnels.subtitle}
           </p>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Live Ping Toggle */}
           <button
             type="button"
             onClick={() => setLivePingEnabled(prev => !prev)}
-            className={`px-3.5 py-2.5 rounded-2xl border transition-all font-semibold text-xs flex items-center gap-2 shadow-xs min-h-[44px] active:scale-95 cursor-pointer ${
+            className={`px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl sm:rounded-2xl border transition-all font-semibold text-xs flex items-center gap-2 shadow-xs min-h-[44px] active:scale-95 cursor-pointer ${
               livePingEnabled
                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                 : 'bg-white dark:bg-[#12161f] border-slate-200 dark:border-white/[0.07] text-slate-500 dark:text-slate-400'
             }`}
-            title={livePingEnabled ? 'Live ping auto-refreshing every 2s (Click to pause)' : 'Live ping paused (Click to enable)'}
+            title={livePingEnabled ? (isRTL ? 'پینگ زنده فعال است (کلیک برای توقف)' : 'Live ping auto-refreshing every 2s (Click to pause)') : (isRTL ? 'پینگ زنده متوقف است (کلیک برای فعال‌سازی)' : 'Live ping paused (Click to enable)')}
+            aria-label={t.tunnels.livePing || 'Live Ping'}
           >
             <span className="relative flex h-2 w-2">
               {livePingEnabled && (
@@ -577,7 +584,7 @@ const Tunnels = () => {
               )}
               <span className={`relative inline-flex rounded-full h-2 w-2 ${livePingEnabled ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
             </span>
-            <span className="font-mono">Live Ping: {livePingEnabled ? '2s' : 'OFF'}</span>
+            <span className="font-mono text-xs">{t.tunnels.livePing || 'Live Ping:'} {livePingEnabled ? '2s' : (t.tunnels.livePingOff || 'OFF')}</span>
           </button>
         </div>
       </div>
@@ -592,55 +599,57 @@ const Tunnels = () => {
       >
         {selectedTunnelIds.size > 0 ? (
           /* ── Contextual Bulk Selection Mode (Linear / Gmail Pattern) ── */
-          <div className="flex items-center justify-between gap-2 px-1 py-0.5 animate-fade-in">
-            {/* Left: Master Toggle Checkbox + Counter Pill + Clear Button */}
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              <button
-                type="button"
-                onClick={toggleSelectAllFiltered}
-                aria-label={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
-                className="h-9 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
-                title={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
-              >
-                <CheckSquare size={15} />
-                <span className="hidden sm:inline">
-                  {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
-                    ? (t.tunnels.deselectAll || 'Deselect All')
-                    : (t.tunnels.selectAll || 'Select All')}
-                </span>
-              </button>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-1 py-0.5 animate-fade-in">
+            {/* Top row on mobile / Left side on desktop: Master Toggle Checkbox + Counter Pill + Clear Button */}
+            <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  onClick={toggleSelectAllFiltered}
+                  aria-label={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
+                  className="min-h-[44px] h-11 sm:h-9 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                  title={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
+                >
+                  <CheckSquare size={16} />
+                  <span>
+                    {filteredTunnels.every(t => selectedTunnelIds.has(t.id))
+                      ? (t.tunnels.deselectAll || 'Deselect All')
+                      : (t.tunnels.selectAll || 'Select All')}
+                  </span>
+                </button>
 
-              <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-500/10 dark:bg-indigo-500/20 px-3 py-1.5 rounded-xl border border-indigo-500/20 shrink-0">
-                <span className="text-sm tabular-nums">{selectedTunnelIds.size}</span>
-                <span className="font-sans font-medium text-slate-500 dark:text-slate-400 text-xs">
-                  / {filteredTunnels.length}
-                </span>
-                <span className="font-sans font-medium text-slate-600 dark:text-slate-300 text-xs hidden sm:inline">
-                  {t.tunnels.selectedCount || 'selected'}
-                </span>
+                <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-500/10 dark:bg-indigo-500/20 px-2.5 py-2 sm:py-1.5 rounded-xl border border-indigo-500/20 shrink-0 min-h-[44px] sm:min-h-0">
+                  <span className="text-sm tabular-nums">{selectedTunnelIds.size}</span>
+                  <span className="font-sans font-medium text-slate-500 dark:text-slate-400 text-xs">
+                    / {filteredTunnels.length}
+                  </span>
+                  <span className="font-sans font-medium text-slate-600 dark:text-slate-300 text-xs hidden sm:inline">
+                    {t.tunnels.selectedCount || 'selected'}
+                  </span>
+                </div>
               </div>
 
               <button
                 type="button"
                 onClick={() => setSelectedTunnelIds(new Set())}
-                className="text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors hidden md:inline cursor-pointer"
+                className="text-xs font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors sm:hidden px-2 py-2 min-h-[44px] flex items-center cursor-pointer"
               >
-                {t.tunnels.deselectAll || 'Clear selection'}
+                {t.tunnels.clearSelection || 'Clear selection'}
               </button>
             </div>
 
-            {/* Right: Actions on Selected Tunnels */}
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Bottom row on mobile / Right side on desktop: Actions on Selected Tunnels */}
+            <div className="flex items-center justify-end gap-2 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-indigo-200/50 dark:border-indigo-500/15">
               <button
                 type="button"
                 onClick={handleReapplySelected}
                 disabled={!!reapplyAllProgress && !reapplyAllDone}
                 aria-label={t.tunnels.reapplySelected || 'Reapply Selected'}
-                className="h-9 px-3 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center gap-2 transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                className="flex-1 sm:flex-initial min-h-[44px] h-11 sm:h-9 px-3 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
                 title={t.tunnels.reapplySelected || 'Reapply Selected'}
               >
-                <RotateCw size={14} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
-                <span>{t.tunnels.reapplySelected || 'Reapply Selected'}</span>
+                <RotateCw size={15} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                <span>{t.tunnels.reapplySelected || 'Reapply'}</span>
                 <span className="font-mono tabular-nums bg-white/20 px-1.5 py-0.5 rounded-md text-[11px]">
                   {selectedTunnelIds.size}
                 </span>
@@ -650,55 +659,90 @@ const Tunnels = () => {
                 type="button"
                 onClick={() => setShowAssignCategoryModal(true)}
                 aria-label={t.tunnels.moveToCategory || 'Move to Category'}
-                className="h-9 px-3 rounded-xl bg-white dark:bg-[#161c28] hover:bg-slate-50 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-white/[0.08] font-semibold text-xs flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                className="flex-1 sm:flex-initial min-h-[44px] h-11 sm:h-9 px-3 rounded-xl bg-white dark:bg-[#161c28] hover:bg-slate-50 dark:hover:bg-white/[0.08] text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-white/[0.08] font-semibold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
                 title={t.tunnels.moveToCategory || 'Move to Category'}
               >
-                <Folder size={14} />
-                <span className="hidden sm:inline">{t.tunnels.moveToCategory || 'Category'}</span>
+                <Folder size={15} />
+                <span>{t.tunnels.moveToCategory || 'Category'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setSelectedTunnelIds(new Set())}
                 aria-label={t.tunnels.deselectAll || 'Cancel selection'}
-                className="h-9 w-9 rounded-xl bg-white dark:bg-[#161c28] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-white/[0.08] flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+                className="min-h-[44px] h-11 sm:h-9 w-11 sm:w-9 rounded-xl bg-white dark:bg-[#161c28] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-white/[0.08] flex items-center justify-center transition-all active:scale-95 cursor-pointer shrink-0"
                 title={t.tunnels.deselectAll || 'Cancel selection'}
               >
-                <X size={15} />
+                <X size={16} />
               </button>
             </div>
           </div>
         ) : (
           /* ── Normal Browsing Mode ── */
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {/* Left Controls: Search + Category Dropdown + View Mode Toggle */}
-            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-1 min-w-0">
-              {/* Port & Name Search Input */}
-              <div className="relative w-full sm:w-52 md:w-60 lg:w-64 shrink-0">
-                <Search size={14} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
+            {/* Row 1 on mobile: Search Input (flex-1) + View Mode Toggle on mobile (shrink-0) */}
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {/* Search Input */}
+              <div className="relative flex-1 sm:w-56 md:w-64 sm:flex-initial">
+                <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t.tunnels.searchPlaceholder || 'Search name or port...'}
                   aria-label={t.tunnels.searchPlaceholder || 'Search name or port'}
-                  className="w-full h-9 ps-9 pe-8 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
+                  className="w-full h-11 sm:h-9 ps-9.5 pe-10 bg-slate-50/80 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] focus:border-indigo-500 dark:focus:border-indigo-400 focus:bg-white dark:focus:bg-[#161c28] focus:ring-2 focus:ring-indigo-500/20 rounded-xl text-[16px] sm:text-xs font-medium text-slate-900 dark:text-slate-100 placeholder:text-slate-400 transition-all outline-hidden shadow-2xs"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
                     aria-label={t.tunnels.clearSearch || 'Clear search'}
-                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-md transition-colors cursor-pointer"
+                    className="absolute end-1 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
                     title={t.tunnels.clearSearch || 'Clear search'}
                   >
-                    <X size={13} />
+                    <X size={15} />
                   </button>
                 )}
               </div>
 
-              {/* Category Dropdown */}
-              <div ref={categoryDropdownRef} className="relative shrink-0">
+              {/* View Mode Toggle: List / Grid (Shown on mobile in Row 1!) */}
+              <div className="flex sm:hidden items-center p-0.5 rounded-xl bg-slate-100 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] h-11 shrink-0" role="group" aria-label="View mode">
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode('list')}
+                  className={`h-10 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+                    viewMode === 'list'
+                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                  title={t.tunnels.listView || 'List View'}
+                  aria-label={t.tunnels.listView || 'List View'}
+                  aria-pressed={viewMode === 'list'}
+                >
+                  <List size={17} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetViewMode('grid')}
+                  className={`h-10 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+                    viewMode === 'grid'
+                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                  title={t.tunnels.gridView || 'Grid View'}
+                  aria-label={t.tunnels.gridView || 'Grid View'}
+                  aria-pressed={viewMode === 'grid'}
+                >
+                  <LayoutGrid size={17} />
+                </button>
+              </div>
+            </div>
+
+            {/* Row 2 on mobile / Right side on desktop: Category Dropdown + Desktop View Toggle + Actions */}
+            <div className="flex items-center justify-between sm:justify-end gap-1.5 sm:gap-2 w-full sm:w-auto">
+              {/* Category Dropdown (Takes flex-1 on mobile so category name has plenty of room!) */}
+              <div ref={categoryDropdownRef} className="relative min-w-0 flex-1 sm:flex-initial">
                 {(() => {
                   const currentCategory = categories.find(c => c.name === activeCategoryTab)
                   const categoryCount = activeCategoryTab === 'all'
@@ -714,39 +758,43 @@ const Tunnels = () => {
                         onClick={() => setShowCategoryDropdown(prev => !prev)}
                         aria-expanded={showCategoryDropdown}
                         aria-haspopup="true"
-                        className={`h-9 px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-2 border select-none cursor-pointer ${
+                        className={`w-full sm:w-auto h-11 sm:h-9 px-2.5 sm:px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center justify-between sm:justify-start gap-1.5 sm:gap-2 border select-none cursor-pointer ${
                           showCategoryDropdown || activeCategoryTab !== 'all'
                             ? 'bg-white dark:bg-[#161c28] border-indigo-500/60 dark:border-indigo-400/60 text-slate-900 dark:text-white shadow-2xs ring-2 ring-indigo-500/15'
                             : 'bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.08] text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/20'
                         }`}
                         title={t.tunnels.categories || 'Categories'}
                       >
-                        {activeCategoryTab === 'all' ? (
-                          <Layers size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                        ) : activeCategoryTab === 'uncategorized' ? (
-                          <FolderMinus size={14} className="text-slate-500 dark:text-slate-400 shrink-0" />
-                        ) : (
-                          <Tag size={13} className={`shrink-0 ${getCategoryColorClasses(currentCategory?.color || 'blue').text}`} />
-                        )}
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {activeCategoryTab === 'all' ? (
+                            <Layers size={15} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          ) : activeCategoryTab === 'uncategorized' ? (
+                            <FolderMinus size={15} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                          ) : (
+                            <Tag size={14} className={`shrink-0 ${getCategoryColorClasses(currentCategory?.color || 'blue').text}`} />
+                          )}
 
-                        <span className="truncate max-w-[120px] sm:max-w-[140px]">
-                          {activeCategoryTab === 'all'
-                            ? (t.tunnels.allTunnels || 'All Tunnels')
-                            : activeCategoryTab === 'uncategorized'
-                            ? (t.tunnels.uncategorized || 'Uncategorized')
-                            : (currentCategory?.name || activeCategoryTab)}
-                        </span>
+                          <span className="truncate max-w-[110px] sm:max-w-[140px]">
+                            {activeCategoryTab === 'all'
+                              ? (t.tunnels.allTunnels || 'All Tunnels')
+                              : activeCategoryTab === 'uncategorized'
+                              ? (t.tunnels.uncategorized || 'Uncategorized')
+                              : (currentCategory?.name || activeCategoryTab)}
+                          </span>
+                        </div>
 
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300">
-                          {categoryCount}
-                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300">
+                            {categoryCount}
+                          </span>
 
-                        <ChevronDown size={13} className={`text-slate-400 transition-transform duration-200 shrink-0 ${showCategoryDropdown ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''}`} />
+                          <ChevronDown size={14} className={`text-slate-400 transition-transform duration-200 ${showCategoryDropdown ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''}`} />
+                        </div>
                       </button>
 
                       {/* Dropdown Menu Popover */}
                       {showCategoryDropdown && (
-                        <div className="absolute start-0 top-full mt-1.5 w-64 bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto custom-scrollbar">
+                        <div className="absolute start-0 top-full mt-1.5 w-64 max-w-[calc(100vw-2.5rem)] bg-white dark:bg-[#161c28] border border-slate-200/90 dark:border-white/[0.1] rounded-2xl shadow-xl z-50 py-1.5 backdrop-blur-md animate-in fade-in-50 zoom-in-95 duration-100 max-h-80 overflow-y-auto custom-scrollbar">
                           {/* Header */}
                           <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                             {t.tunnels.categories || 'Categories'}
@@ -759,14 +807,14 @@ const Tunnels = () => {
                               setActiveCategoryTab('all')
                               setShowCategoryDropdown(false)
                             }}
-                            className={`w-full px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                            className={`w-full px-3 py-2.5 sm:py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer min-h-[44px] ${
                               activeCategoryTab === 'all'
                                 ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
                                 : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
                             }`}
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              <Layers size={14} className={activeCategoryTab === 'all' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+                              <Layers size={15} className={activeCategoryTab === 'all' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
                               <span className="truncate">{t.tunnels.allTunnels || 'All Tunnels'}</span>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -785,7 +833,7 @@ const Tunnels = () => {
                             return (
                               <div
                                 key={cat.id}
-                                className={`group/catitem px-3 py-1.5 flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                                className={`group/catitem px-3 py-2 sm:py-1.5 flex items-center justify-between gap-2 transition-colors cursor-pointer min-h-[44px] ${
                                   isActive
                                     ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
                                     : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
@@ -799,7 +847,7 @@ const Tunnels = () => {
                                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${colorStyle.bg} border ${colorStyle.border}`} />
                                   <span className="text-xs font-semibold truncate">{cat.name}</span>
                                 </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
+                                <div className="flex items-center gap-1 shrink-0">
                                   <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none tabular-nums bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400">
                                     {count}
                                   </span>
@@ -810,11 +858,11 @@ const Tunnels = () => {
                                       e.stopPropagation()
                                       deleteCategory(cat.name)
                                     }}
-                                    className="p-1 rounded-md text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-0 group-hover/catitem:opacity-100 transition-opacity cursor-pointer"
+                                    className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 opacity-70 sm:opacity-0 group-hover/catitem:opacity-100 transition-opacity cursor-pointer shrink-0"
                                     title={`${t.tunnels.deleteCategory || 'Delete'} "${cat.name}"`}
                                     aria-label={`${t.tunnels.deleteCategory || 'Delete'} "${cat.name}"`}
                                   >
-                                    <X size={12} strokeWidth={2.5} />
+                                    <X size={14} strokeWidth={2.5} />
                                   </button>
                                 </div>
                               </div>
@@ -829,14 +877,14 @@ const Tunnels = () => {
                                 setActiveCategoryTab('uncategorized')
                                 setShowCategoryDropdown(false)
                               }}
-                              className={`w-full px-3 py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                              className={`w-full px-3 py-2.5 sm:py-2 text-xs font-semibold flex items-center justify-between gap-2 transition-colors cursor-pointer min-h-[44px] ${
                                 activeCategoryTab === 'uncategorized'
                                   ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
                                   : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]'
                               }`}
                             >
                               <div className="flex items-center gap-2 min-w-0">
-                                <FolderMinus size={14} className="text-slate-400 shrink-0" />
+                                <FolderMinus size={15} className="text-slate-400 shrink-0" />
                                 <span className="truncate">{t.tunnels.uncategorized || 'Uncategorized'}</span>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
@@ -858,9 +906,9 @@ const Tunnels = () => {
                               setShowCategoryDropdown(false)
                               setShowCreateCategoryModal(true)
                             }}
-                            className="w-full px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/30 flex items-center gap-2 transition-colors cursor-pointer"
+                            className="w-full px-3 py-2.5 sm:py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/30 flex items-center gap-2 transition-colors cursor-pointer min-h-[44px]"
                           >
-                            <FolderPlus size={14} />
+                            <FolderPlus size={15} />
                             <span>{t.tunnels.newCategory || 'New Category'}</span>
                           </button>
                         </div>
@@ -870,12 +918,12 @@ const Tunnels = () => {
                 })()}
               </div>
 
-              {/* View Mode Toggle (List / Grid) */}
-              <div className="flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] shrink-0" role="group" aria-label="View mode">
+              {/* Desktop View Mode Toggle (hidden on mobile, shown in Row 1 on mobile) */}
+              <div className="hidden sm:flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-[#161c28] border border-slate-200/80 dark:border-white/[0.08] h-9 shrink-0" role="group" aria-label="View mode">
                 <button
                   type="button"
                   onClick={() => handleSetViewMode('list')}
-                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  className={`h-7 px-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
                     viewMode === 'list'
                       ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
                       : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
@@ -889,7 +937,7 @@ const Tunnels = () => {
                 <button
                   type="button"
                   onClick={() => handleSetViewMode('grid')}
-                  className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                  className={`h-7 px-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
                     viewMode === 'grid'
                       ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-2xs font-semibold'
                       : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
@@ -901,20 +949,17 @@ const Tunnels = () => {
                   <LayoutGrid size={15} />
                 </button>
               </div>
-            </div>
 
-            {/* Right Action Controls: Select All + Reapply All + Create Tunnel */}
-            <div className="flex items-center gap-1.5 shrink-0 justify-end ms-auto sm:ms-0">
               {/* Select All Toggle Button */}
               {filteredTunnels.length > 0 && (
                 <button
                   type="button"
                   onClick={toggleSelectAllFiltered}
                   aria-label={t.tunnels.selectAll || 'Select All'}
-                  className="h-9 px-2.5 sm:px-3 rounded-xl text-xs font-semibold transition-all duration-150 flex items-center gap-1.5 shrink-0 border select-none cursor-pointer active:scale-95 bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  className="min-h-[44px] sm:min-h-0 h-11 sm:h-9 px-3 sm:px-3 rounded-xl min-w-[44px] text-xs font-semibold transition-all duration-150 flex items-center justify-center gap-1.5 shrink-0 border select-none cursor-pointer active:scale-95 bg-white dark:bg-[#161c28] border-slate-200/80 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
                   title={`${t.tunnels.selectAll || 'Select All'} (${filteredTunnels.length})`}
                 >
-                  <CheckSquare size={14} className="text-slate-400" />
+                  <CheckSquare size={16} className="text-slate-400" />
                   <span className="hidden sm:inline whitespace-nowrap">
                     {`${t.tunnels.selectAll || 'Select All'} (${filteredTunnels.length})`}
                   </span>
@@ -927,10 +972,10 @@ const Tunnels = () => {
                 onClick={handleReapplyAll}
                 disabled={!!reapplyAllProgress && !reapplyAllDone}
                 aria-label={t.tunnels.reapplyAll}
-                className="h-9 px-2.5 sm:px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                className="min-h-[44px] sm:min-h-0 h-11 sm:h-9 px-3 sm:px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl min-w-[44px] transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
                 title={t.tunnels.reapplyAll}
               >
-                <RotateCw size={13} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                <RotateCw size={15} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
                 <span className="hidden sm:inline">{t.tunnels.reapplyAll}</span>
               </button>
 
@@ -939,10 +984,10 @@ const Tunnels = () => {
                 type="button"
                 onClick={() => setShowAddModal(true)}
                 aria-label={t.tunnels.createTunnel}
-                className="h-9 px-2.5 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                className="min-h-[44px] sm:min-h-0 h-11 sm:h-9 px-3.5 sm:px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl min-w-[44px] transition-all font-semibold shadow-xs flex items-center justify-center gap-1.5 text-xs active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
                 title={t.tunnels.createTunnel}
               >
-                <Plus size={14} />
+                <Plus size={17} />
                 <span className="hidden sm:inline">{t.tunnels.createTunnel}</span>
               </button>
             </div>
@@ -956,15 +1001,15 @@ const Tunnels = () => {
           <EmptyState
             icon={<Search size={32} />}
             title={t.tunnels.noMatchingTunnels || 'No tunnels match your search'}
-            description={`No tunnels found with name or port matching "${searchQuery}".`}
+            description={isRTL ? `هیچ تونلی با نام یا پورت مطابق "${searchQuery}" یافت نشد.` : `No tunnels found with name or port matching "${searchQuery}".`}
             action={{ label: t.tunnels.clearSearch || 'Clear search', onClick: () => setSearchQuery('') }}
           />
         ) : (
           <EmptyState
             icon={<Network size={32} />}
-            title="No tunnels in this category"
-            description="No tunnels match the selected category filter."
-            action={{ label: 'View All Tunnels', onClick: () => setActiveCategoryTab('all') }}
+            title={isRTL ? 'هیچ تونلی در این دسته‌بندی وجود ندارد' : 'No tunnels in this category'}
+            description={isRTL ? 'هیچ تونلی مطابق با فیلتر دسته‌بندی انتخاب‌شده یافت نشد.' : 'No tunnels match the selected category filter.'}
+            action={{ label: isRTL ? 'مشاهده همه تونل‌ها' : (t.tunnels.allTunnels || 'View All Tunnels'), onClick: () => setActiveCategoryTab('all') }}
           />
         )
       ) : (
@@ -1096,26 +1141,29 @@ const Tunnels = () => {
                   /* ══════════════════════════════════════════════════════════
                      GRID CARD LAYOUT
                      ══════════════════════════════════════════════════════════ */
-                  <div className="p-4 sm:p-5 flex flex-col justify-between h-full gap-3.5">
+                  <div className="p-4 sm:p-5 flex flex-col justify-between h-full gap-3.5 min-w-0">
                     <div>
-                      {/* Top Bar: Checkbox + Status + Action Buttons */}
-                      <div className="flex items-center justify-between gap-2">
+                      {/* Top Bar: Checkbox + Status + Pending on left/start; LatencyBadge (mobile) or Desktop Action Buttons on right/end */}
+                      <div className="flex items-center justify-between gap-2 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          {/* Multi-Selection Checkbox */}
+                          {/* Multi-Selection Checkbox with touch padding */}
                           <button
                             type="button"
                             onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
                             disabled={isReapplying || isDeleting}
-                            className={`shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                            aria-label={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                            title={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                            className="shrink-0 -m-2.5 p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <span className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all ${
                               selectedTunnelIds.has(tunnel.id)
                                 ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
                                 : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
-                            }`}
-                            title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
-                          >
-                            {selectedTunnelIds.has(tunnel.id) && (
-                              <CheckCircle2 size={14} className="fill-current text-white" />
-                            )}
+                            }`}>
+                              {selectedTunnelIds.has(tunnel.id) && (
+                                <CheckCircle2 size={13} className="fill-current text-white" />
+                              )}
+                            </span>
                           </button>
 
                           {/* Status Badge */}
@@ -1138,28 +1186,33 @@ const Tunnels = () => {
                           {/* Pending Badge */}
                           {Boolean(tunnel.spec?._pending_reapply) && (
                             <span
-                              className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
-                              title="Configuration modified. Click Reapply to apply changes to live core."
+                              className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse shrink-0"
+                              title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
                             >
-                              Pending
+                              {t.tunnels.pendingChanges || 'Pending'}
                             </span>
                           )}
                         </div>
 
-                        {/* Action Icon Buttons */}
-                        <div className="flex items-center gap-0.5 shrink-0">
+                        {/* Mobile Top-Right / Top-Left (RTL): LatencyBadge */}
+                        <div className="flex sm:hidden shrink-0">
+                          <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                        </div>
+
+                        {/* Desktop Action Icon Buttons (hidden on mobile, shown on sm:) */}
+                        <div className="hidden sm:flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => handleTestActiveTunnel(tunnel)}
                             disabled={isReapplying || isDeleting || isTesting}
                             className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
-                            title="Test Live Connection & Ping"
-                            aria-label="Test Live Connection & Ping"
+                            title={t.tunnels.testLiveConnection || 'Test Ping'}
+                            aria-label={t.tunnels.testLiveConnection || 'Test Ping'}
                           >
                             {isTesting ? (
-                              <Loader2 size={15} className="animate-spin text-amber-500" />
+                              <Loader2 size={16} className="animate-spin text-amber-500" />
                             ) : (
-                              <Zap size={15} />
+                              <Zap size={16} />
                             )}
                           </button>
                           <button
@@ -1171,13 +1224,13 @@ const Tunnels = () => {
                                 ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
                                 : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                             }`}
-                            title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
-                            aria-label="Reapply tunnel"
+                            title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                            aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                           >
                             {isReapplying ? (
-                              <Loader2 size={15} className="animate-spin" />
+                              <Loader2 size={16} className="animate-spin" />
                             ) : (
-                              <RotateCw size={15} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                              <RotateCw size={16} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
                             )}
                           </button>
                           <button
@@ -1185,23 +1238,23 @@ const Tunnels = () => {
                             onClick={() => setEditingTunnel(tunnel)}
                             disabled={isReapplying || isDeleting}
                             className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
-                            title="Edit tunnel"
-                            aria-label="Edit tunnel"
+                            title={t.tunnels.editTunnel || 'Edit tunnel'}
+                            aria-label={t.tunnels.editTunnel || 'Edit tunnel'}
                           >
-                            <Edit2 size={15} />
+                            <Edit2 size={16} />
                           </button>
                           <button
                             type="button"
                             onClick={() => deleteTunnel(tunnel.id)}
                             disabled={isReapplying || isDeleting}
                             className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
-                            title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
-                            aria-label="Delete tunnel"
+                            title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
+                            aria-label={t.tunnels.deleteTunnel || 'Delete tunnel'}
                           >
                             {isDeleting ? (
-                              <Loader2 size={15} className="animate-spin text-rose-500" />
+                              <Loader2 size={16} className="animate-spin text-rose-500" />
                             ) : (
-                              <Trash2 size={15} />
+                              <Trash2 size={16} />
                             )}
                           </button>
                         </div>
@@ -1213,7 +1266,7 @@ const Tunnels = () => {
                       </h3>
 
                       {/* Badges Row */}
-                      <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                      <div className="flex items-center gap-1.5 flex-wrap mt-2 min-w-0">
                         <span
                           className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
                         >
@@ -1255,20 +1308,23 @@ const Tunnels = () => {
                           </button>
                         )}
 
-                        <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                        {/* Latency on desktop */}
+                        <div className="hidden sm:inline-flex">
+                          <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                        </div>
                       </div>
                     </div>
 
                     {/* Bottom Details: Ports, Core Port, Topology Nodes */}
                     <div className="pt-2.5 border-t border-slate-100 dark:border-white/[0.05] space-y-2 text-xs">
                       <div className="flex items-center justify-between gap-2 text-xs">
-                        <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
-                        <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums truncate">{ports}</span>
+                        <span className="text-slate-400 dark:text-slate-500 font-medium">{t.tunnels.portsLabel || 'Ports:'}</span>
+                        <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums truncate max-w-[180px]" title={ports}>{ports}</span>
                       </div>
 
                       {corePort && (
                         <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="font-medium text-slate-400">Core Port:</span>
+                          <span className="font-medium text-slate-400">{t.tunnels.corePortLabel || 'Core Port:'}</span>
                           <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
                         </div>
                       )}
@@ -1277,8 +1333,8 @@ const Tunnels = () => {
                       {(iranNode || foreignServer) && (
                         <div className="flex items-center gap-1.5 pt-1 text-[11px]">
                           {iranNode && (
-                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={`Iran Node: ${iranNode.name || iranNode.id}`}>
-                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">IR:</span>
+                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={isRTL ? `نود ایران: ${iranNode.name || iranNode.id}` : `Iran Node: ${iranNode.name || iranNode.id}`}>
+                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">{t.tunnels.irNodeLabel ? `${t.tunnels.irNodeLabel}:` : 'IR:'}</span>
                               <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{iranNode.name || iranNode.id.substring(0, 8)}</span>
                             </div>
                           )}
@@ -1286,8 +1342,8 @@ const Tunnels = () => {
                             <ArrowRight size={12} className="text-slate-400 shrink-0 rtl:rotate-180" />
                           )}
                           {foreignServer && (
-                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={`Foreign Server: ${foreignServer.name || foreignServer.id}`}>
-                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">EXT:</span>
+                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] truncate flex-1 min-w-0" title={isRTL ? `سرور خارج: ${foreignServer.name || foreignServer.id}` : `Foreign Server: ${foreignServer.name || foreignServer.id}`}>
+                              <span className="text-slate-400 text-[9px] uppercase font-mono shrink-0">{t.tunnels.extServerLabel ? `${t.tunnels.extServerLabel}:` : 'EXT:'}</span>
                               <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
                             </div>
                           )}
@@ -1301,67 +1357,196 @@ const Tunnels = () => {
                         </div>
                       )}
                     </div>
+
+                    {/* ── Mobile Action Buttons Bar for Grid View (4 comfortable 44px touch buttons) ── */}
+                    <div className="grid grid-cols-4 gap-2 pt-2.5 mt-2.5 border-t border-slate-100 dark:border-white/[0.06] sm:hidden">
+                      {/* Test Connection / Ping */}
+                      <button
+                        type="button"
+                        onClick={() => handleTestActiveTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting || isTesting}
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={t.tunnels.testLiveConnection || 'Test Ping'}
+                        aria-label={t.tunnels.testLiveConnection || 'Test Ping'}
+                      >
+                        {isTesting ? (
+                          <Loader2 size={18} className="animate-spin text-amber-500" />
+                        ) : (
+                          <Zap size={18} />
+                        )}
+                      </button>
+
+                      {/* Reapply Tunnel */}
+                      <button
+                        type="button"
+                        onClick={() => reapplyTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
+                        className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
+                          Boolean(tunnel.spec?._pending_reapply)
+                            ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
+                            : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/20'
+                        }`}
+                        title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                        aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
+                      >
+                        {isReapplying ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                        )}
+                      </button>
+
+                      {/* Edit Tunnel */}
+                      <button
+                        type="button"
+                        onClick={() => setEditingTunnel(tunnel)}
+                        disabled={isReapplying || isDeleting}
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-indigo-500/15 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={t.tunnels.editTunnel || 'Edit tunnel'}
+                        aria-label={t.tunnels.editTunnel || 'Edit tunnel'}
+                      >
+                        <Edit2 size={18} />
+                      </button>
+
+                      {/* Delete Tunnel */}
+                      <button
+                        type="button"
+                        onClick={() => deleteTunnel(tunnel.id)}
+                        disabled={isReapplying || isDeleting}
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-rose-500/15 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
+                        aria-label={t.tunnels.deleteTunnel || 'Delete tunnel'}
+                      >
+                        {isDeleting ? (
+                          <Loader2 size={18} className="animate-spin text-rose-500" />
+                        ) : (
+                          <Trash2 size={18} />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   /* ══════════════════════════════════════════════════════════
                      LIST CARD LAYOUT
                      ══════════════════════════════════════════════════════════ */
-                  <div className="p-5 sm:p-6">
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                      <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
-                        {/* Multi-Selection Checkbox */}
+                  <div className="p-3.5 sm:p-5 lg:p-6">
+                    {/* ── Mobile Top Header (hidden on sm:): Checkbox + Status + Latency ── */}
+                    <div className="flex sm:hidden items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-100 dark:border-white/[0.04]">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {/* Multi-Selection Checkbox with enlarged hit area */}
                         <button
                           type="button"
                           onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
                           disabled={isReapplying || isDeleting}
-                          className={`mt-1 shrink-0 w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                          aria-label={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                          title={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                          className="shrink-0 -m-2.5 p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer disabled:opacity-40"
+                        >
+                          <span className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all ${
                             selectedTunnelIds.has(tunnel.id)
                               ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
-                              : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
-                          }`}
-                          title={selectedTunnelIds.has(tunnel.id) ? 'Deselect' : 'Select'}
-                        >
-                          {selectedTunnelIds.has(tunnel.id) && (
-                            <CheckCircle2 size={14} className="fill-current text-white" />
-                          )}
+                              : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 bg-white dark:bg-[#161c28]'
+                          }`}>
+                            {selectedTunnelIds.has(tunnel.id) && (
+                              <CheckCircle2 size={13} className="fill-current text-white" />
+                            )}
+                          </span>
                         </button>
 
                         {/* Status Badge */}
-                        <div className="flex flex-col gap-1.5 shrink-0 pt-0.5">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap flex items-center gap-1.5 ${
+                            tunnel.status === 'active'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                              : tunnel.status === 'error'
+                              ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                              : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                            tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                          }`} />
+                          {tunnel.status}
+                        </span>
+
+                        {/* Pending Badge */}
+                        {Boolean(tunnel.spec?._pending_reapply) && (
                           <span
-                            className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
-                              tunnel.status === 'active'
-                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                : tunnel.status === 'error'
-                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                                : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
-                            }`}
+                            className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse shrink-0"
+                            title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
                           >
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
-                              tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
-                            }`} />
-                            {tunnel.status}
+                            {t.tunnels.pendingChanges || 'Pending'}
                           </span>
-                          {Boolean(tunnel.spec?._pending_reapply) && (
+                        )}
+                      </div>
+
+                      {/* Latency on mobile top right (top left in RTL) */}
+                      <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+                      <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+                        {/* Desktop Multi-Selection Checkbox & Status Badge (hidden on mobile) */}
+                        <div className="hidden sm:flex items-start gap-3 shrink-0 pt-0.5">
+                          <button
+                            type="button"
+                            onClick={(e) => toggleSelectTunnel(tunnel.id, e)}
+                            disabled={isReapplying || isDeleting}
+                            aria-label={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                            className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+                              selectedTunnelIds.has(tunnel.id)
+                                ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs scale-105'
+                                : 'border-slate-300 dark:border-white/20 hover:border-indigo-400 dark:hover:border-indigo-500 bg-white dark:bg-[#161c28]'
+                            }`}
+                            title={selectedTunnelIds.has(tunnel.id) ? (t.tunnels.deselectAll || 'Deselect') : (t.tunnels.selectAll || 'Select')}
+                          >
+                            {selectedTunnelIds.has(tunnel.id) && (
+                              <CheckCircle2 size={14} className="fill-current text-white" />
+                            )}
+                          </button>
+
+                          <div className="flex flex-col gap-1.5 shrink-0">
                             <span
-                              className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
-                              title="Configuration modified. Click Reapply to apply changes to live core."
+                              className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
+                                tunnel.status === 'active'
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                  : tunnel.status === 'error'
+                                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                  : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                              }`}
                             >
-                              Pending
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                                tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                              }`} />
+                              {tunnel.status}
                             </span>
-                          )}
+                            {Boolean(tunnel.spec?._pending_reapply) && (
+                              <span
+                                className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
+                                title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
+                              >
+                                {t.tunnels.pendingChanges || 'Pending'}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
-                        <div className="flex-1 min-w-0 space-y-2.5">
-                          {/* Name, Core Badge, Category Badge, Transmission Badge, Ports, Latency */}
-                          <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
-                            <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">{tunnel.name}</h3>
+                        <div className="flex-1 min-w-0 space-y-2 sm:space-y-2.5">
+                          {/* Tunnel Name (Full width on mobile!) */}
+                          <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate" title={tunnel.name}>
+                            {tunnel.name}
+                          </h3>
+
+                          {/* Badges row: Core, Transmission, Category, Ports, and on desktop: Latency */}
+                          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                             <span
-                              className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
+                              className={`px-2 sm:px-2.5 py-0.5 rounded-md sm:rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wide border ${coreBadge.bg} ${coreBadge.text} ${coreBadge.border} shrink-0`}
                             >
                               {tunnel.core}
                             </span>
+
                             {tunnel.category && (
                               <button
                                 type="button"
@@ -1369,7 +1554,7 @@ const Tunnels = () => {
                                   e.stopPropagation()
                                   setActiveCategoryTab(tunnel.category || 'all')
                                 }}
-                                className={`px-2.5 py-0.5 rounded-lg text-xs font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                                className={`px-2 sm:px-2.5 py-0.5 rounded-md sm:rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 border shrink-0 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
                                   getCategoryColorClasses(
                                     categories.find(c => c.name === tunnel.category)?.color || 'blue'
                                   ).bg
@@ -1384,49 +1569,60 @@ const Tunnels = () => {
                                 }`}
                                 title={`Filter tunnels by "${tunnel.category}"`}
                               >
-                                <Tag size={11} />
+                                <Tag size={10} />
                                 <span>{tunnel.category}</span>
                               </button>
                             )}
+
                             {transmissionType && transmissionBadge && (
                               <span
-                                className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
+                                className={`px-2 sm:px-2.5 py-0.5 rounded-md sm:rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
                               >
                                 {transmissionType}
                               </span>
                             )}
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-slate-400 dark:text-slate-500 font-medium">Ports:</span>
-                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums">{ports}</span>
+
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.06] text-[11px] sm:text-xs">
+                              <span className="text-slate-400 dark:text-slate-500 font-medium">{t.tunnels.portsLabel || 'Ports:'}</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200 tabular-nums max-w-[140px] sm:max-w-xs truncate" title={ports}>{ports}</span>
                             </div>
-                            <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+
+                            {/* Latency on desktop */}
+                            <div className="hidden sm:inline-flex">
+                              <LatencyBadge latency={tunnel.spec?.latency_ms} status={tunnel.status} />
+                            </div>
                           </div>
 
                           {/* Node & Server Route info */}
-                          <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 flex-wrap">
-                            {corePort && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-medium text-slate-400">Core Port:</span>
-                                <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
-                              </div>
-                            )}
-                            {iranNode && (
-                              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
-                                <span className="text-slate-400 text-[10px] uppercase font-mono">IR:</span>
-                                <span className="text-slate-700 dark:text-slate-300 font-semibold">{iranNode.name || iranNode.id.substring(0, 8)}</span>
-                              </div>
-                            )}
-                            {foreignServer && (
-                              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05]">
-                                <span className="text-slate-400 text-[10px] uppercase font-mono">EXT:</span>
-                                <span className="text-slate-700 dark:text-slate-300 font-semibold">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
-                              </div>
-                            )}
-                          </div>
+                          {(iranNode || foreignServer || corePort) && (
+                            <div className="flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 flex-wrap pt-0.5">
+                              {corePort && (
+                                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100/60 dark:bg-white/[0.03] border border-slate-200/50 dark:border-white/[0.05]">
+                                  <span className="font-medium text-slate-400">{t.tunnels.corePortLabel || 'Core Port:'}</span>
+                                  <span className="text-slate-700 dark:text-slate-300 font-mono font-semibold tabular-nums">{corePort}</span>
+                                </div>
+                              )}
+                              {iranNode && (
+                                <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] max-w-[170px] truncate" title={isRTL ? `نود ایران: ${iranNode.name || iranNode.id}` : `Iran Node: ${iranNode.name || iranNode.id}`}>
+                                  <span className="text-slate-400 text-[10px] uppercase font-mono font-bold shrink-0">{t.tunnels.irNodeLabel || 'IR'}:</span>
+                                  <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{iranNode.name || iranNode.id.substring(0, 8)}</span>
+                                </div>
+                              )}
+                              {iranNode && foreignServer && (
+                                <ArrowRight size={12} className="text-slate-400 shrink-0 rtl:rotate-180" />
+                              )}
+                              {foreignServer && (
+                                <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/[0.05] max-w-[170px] truncate" title={isRTL ? `سرور خارج: ${foreignServer.name || foreignServer.id}` : `Foreign Server: ${foreignServer.name || foreignServer.id}`}>
+                                  <span className="text-slate-400 text-[10px] uppercase font-mono font-bold shrink-0">{t.tunnels.extServerLabel || 'EXT'}:</span>
+                                  <span className="text-slate-700 dark:text-slate-300 font-semibold truncate">{foreignServer.name || foreignServer.id.substring(0, 8)}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           {/* Error Message */}
                           {tunnel.status === 'error' && tunnel.error_message && (
-                            <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl leading-relaxed">
+                            <div className="mt-2 text-xs text-rose-600 dark:text-rose-400 p-2.5 sm:p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl leading-relaxed">
                               {tunnel.error_message}
                             </div>
                           )}
@@ -1434,14 +1630,14 @@ const Tunnels = () => {
                       </div>
 
                       {/* Desktop Action Buttons */}
-                      <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+                      <div className="hidden sm:flex items-center gap-1.5 shrink-0 self-start">
                         <button
                           type="button"
                           onClick={() => handleTestActiveTunnel(tunnel)}
                           disabled={isReapplying || isDeleting || isTesting}
                           className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
-                          title="Test Live Connection & Ping"
-                          aria-label="Test Live Connection & Ping"
+                          title={t.tunnels.testLiveConnection || 'Test Ping'}
+                          aria-label={t.tunnels.testLiveConnection || 'Test Ping'}
                         >
                           {isTesting ? (
                             <Loader2 size={18} className="animate-spin text-amber-500" />
@@ -1458,8 +1654,8 @@ const Tunnels = () => {
                               ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
                               : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                           }`}
-                          title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
-                          aria-label="Reapply tunnel"
+                          title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                          aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                         >
                           {isReapplying ? (
                             <Loader2 size={18} className="animate-spin" />
@@ -1472,8 +1668,8 @@ const Tunnels = () => {
                           onClick={() => setEditingTunnel(tunnel)}
                           disabled={isReapplying || isDeleting}
                           className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
-                          title="Edit tunnel"
-                          aria-label="Edit tunnel"
+                          title={t.tunnels.editTunnel || 'Edit tunnel'}
+                          aria-label={t.tunnels.editTunnel || 'Edit tunnel'}
                         >
                           <Edit2 size={18} />
                         </button>
@@ -1482,8 +1678,8 @@ const Tunnels = () => {
                           onClick={() => deleteTunnel(tunnel.id)}
                           disabled={isReapplying || isDeleting}
                           className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
-                          title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
-                          aria-label="Delete tunnel"
+                          title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
+                          aria-label={t.tunnels.deleteTunnel || 'Delete tunnel'}
                         >
                           {isDeleting ? (
                             <Loader2 size={18} className="animate-spin text-rose-500" />
@@ -1494,15 +1690,16 @@ const Tunnels = () => {
                       </div>
                     </div>
 
-                    {/* Mobile Action Buttons Bar */}
-                    <div className="flex sm:hidden items-center justify-end gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-white/[0.05]">
+                    {/* ── Mobile Action Buttons Bar (grid of 4 comfortable 44px touch buttons) ── */}
+                    <div className="grid grid-cols-4 gap-2 pt-2.5 mt-2.5 border-t border-slate-100 dark:border-white/[0.06] sm:hidden">
+                      {/* Test Connection / Ping */}
                       <button
                         type="button"
                         onClick={() => handleTestActiveTunnel(tunnel)}
                         disabled={isReapplying || isDeleting || isTesting}
-                        className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
-                        title="Test Live Connection & Ping"
-                        aria-label="Test Live Connection & Ping"
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={t.tunnels.testLiveConnection || 'Test Ping'}
+                        aria-label={t.tunnels.testLiveConnection || 'Test Ping'}
                       >
                         {isTesting ? (
                           <Loader2 size={18} className="animate-spin text-amber-500" />
@@ -1510,17 +1707,19 @@ const Tunnels = () => {
                           <Zap size={18} />
                         )}
                       </button>
+
+                      {/* Reapply Tunnel */}
                       <button
                         type="button"
                         onClick={() => reapplyTunnel(tunnel)}
                         disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
-                        className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer ${
+                        className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
                           Boolean(tunnel.spec?._pending_reapply)
-                            ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
-                            : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
+                            ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
+                            : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/20'
                         }`}
-                        title={Boolean(tunnel.spec?._pending_reapply) ? "Reapply pending changes to core" : "Reapply tunnel"}
-                        aria-label="Reapply tunnel"
+                        title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                        aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                       >
                         {isReapplying ? (
                           <Loader2 size={18} className="animate-spin" />
@@ -1528,23 +1727,27 @@ const Tunnels = () => {
                           <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
                         )}
                       </button>
+
+                      {/* Edit Tunnel */}
                       <button
                         type="button"
                         onClick={() => setEditingTunnel(tunnel)}
                         disabled={isReapplying || isDeleting}
-                        className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
-                        title="Edit tunnel"
-                        aria-label="Edit tunnel"
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-indigo-500/15 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={t.tunnels.editTunnel || 'Edit tunnel'}
+                        aria-label={t.tunnels.editTunnel || 'Edit tunnel'}
                       >
                         <Edit2 size={18} />
                       </button>
+
+                      {/* Delete Tunnel */}
                       <button
                         type="button"
                         onClick={() => deleteTunnel(tunnel.id)}
                         disabled={isReapplying || isDeleting}
-                        className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors disabled:opacity-40 min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 cursor-pointer"
-                        title={isDeleting ? "Deleting tunnel..." : "Delete tunnel"}
-                        aria-label="Delete tunnel"
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-rose-500/15 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
+                        aria-label={t.tunnels.deleteTunnel || 'Delete tunnel'}
                       >
                         {isDeleting ? (
                           <Loader2 size={18} className="animate-spin text-rose-500" />
@@ -1573,16 +1776,18 @@ const Tunnels = () => {
             </p>
             <div className="flex gap-3 justify-end">
               <button
+                type="button"
                 onClick={() => setShowConfirmReapplyAll(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-xl transition-colors cursor-pointer"
               >
-                Cancel
+                {t.tunnels.cancel || 'Cancel'}
               </button>
               <button
+                type="button"
                 onClick={startReapplyAll}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-green-600 hover:bg-green-700 rounded-xl transition-colors cursor-pointer shadow-xs active:scale-95"
               >
-                Yes, Reapply All
+                {isRTL ? 'بله، اعمال مجدد همه' : 'Yes, Reapply All'}
               </button>
             </div>
           </div>
@@ -1609,10 +1814,12 @@ const Tunnels = () => {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-gray-900 dark:text-white">
-                    {reapplyAllDone ? 'Reapply Complete' : 'Applying Tunnels...'}
+                    {reapplyAllDone ? (isRTL ? 'اعمال مجدد انجام شد' : 'Reapply Complete') : (isRTL ? 'در حال اعمال تونل‌ها...' : 'Applying Tunnels...')}
                   </h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
-                    {reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} of {reapplyAllProgress.length} tunnels processed
+                    {isRTL 
+                      ? `${reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} از ${reapplyAllProgress.length} تونل پردازش شد`
+                      : `${reapplyAllProgress.filter(i => i.status === 'success' || i.status === 'error').length} of ${reapplyAllProgress.length} tunnels processed`}
                   </p>
                 </div>
               </div>
@@ -1676,7 +1883,9 @@ const Tunnels = () => {
                       <p className="text-xs text-red-600 dark:text-red-400 truncate mt-0.5" title={item.error}>{item.error}</p>
                     )}
                     {item.status === 'running' && (
-                      <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5 animate-pulse">Applying configuration...</p>
+                      <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5 animate-pulse">
+                        {isRTL ? 'در حال اعمال پیکربندی...' : 'Applying configuration...'}
+                      </p>
                     )}
                   </div>
 
@@ -1687,9 +1896,9 @@ const Tunnels = () => {
                     item.status === 'success' ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' :
                     'bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-300'
                   }`}>
-                    {item.status === 'pending' ? 'Waiting' :
-                     item.status === 'running' ? 'Running' :
-                     item.status === 'success' ? 'Done' : 'Failed'}
+                    {item.status === 'pending' ? (isRTL ? 'در انتظار' : 'Waiting') :
+                     item.status === 'running' ? (isRTL ? 'در حال اجرا' : 'Running') :
+                     item.status === 'success' ? (isRTL ? 'موفق' : 'Done') : (isRTL ? 'ناموفق' : 'Failed')}
                   </span>
                 </div>
               ))}
@@ -1701,20 +1910,21 @@ const Tunnels = () => {
                 <div className="flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">
                   <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
                     <CheckCircle2 size={15} />
-                    {reapplyAllProgress.filter(i => i.status === 'success').length} succeeded
+                    {isRTL ? `${reapplyAllProgress.filter(i => i.status === 'success').length} موفق` : `${reapplyAllProgress.filter(i => i.status === 'success').length} succeeded`}
                   </span>
                   {reapplyAllProgress.filter(i => i.status === 'error').length > 0 && (
                     <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
                       <XCircle size={15} />
-                      {reapplyAllProgress.filter(i => i.status === 'error').length} failed
+                      {isRTL ? `${reapplyAllProgress.filter(i => i.status === 'error').length} ناموفق` : `${reapplyAllProgress.filter(i => i.status === 'error').length} failed`}
                     </span>
                   )}
                 </div>
                 <button
+                  type="button"
                   onClick={closeReapplyAllModal}
-                  className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-medium text-sm shadow-md hover:shadow-lg active:scale-[0.99]"
+                  className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all font-medium text-sm shadow-md hover:shadow-lg active:scale-[0.99] cursor-pointer"
                 >
-                  Done
+                  {isRTL ? 'تکمیل' : 'Done'}
                 </button>
               </div>
             )}
@@ -1736,16 +1946,16 @@ const Tunnels = () => {
               <button
                 type="button"
                 onClick={() => setShowConfirmReapplySelected(false)}
-                className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
+                className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
               >
                 {t.tunnels.cancel || 'Cancel'}
               </button>
               <button
                 type="button"
                 onClick={startReapplySelected}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center gap-1.5 shadow-xs active:scale-95 cursor-pointer"
+                className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-xs active:scale-95 cursor-pointer"
               >
-                <RotateCw size={14} />
+                <RotateCw size={15} />
                 <span>{t.tunnels.reapplySelected || 'Yes, Reapply'}</span>
               </button>
             </div>
@@ -1765,7 +1975,7 @@ const Tunnels = () => {
               <button
                 type="button"
                 onClick={() => { setShowCreateCategoryModal(false); setNewCategoryName(''); }}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 cursor-pointer"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-2 min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -1781,14 +1991,14 @@ const Tunnels = () => {
                   placeholder="e.g. Gaming, V2Ray TR, Office"
                   value={newCategoryName}
                   onChange={(e) => setNewCategoryName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3.5 py-2.5 text-[16px] sm:text-sm rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   autoFocus
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                  Color Tag
+                  {isRTL ? 'رنگ برچسب' : 'Color Tag'}
                 </label>
                 <div className="flex gap-2 flex-wrap">
                   {['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan', 'indigo'].map((c) => {
@@ -1799,7 +2009,7 @@ const Tunnels = () => {
                         key={c}
                         type="button"
                         onClick={() => setNewCategoryColor(c)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                        className={`min-h-[38px] px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center justify-center ${
                           isSelected ? `${style.activeBg} ring-2 ring-offset-2 ring-blue-500` : `${style.bg} ${style.border} ${style.text}`
                         }`}
                       >
@@ -1814,7 +2024,7 @@ const Tunnels = () => {
                 <button
                   type="button"
                   onClick={() => { setShowCreateCategoryModal(false); setNewCategoryName(''); }}
-                  className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
+                  className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
                 >
                   {t.tunnels.cancel || 'Cancel'}
                 </button>
@@ -1829,9 +2039,9 @@ const Tunnels = () => {
                     }
                   }}
                   disabled={!newCategoryName.trim()}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl disabled:opacity-50 cursor-pointer"
+                  className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl disabled:opacity-50 cursor-pointer shadow-xs active:scale-95"
                 >
-                  Create
+                  {isRTL ? 'ایجاد' : 'Create'}
                 </button>
               </div>
             </div>
@@ -1851,14 +2061,14 @@ const Tunnels = () => {
               <button
                 type="button"
                 onClick={() => setShowAssignCategoryModal(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 cursor-pointer"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-2 min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer"
               >
                 <X size={18} />
               </button>
             </div>
 
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-              Select a category for {selectedTunnelIds.size} selected tunnel(s):
+              {isRTL ? `یک دسته‌بندی برای ${selectedTunnelIds.size} تونل انتخاب‌شده تعیین کنید:` : `Select a category for ${selectedTunnelIds.size} selected tunnel(s):`}
             </p>
 
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
@@ -1866,10 +2076,10 @@ const Tunnels = () => {
               <button
                 type="button"
                 onClick={() => bulkAssignCategory(null)}
-                className="w-full text-left p-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-300 cursor-pointer"
+                className="w-full text-start p-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between text-xs font-semibold text-gray-600 dark:text-gray-300 cursor-pointer"
               >
                 <span>{t.tunnels.uncategorized || 'None (Uncategorized)'}</span>
-                <span className="text-[10px] text-gray-400">Clear category</span>
+                <span className="text-[10px] text-gray-400">{isRTL ? 'حذف دسته‌بندی' : 'Clear category'}</span>
               </button>
 
               {/* List of existing categories */}
@@ -1880,14 +2090,14 @@ const Tunnels = () => {
                     key={cat.id}
                     type="button"
                     onClick={() => bulkAssignCategory(cat.name)}
-                    className="w-full text-left p-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 flex items-center justify-between transition-all cursor-pointer"
+                    className="w-full text-start p-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 flex items-center justify-between transition-all cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <span className={`w-3 h-3 rounded-full ${colorStyle.activeBg.split(' ')[0]}`}></span>
                       <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">{cat.name}</span>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${colorStyle.bg} ${colorStyle.text}`}>
-                      {tunnels.filter(t => t.category === cat.name).length} tunnels
+                      {tunnels.filter(t => t.category === cat.name).length} {isRTL ? 'تونل' : 'tunnels'}
                     </span>
                   </button>
                 )
@@ -1901,15 +2111,15 @@ const Tunnels = () => {
                   setShowAssignCategoryModal(false)
                   setShowCreateCategoryModal(true)
                 }}
-                className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                className="min-h-[44px] text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1.5 cursor-pointer"
               >
-                <FolderPlus size={14} />
-                <span>+ Create new category</span>
+                <FolderPlus size={16} />
+                <span>{isRTL ? '+ ایجاد دسته‌بندی جدید' : '+ Create new category'}</span>
               </button>
               <button
                 type="button"
                 onClick={() => setShowAssignCategoryModal(false)}
-                className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
+                className="min-h-[44px] px-5 py-2.5 text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 rounded-xl cursor-pointer"
               >
                 {t.tunnels.cancel || 'Cancel'}
               </button>
