@@ -1211,7 +1211,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or server_spec.get("rate_limit_mbps")
     raw_bw = server_spec.get("bandwidth_limit")
     if not raw_bw and rate_limit_mbps and float(rate_limit_mbps) > 0:
-        raw_bw = f"{int(float(rate_limit_mbps))}MB"
+        # Mbps (megabits) -> FRP bytes/sec units: 1 Mbps = 125 KB/s
+        raw_bw = f"{max(1, int(float(rate_limit_mbps) * 125))}KB"
     
     bandwidth_limit = None
     if raw_bw:

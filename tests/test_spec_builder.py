@@ -563,7 +563,7 @@ def test_spec_builder_frp_reliability_and_limits():
     s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     assert c["health_check_type"] == "tcp"
     assert c["health_check_interval_s"] == 5
-    assert c["bandwidth_limit"] == "25MB"
+    assert c["bandwidth_limit"] == "3125KB"  # 25 Mbps = 3125 KB/s
     assert c["proxy_protocol_version"] == "v2"
 
 
