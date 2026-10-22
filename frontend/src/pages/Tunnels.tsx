@@ -1102,21 +1102,49 @@ const Tunnels = () => {
             const iranNode = nodes.find(n => n.id === tunnel.iran_node_id || n.id === tunnel.node_id)
             const foreignServer = servers.find(s => s.id === tunnel.foreign_node_id)
 
+            let longPressTimer: any = null;
+
             return (
               <div
                 key={tunnel.id}
+                onClick={() => {
+                  if (selectedTunnelIds.size > 0 && !isReapplying && !isDeleting) {
+                    toggleSelectTunnel(tunnel.id);
+                  }
+                }}
+                onTouchStart={() => {
+                  if (!isReapplying && !isDeleting) {
+                    longPressTimer = setTimeout(() => {
+                      toggleSelectTunnel(tunnel.id);
+                      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                        try { navigator.vibrate(40); } catch (_) {}
+                      }
+                    }, 450);
+                  }
+                }}
+                onTouchEnd={() => {
+                  if (longPressTimer) clearTimeout(longPressTimer);
+                }}
+                onTouchMove={() => {
+                  if (longPressTimer) clearTimeout(longPressTimer);
+                }}
                 className={`relative bg-white dark:bg-[#12161f]/90 rounded-3xl shadow-xs border transition-all duration-200 ${
                   viewMode === 'grid' ? 'flex flex-col justify-between h-full' : ''
                 } ${
+                  selectedTunnelIds.size > 0
+                    ? 'cursor-pointer select-none active:scale-[0.99]'
+                    : ''
+                } ${
                   isSelected
-                    ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-500/[0.03] shadow-md'
+                    ? 'border-indigo-500 ring-2 ring-indigo-500/30 bg-indigo-500/[0.05] dark:bg-indigo-950/25 shadow-md'
                     : isDeleting
                     ? 'border-rose-500/60 ring-2 ring-rose-500/20 bg-rose-500/[0.03] shadow-md opacity-80'
                     : isReapplying
                     ? 'border-emerald-500/60 shadow-emerald-500/10 ring-2 ring-emerald-500/20'
+                    : selectedTunnelIds.size > 0
+                    ? 'border-slate-200/80 dark:border-white/[0.07] hover:border-indigo-300 dark:hover:border-indigo-700/50'
                     : 'border-slate-200/80 dark:border-white/[0.07] hover:border-slate-300 dark:hover:border-white/[0.12] hover:shadow-md'
-                }`}
-              >
+                }`}>
                 {/* ── Per-card loading overlay ── */}
                 {isReapplying && (
                   <div className="absolute inset-0 bg-white/80 dark:bg-[#12161f]/80 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
@@ -1203,7 +1231,7 @@ const Tunnels = () => {
                         <div className="hidden sm:flex items-center gap-1 shrink-0">
                           <button
                             type="button"
-                            onClick={() => handleTestActiveTunnel(tunnel)}
+                            onClick={(e) => { e.stopPropagation(); handleTestActiveTunnel(tunnel); }}
                             disabled={isReapplying || isDeleting || isTesting}
                             className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
                             title={t.tunnels.testLiveConnection || 'Test Ping'}
@@ -1217,7 +1245,7 @@ const Tunnels = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => reapplyTunnel(tunnel)}
+                            onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                             disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                             className={`p-1.5 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer ${
                               Boolean(tunnel.spec?._pending_reapply)
@@ -1235,7 +1263,7 @@ const Tunnels = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setEditingTunnel(tunnel)}
+                            onClick={(e) => { e.stopPropagation(); setEditingTunnel(tunnel); }}
                             disabled={isReapplying || isDeleting}
                             className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
                             title={t.tunnels.editTunnel || 'Edit tunnel'}
@@ -1245,7 +1273,7 @@ const Tunnels = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => deleteTunnel(tunnel.id)}
+                            onClick={(e) => { e.stopPropagation(); deleteTunnel(tunnel.id); }}
                             disabled={isReapplying || isDeleting}
                             className="p-1.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
                             title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
@@ -1363,7 +1391,7 @@ const Tunnels = () => {
                       {/* Test Connection / Ping */}
                       <button
                         type="button"
-                        onClick={() => handleTestActiveTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); handleTestActiveTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || isTesting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={t.tunnels.testLiveConnection || 'Test Ping'}
@@ -1379,7 +1407,7 @@ const Tunnels = () => {
                       {/* Reapply Tunnel */}
                       <button
                         type="button"
-                        onClick={() => reapplyTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                         className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
                           Boolean(tunnel.spec?._pending_reapply)
@@ -1399,7 +1427,7 @@ const Tunnels = () => {
                       {/* Edit Tunnel */}
                       <button
                         type="button"
-                        onClick={() => setEditingTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); setEditingTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-indigo-500/15 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={t.tunnels.editTunnel || 'Edit tunnel'}
@@ -1411,7 +1439,7 @@ const Tunnels = () => {
                       {/* Delete Tunnel */}
                       <button
                         type="button"
-                        onClick={() => deleteTunnel(tunnel.id)}
+                        onClick={(e) => { e.stopPropagation(); deleteTunnel(tunnel.id); }}
                         disabled={isReapplying || isDeleting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-rose-500/15 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
@@ -1633,7 +1661,7 @@ const Tunnels = () => {
                       <div className="hidden sm:flex items-center gap-1.5 shrink-0 self-start">
                         <button
                           type="button"
-                          onClick={() => handleTestActiveTunnel(tunnel)}
+                          onClick={(e) => { e.stopPropagation(); handleTestActiveTunnel(tunnel); }}
                           disabled={isReapplying || isDeleting || isTesting}
                           className="p-2.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
                           title={t.tunnels.testLiveConnection || 'Test Ping'}
@@ -1647,7 +1675,7 @@ const Tunnels = () => {
                         </button>
                         <button
                           type="button"
-                          onClick={() => reapplyTunnel(tunnel)}
+                          onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                           disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                           className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer ${
                             Boolean(tunnel.spec?._pending_reapply)
@@ -1665,7 +1693,7 @@ const Tunnels = () => {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setEditingTunnel(tunnel)}
+                          onClick={(e) => { e.stopPropagation(); setEditingTunnel(tunnel); }}
                           disabled={isReapplying || isDeleting}
                           className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
                           title={t.tunnels.editTunnel || 'Edit tunnel'}
@@ -1675,7 +1703,7 @@ const Tunnels = () => {
                         </button>
                         <button
                           type="button"
-                          onClick={() => deleteTunnel(tunnel.id)}
+                          onClick={(e) => { e.stopPropagation(); deleteTunnel(tunnel.id); }}
                           disabled={isReapplying || isDeleting}
                           className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
                           title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
@@ -1695,7 +1723,7 @@ const Tunnels = () => {
                       {/* Test Connection / Ping */}
                       <button
                         type="button"
-                        onClick={() => handleTestActiveTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); handleTestActiveTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || isTesting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={t.tunnels.testLiveConnection || 'Test Ping'}
@@ -1711,7 +1739,7 @@ const Tunnels = () => {
                       {/* Reapply Tunnel */}
                       <button
                         type="button"
-                        onClick={() => reapplyTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                         className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
                           Boolean(tunnel.spec?._pending_reapply)
@@ -1731,7 +1759,7 @@ const Tunnels = () => {
                       {/* Edit Tunnel */}
                       <button
                         type="button"
-                        onClick={() => setEditingTunnel(tunnel)}
+                        onClick={(e) => { e.stopPropagation(); setEditingTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-indigo-500/15 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={t.tunnels.editTunnel || 'Edit tunnel'}
@@ -1743,7 +1771,7 @@ const Tunnels = () => {
                       {/* Delete Tunnel */}
                       <button
                         type="button"
-                        onClick={() => deleteTunnel(tunnel.id)}
+                        onClick={(e) => { e.stopPropagation(); deleteTunnel(tunnel.id); }}
                         disabled={isReapplying || isDeleting}
                         className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-rose-500/15 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
                         title={isDeleting ? (isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...') : (t.tunnels.deleteTunnel || 'Delete tunnel')}
@@ -2155,9 +2183,75 @@ const Tunnels = () => {
           }}
         />
       )}
+    
+      {/* ── Mobile Floating Selection Action Bar (Docked above Mobile Bottom Nav) ── */}
+      {selectedTunnelIds.size > 0 && (
+        <div
+          className="sm:hidden fixed bottom-[5.25rem] left-3 right-3 z-40 max-w-md mx-auto animate-in slide-in-from-bottom-4 fade-in duration-200"
+          role="region"
+          aria-label="Selection actions"
+        >
+          <div className="bg-slate-900/95 dark:bg-[#121624]/95 text-white backdrop-blur-2xl border border-indigo-500/35 rounded-2xl p-2 shadow-2xl flex items-center justify-between gap-1.5 ring-1 ring-white/10">
+            {/* Left: Close button + Selection count */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => setSelectedTunnelIds(new Set())}
+                className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-slate-300 hover:text-white flex items-center justify-center transition-all cursor-pointer shrink-0"
+                title={t.tunnels.clearSelection || 'Clear selection'}
+                aria-label={t.tunnels.clearSelection || 'Clear selection'}
+              >
+                <X size={17} />
+              </button>
+
+              <div className="flex items-center gap-1 font-mono text-xs font-bold text-white bg-indigo-500/30 px-2.5 py-1.5 rounded-xl border border-indigo-400/30 shrink-0">
+                <span className="text-sm tabular-nums text-indigo-300 font-extrabold">{selectedTunnelIds.size}</span>
+                <span className="font-sans font-medium text-slate-400 text-xs">
+                  / {filteredTunnels.length}
+                </span>
+              </div>
+            </div>
+
+            {/* Right: Select All + Category + Reapply actions */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={toggleSelectAllFiltered}
+                className="h-10 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                title={filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (t.tunnels.deselectAll || 'Deselect All') : (t.tunnels.selectAll || 'Select All')}
+              >
+                <CheckSquare size={15} />
+                <span className="text-[11px] whitespace-nowrap">
+                  {filteredTunnels.every(t => selectedTunnelIds.has(t.id)) ? (isRTL ? 'لغو همه' : 'None') : (isRTL ? 'همه' : 'All')}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowAssignCategoryModal(true)}
+                className="h-10 px-2.5 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                title={t.tunnels.moveToCategory || 'Category'}
+              >
+                <Folder size={15} />
+                <span className="text-[11px] whitespace-nowrap">{isRTL ? 'دسته' : 'Category'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleReapplySelected}
+                disabled={!!reapplyAllProgress && !reapplyAllDone}
+                className="h-10 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
+                title={t.tunnels.reapplySelected || 'Reapply'}
+              >
+                <RotateCw size={14} className={!!reapplyAllProgress && !reapplyAllDone ? 'animate-spin' : ''} />
+                <span className="whitespace-nowrap">{isRTL ? 'اعمال' : 'Reapply'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-
 
 export default Tunnels
