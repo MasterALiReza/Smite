@@ -403,6 +403,42 @@ def _confirm(prompt, assume_yes):
         return False
 
 
+def _container_running(n):
+    res = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", n["container_name"]],
+                         capture_output=True, text=True)
+    return res.returncode == 0 and res.stdout.strip() == "true"
+
+
+def _reload_is_safe(status, n):
+    """Whether SIGHUP re-exec is safe for the agent that is running right now.
+
+    The reload runs the code already in memory. Agents before "safe_reexec" re-exec
+    correctly only from the start.sh command line ("uvicorn main:app"); once reloaded
+    they run as "python -m uvicorn" and their next reload exec'd uvicorn/__main__.py
+    as a script, which crashed the agent and stopped the container with its tunnels.
+    """
+    if not (status and status.get("hot_reload")):
+        return False
+    if "safe_reexec" in (status.get("capabilities") or []):
+        return True
+    res = subprocess.run(["docker", "inspect", "-f", "{{.State.Pid}}", n["container_name"]],
+                         capture_output=True, text=True)
+    try:
+        with open(f"/proc/{int(res.stdout.strip())}/cmdline", "rb") as f:
+            args = [a.decode(errors="ignore") for a in f.read().split(b"\0") if a]
+    except Exception:
+        return False
+    return len(args) > 1 and os.path.basename(args[1]) == "uvicorn"
+
+
+def _restart_and_wait(n, timeout=120):
+    res = subprocess.run(["docker", "restart", n["container_name"]], capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"  ✗ docker restart failed: {res.stderr.strip()}")
+        return None
+    return _wait_for_agent(n["port"], timeout=timeout)
+
+
 def _hot_reload(n):
     """Reload the agent in place (SIGHUP). Returns True when the new agent is up."""
     before = _agent_status(n["port"])
@@ -463,7 +499,7 @@ def cmd_update(args):
             continue
 
         status = _agent_status(n["port"])
-        can_hot_reload = bool(status and status.get("hot_reload"))
+        can_hot_reload = _reload_is_safe(status, n)
 
         backup_dir = _write_code_atomically(app_root, files)
         print(f"  ✓ Code updated (backup: {backup_dir})")
@@ -483,24 +519,33 @@ def cmd_update(args):
             if _hot_reload(n):
                 print(f"  ✓ {n['container_name']} updated with zero tunnel downtime")
                 continue
+            if not _container_running(n):
+                # The agent is the container's PID 1: if it died during the reload the
+                # container (and its tunnels) stopped. Start it right away; the new code
+                # was import-checked, and start.sh restores every tunnel.
+                print("  ✗ Agent exited during reload; starting the container again...")
+                subprocess.run(["docker", "start", n["container_name"]], capture_output=True)
+                st = _wait_for_agent(n["port"], timeout=120)
+                if st:
+                    print(f"  ✓ {n['container_name']} is back on the new agent ({st.get('active_tunnels', 0)} tunnels restored)")
+                    continue
             print("  ✗ Agent did not come back after reload. Rolling back code...")
             _restore_backup(app_root, backup_dir)
-            subprocess.run(["docker", "kill", "--signal=HUP", n["container_name"]], capture_output=True)
-            print("  Rolled back. Check logs: smite-node logs")
+            st = _restart_and_wait(n)
+            print(f"  {'✓ Rolled back' if st else '⚠️ Rolled back but agent is not answering'}. Check logs: smite-node logs")
             continue
 
-        print("  This node runs an older agent without in-place reload.")
+        if status and status.get("hot_reload"):
+            print("  This agent's in-place reload is not safe to use (it would stop the container).")
+        else:
+            print("  This node runs an older agent without in-place reload.")
         print("  A ONE-TIME container restart is needed to load the new agent; tunnels on")
         print("  this node are interrupted for a few seconds while they are restored.")
         print("  All later updates are applied without any interruption.")
         if not _confirm("  Restart this node's agent container now?", args.yes):
             print("  Code is updated on disk; it becomes active on the next container restart.")
             continue
-        res = subprocess.run(["docker", "restart", n["container_name"]], capture_output=True, text=True)
-        if res.returncode != 0:
-            print(f"  ✗ docker restart failed: {res.stderr.strip()}")
-            continue
-        st = _wait_for_agent(n["port"], timeout=120)
+        st = _restart_and_wait(n)
         if st:
             print(f"  ✓ {n['container_name']} restarted with the new agent ({st.get('active_tunnels', 0)} tunnels active)")
         else:
@@ -515,11 +560,19 @@ def cmd_reload(args):
     targets = select_target_node(nodes, args.target, prompt_action="reload")
     for n in targets:
         st = _agent_status(n["port"])
-        if not (st and st.get("hot_reload")):
-            print(f"✗ {n['container_name']}: agent does not support in-place reload (run `smite-node update` first)")
+        if not _reload_is_safe(st, n):
+            print(f"✗ {n['container_name']}: in-place reload is not supported or not safe for the running agent "
+                  "(run `smite-node update`; it offers a one-time restart)")
             continue
         print(f"Reloading {n['container_name']}...")
-        print("✓ reloaded" if _hot_reload(n) else "⚠️ agent did not come back in time; check logs")
+        if _hot_reload(n):
+            print("✓ reloaded")
+        elif not _container_running(n):
+            print("✗ agent exited during reload; starting the container again...")
+            subprocess.run(["docker", "start", n["container_name"]], capture_output=True)
+            print("✓ container started" if _wait_for_agent(n["port"], timeout=120) else "⚠️ agent is not answering; check logs")
+        else:
+            print("⚠️ agent did not come back in time; check logs")
 
 
 def cmd_reset_token(args):
