@@ -93,6 +93,25 @@ const Tunnels = () => {
     }
   }
 
+  // ─── Sticky Toolbar Scroll State ─────────────────────────────
+  const [isScrolled, setIsScrolled] = useState(false)
+  const pageContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = pageContainerRef.current
+    if (!el) return
+    const scrollParent = el.closest('.overflow-y-auto') || window
+
+    const handleScroll = () => {
+      const scrollTop = scrollParent instanceof Window ? window.scrollY : scrollParent.scrollTop
+      setIsScrolled(scrollTop > 20)
+    }
+
+    scrollParent.addEventListener('scroll', handleScroll, { passive: true })
+    handleScroll()
+    return () => scrollParent.removeEventListener('scroll', handleScroll)
+  }, [])
+
 
   useEffect(() => {
     fetchData()
@@ -545,9 +564,9 @@ const Tunnels = () => {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in">
+    <div ref={pageContainerRef} className="w-full max-w-7xl mx-auto animate-fade-in">
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200/60 dark:border-white/[0.06]">
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200/60 dark:border-white/[0.06] mb-3 sm:mb-4">
         <div>
           <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5 sm:mb-1">
             <span className="inline-flex items-center justify-center p-1 sm:p-1.5 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
@@ -589,14 +608,22 @@ const Tunnels = () => {
         </div>
       </div>
 
-      {/* ── Sticky Toolbar: Switches between Normal Mode and Contextual Bulk Selection Mode ── */}
+      {/* ── Sticky Toolbar Wrapper: Sticks flush to top edge on scroll with zero gap and full frosted backdrop mask ── */}
       <div
-        className={`sticky top-2 z-20 transition-all duration-200 rounded-2xl border p-2 backdrop-blur-xl shadow-md ${
-          selectedTunnelIds.size > 0
-            ? 'bg-indigo-50/90 dark:bg-[#0f1424]/95 border-indigo-200/80 dark:border-indigo-500/25 ring-2 ring-indigo-500/20'
-            : 'bg-white/95 dark:bg-[#0c101d]/95 border-slate-200/80 dark:border-white/[0.08] ring-1 ring-black/5 dark:ring-white/5'
+        className={`sticky -top-3.5 sm:-top-6 lg:-top-8 z-20 -mx-3.5 sm:-mx-6 lg:-mx-8 px-3.5 sm:px-6 lg:px-8 py-2 sm:py-2.5 transition-all duration-200 ease-out ${
+          isScrolled
+            ? 'bg-slate-50/95 dark:bg-[#070a13]/95 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] shadow-xs'
+            : 'bg-transparent border-b border-transparent'
         }`}
       >
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`transition-all duration-200 rounded-2xl border p-2 backdrop-blur-xl shadow-xs ${
+              selectedTunnelIds.size > 0
+                ? 'bg-indigo-50/90 dark:bg-[#0f1424]/95 border-indigo-200/80 dark:border-indigo-500/25 ring-2 ring-indigo-500/20'
+                : 'bg-white/95 dark:bg-[#0c101d]/95 border-slate-200/80 dark:border-white/[0.08] ring-1 ring-black/5 dark:ring-white/5'
+            }`}
+          >
         {selectedTunnelIds.size > 0 ? (
           /* ── Contextual Bulk Selection Mode (Mobile-Optimized Grid + Desktop Inline) ── */
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 px-0.5 py-0.5 animate-fade-in">
@@ -993,9 +1020,12 @@ const Tunnels = () => {
             </div>
           </div>
         )}
+          </div>
+        </div>
       </div>
 
       {/* ── Tunnel Cards ────────────────────────────────────── */}
+      <div className="mt-4 sm:mt-6">
       {filteredTunnels.length === 0 ? (
         searchQuery.trim() ? (
           <EmptyState
@@ -1791,6 +1821,7 @@ const Tunnels = () => {
           })}
         </div>
       )}
+      </div>
 
       {/* ── Reapply All — Confirm Dialog ─────────────────────── */}
       {showConfirmReapplyAll && (
