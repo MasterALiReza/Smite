@@ -1648,15 +1648,39 @@ def build_gost_node_specs(
     port_ranges = getattr(tunnel, "port_ranges", None) or spec.get("port_ranges")
     allowed_ips = getattr(tunnel, "allowed_ips", None) or spec.get("allowed_ips")
 
-    tunnel_type = (
+    raw_type = (
         getattr(tunnel, "type", None)
         or getattr(tunnel, "tunnel_type", None)
         or spec.get("type")
         or spec.get("tunnel_type")
         or "tcp"
     ).lower()
-    if tunnel_type not in ["tcp", "udp", "tcp+udp"]:
+
+    if raw_type == "grpc":
         tunnel_type = "tcp"
+        transport_type = "grpc"
+    elif raw_type in ["tcpmux", "mux"]:
+        tunnel_type = "tcp"
+        spec["multiplex"] = True
+    elif raw_type in ["tcp", "udp", "tcp+udp"]:
+        tunnel_type = raw_type
+    else:
+        tunnel_type = "tcp"
+
+    raw_target = (
+        spec.get("target_host")
+        or getattr(tunnel, "target_host", None)
+        or spec.get("remote_ip")
+        or getattr(tunnel, "remote_ip", None)
+    )
+    if raw_target:
+        raw_target_str = str(raw_target).strip()
+        if foreign_node_ip and raw_target_str == str(foreign_node_ip).strip():
+            target_host = "127.0.0.1"
+        else:
+            target_host = raw_target_str
+    else:
+        target_host = "127.0.0.1"
 
     base_spec = {
         "control_port": control_port,
@@ -1678,6 +1702,11 @@ def build_gost_node_specs(
         "port_ranges": port_ranges,
         "is_reverse": is_reverse,
         "force_direct": not is_reverse,
+        "foreign_node_ip": foreign_node_ip,
+        "target_host": target_host,
+        "remote_ip": target_host,
+        "multiplex": bool(spec.get("multiplex") or getattr(tunnel, "multiplex", False)),
+        "enable_mux": bool(spec.get("multiplex") or spec.get("enable_mux") or getattr(tunnel, "multiplex", False)),
         "utls_fingerprint": getattr(tunnel, "utls_fingerprint", None),
         "custom_headers": getattr(tunnel, "custom_headers", None),
         "obfuscation_type": getattr(tunnel, "obfuscation_type", None),
@@ -1690,10 +1719,6 @@ def build_gost_node_specs(
     }
     if _has_gaming_profile(tunnel, spec):
         base_spec["latency_profile"] = GAMING_PROFILE
-
-    target_host = spec.get("target_host") or getattr(tunnel, "target_host", None)
-    if target_host:
-        base_spec["target_host"] = target_host
 
     # For UDP datagram tunneling over streaming transports, ensure multiplexing is default
     if tunnel_type in ["udp", "tcp+udp"] and transport_type.lower() not in ["mws", "mwss", "udp", "rudp", "kcp", "quic"]:

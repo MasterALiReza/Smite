@@ -136,6 +136,7 @@ class TunnelCreate(BaseModel):
 
 class TunnelUpdate(BaseModel):
     name: str | None = None
+    type: str | None = None
     spec: dict | None = None
     cdn_mode: bool | None = None
     gaming_mode: bool | None = None
@@ -1593,11 +1594,20 @@ async def update_tunnel(
         spec_changed = True
     if is_field_set("selector_strategy") and tunnel_update.selector_strategy != tunnel.selector_strategy:
         spec_changed = True
+    if is_field_set("type") and tunnel_update.type and tunnel_update.type != tunnel.type:
+        spec_changed = True
     if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval != tunnel.keepalive_interval:
         spec_changed = True
     
     if tunnel_update.name is not None:
         tunnel.name = tunnel_update.name
+    if is_field_set("type") and tunnel_update.type:
+        new_type = tunnel_update.type.strip().lower()
+        if new_type in ["tcp", "udp", "tcp+udp"]:
+            tunnel.type = new_type
+            if isinstance(tunnel.spec, dict):
+                tunnel.spec["type"] = new_type
+                tunnel.spec["tunnel_type"] = new_type
     if tunnel_update.spec is not None:
         # For Backhaul, ensure ports are preserved in the correct format
         if tunnel.core == "backhaul" and tunnel_update.spec.get("ports"):

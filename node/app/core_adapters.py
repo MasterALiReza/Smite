@@ -15,6 +15,7 @@ import threading
 import uuid
 import re
 import contextvars
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -3218,9 +3219,18 @@ class GostAdapter:
         if ws_mux:
             gost_type = "wss" if gost_type == "mwss" else "ws"
 
-        tunnel_proto = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
-        if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
+        raw_proto = (spec.get("type") or spec.get("tunnel_type") or "tcp").lower()
+        if raw_proto == "grpc":
             tunnel_proto = "tcp"
+            gost_type = "grpc"
+        elif raw_proto in ["tcpmux", "mux"]:
+            tunnel_proto = "tcp"
+            spec["multiplex"] = True
+        elif raw_proto in ["tcp", "udp", "tcp+udp"]:
+            tunnel_proto = raw_proto
+        else:
+            tunnel_proto = "tcp"
+
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
         is_reverse_mode = bool(is_reverse)
@@ -3230,9 +3240,31 @@ class GostAdapter:
         # THIS side sends or buffers, so it is wire compatible with a peer running an
         # older agent (safe during rolling updates).
         low_latency = is_udp_mode or bool(spec.get("gaming_mode")) or spec.get("latency_profile") == "gaming-v1"
-        # Small mux frames: a game packet never waits behind a 32KB bulk-data frame
-        # on a shared session (smux frame size is chosen by the sender only).
-        mux_tuning = {"mux.maxFrameSize": 4096} if (low_latency and enable_mux) else {}
+
+        raw_interval = spec.get("keepalive_interval") or 15
+        try:
+            ka_sec = int(str(raw_interval).rstrip("s"))
+            if ka_sec <= 0:
+                ka_sec = 15
+        except (ValueError, TypeError):
+            ka_sec = 15
+
+        ka_interval_str = f"{ka_sec}s"
+        ka_timeout_sec = max(30, 3 * ka_sec)
+        ka_timeout_str = f"{ka_timeout_sec}s"
+        reverse_ttl_sec = max(30, 3 * ka_sec)
+        reverse_ttl_str = f"{reverse_ttl_sec}s"
+
+        # Standard GOST v3 multiplexing metadata (mux.version: 2, xtaci/smux)
+        mux_tuning = {
+            "mux.version": 2,
+            "mux.keepaliveDisabled": False,
+            "mux.keepaliveInterval": ka_interval_str,
+            "mux.keepaliveTimeout": ka_timeout_str,
+            "mux.maxFrameSize": 4096 if (low_latency and enable_mux) else 32768,
+            "mux.maxReceiveBuffer": 4194304,
+            "mux.maxStreamBuffer": 1048576,
+        }
 
         config = {
             "services": [],
@@ -3336,12 +3368,12 @@ class GostAdapter:
                     listener_metadata["crypt"] = spec.get("kcp_crypt") or "aes"
                     listener_metadata["key"] = kcp_key
             else:
-                keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
+                keepalive_interval = ka_interval_str
                 listener_metadata = {
                     "keepAlive": True,
-                    "keepAliveInterval": keepalive_interval,
-                    "keepAliveTimeout": "30s",
-                    "idleTimeout": "120s",
+                    "keepAliveInterval": ka_interval_str,
+                    "keepAliveTimeout": ka_timeout_str,
+                    "idleTimeout": "300s",
                     "nodelay": True,
                     "bufferSize": 65536,
                 }
@@ -3349,6 +3381,8 @@ class GostAdapter:
                     listener_metadata["path"] = spec.get("ws_path")
                 if ws_mux:
                     listener_metadata["mux"] = True
+                    listener_metadata["nodelay"] = True
+                    listener_metadata.update(mux_tuning)
                 if is_reverse:
                     listener_metadata["bind"] = True
                 if enable_mux:
@@ -3395,7 +3429,18 @@ class GostAdapter:
             if listener_metadata:
                 listener["metadata"] = listener_metadata
             
-            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "mtls", "quic", "grpc"]) and gost_type not in ["tcp", "udp", "rtcp", "rudp", "kcp", "ssh", "sshd"]:
+            grpc_with_tls = gost_type == "grpc" and (
+                security_type in ["tls", "utls"]
+                or bool(spec.get("tls_cert"))
+                or bool(spec.get("custom_sni"))
+            )
+            requires_tls = (
+                security_type in ["tls", "utls"]
+                or gost_type in ["wss", "mwss", "tls", "mtls", "quic"]
+                or grpc_with_tls
+            )
+
+            if requires_tls and gost_type not in ["tcp", "udp", "rtcp", "rudp", "kcp", "ssh", "sshd"]:
                 cert_path = self.config_dir / f"cert_{tunnel_id}.pem"
                 key_path = self.config_dir / f"key_{tunnel_id}.pem"
                 
@@ -3419,6 +3464,10 @@ class GostAdapter:
                         "certFile": str(cert_path),
                         "keyFile": str(key_path)
                     }
+            elif gost_type == "grpc" and not grpc_with_tls:
+                if "metadata" not in listener:
+                    listener["metadata"] = {}
+                listener["metadata"]["insecure"] = True
                 
             # 1. Access Control (ACL)
             adm_name = None
@@ -3523,16 +3572,15 @@ class GostAdapter:
             if spec.get("ws_path"):
                 dialer_metadata["path"] = spec.get("ws_path")
             if spec.get("custom_host"):
-                dialer_metadata["host"] = spec.get("custom_host")
-            elif spec.get("stealth_domain"):
-                dialer_metadata["host"] = spec.get("stealth_domain")
+                dialer_metadata["host"] = str(spec.get("custom_host")).strip()
+            elif spec.get("stealth_domain") and not spec.get("cdn_mode"):
+                dialer_metadata["host"] = str(spec.get("stealth_domain")).strip()
                 
             dialer_tls = {}
-            if spec.get("custom_sni"):
-                dialer_tls["serverName"] = spec.get("custom_sni")
-            
-            if spec.get("stealth_domain"):
-                dialer_tls["serverName"] = spec.get("stealth_domain")
+            # custom_sni takes priority over stealth_domain
+            sni_candidate = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni")
+            if sni_candidate:
+                dialer_tls["serverName"] = str(sni_candidate).strip()
                 
             if security_type == "utls":
                 # Dynamic uTLS fingerprint support
@@ -3550,18 +3598,14 @@ class GostAdapter:
                     dialer_tls["serverName"] = "www.google.com"
                 dialer_tls["secure"] = False
 
-            # Align authority for gRPC and TLS dialers in GOST v3
-            # Go's gRPC client requires transport credentials authority to match dial option / metadata host
-            if gost_type == "grpc" or dialer_tls.get("serverName") or security_type in ["tls", "utls"]:
-                effective_sni = dialer_tls.get("serverName") or dialer_metadata.get("host")
-                if not effective_sni and gost_type == "grpc":
-                    effective_sni = "www.google.com"
-                    dialer_tls["serverName"] = effective_sni
-                    dialer_tls["secure"] = False
-                if effective_sni:
-                    dialer_metadata["host"] = effective_sni
-                    if gost_type == "grpc":
-                        dialer_metadata["grpc.host"] = effective_sni
+            # Configure gRPC authority (grpc.host) matching custom_host or fallback to serverName
+            if gost_type == "grpc":
+                if "host" in dialer_metadata:
+                    dialer_metadata["grpc.host"] = dialer_metadata["host"]
+                else:
+                    grpc_auth = dialer_tls.get("serverName") or "www.google.com"
+                    dialer_metadata["host"] = grpc_auth
+                    dialer_metadata["grpc.host"] = grpc_auth
                 
             # Anti-DPI custom headers for WebSocket/HTTP
             if gost_type in ["ws", "wss", "mws", "mwss", "http", "https"]:
@@ -3619,16 +3663,18 @@ class GostAdapter:
                     dialer_metadata["nodelay"] = True
                     dialer_metadata.update(mux_tuning)
             else:
-                keepalive_interval = f"{spec.get('keepalive_interval') or 15}s" if not str(spec.get('keepalive_interval', '')).endswith('s') else str(spec.get('keepalive_interval'))
+                keepalive_interval = ka_interval_str
                 dialer_metadata["keepAlive"] = True
-                dialer_metadata["keepAliveInterval"] = keepalive_interval
-                dialer_metadata["keepAliveTimeout"] = "30s"
+                dialer_metadata["keepAliveInterval"] = ka_interval_str
+                dialer_metadata["keepAliveTimeout"] = ka_timeout_str
                 dialer_metadata["timeout"] = "20s"
-                dialer_metadata["idleTimeout"] = "120s"
+                dialer_metadata["idleTimeout"] = "300s"
                 dialer_metadata["nodelay"] = True
                 dialer_metadata["bufferSize"] = 65536
                 if ws_mux:
                     dialer_metadata["mux"] = True
+                    dialer_metadata["nodelay"] = True
+                    dialer_metadata.update(mux_tuning)
                 if enable_mux:
                     dialer_metadata["mux.type"] = mux_type
                     dialer_metadata["mux"] = True
@@ -3637,11 +3683,25 @@ class GostAdapter:
             
             if dialer_metadata:
                 dialer["metadata"] = dialer_metadata
-            if (security_type in ["tls", "utls"] or gost_type in ["wss", "mwss", "tls", "mtls", "quic", "grpc"]) and gost_type not in ["udp", "kcp", "ssh", "sshd"]:
+            
+            grpc_with_tls = gost_type == "grpc" and (
+                security_type in ["tls", "utls"]
+                or bool(spec.get("tls_cert"))
+                or bool(spec.get("custom_sni"))
+            )
+            requires_tls = (
+                security_type in ["tls", "utls"]
+                or gost_type in ["wss", "mwss", "tls", "mtls", "quic"]
+                or grpc_with_tls
+            )
+
+            if requires_tls and gost_type not in ["udp", "kcp", "ssh", "sshd"]:
                 if dialer_tls:
                     dialer["tls"] = dialer_tls
                 else:
                     dialer["tls"] = {"secure": False}
+            elif gost_type == "grpc" and not grpc_with_tls:
+                dialer_metadata["insecure"] = True
                 
             # Generate node objects for primary and failover IPs
             hop_nodes = []
@@ -3761,13 +3821,24 @@ class GostAdapter:
                 "hops": chain_hops
             })
             
-            tunnel_proto = spec.get("type", "tcp").lower()
-            # If the type is legacy or invalid, default to tcp forwarding
-            if tunnel_proto not in ["tcp", "udp", "tcp+udp"]:
-                tunnel_proto = "tcp"
-
             # Create Local Listeners
-            default_target_address = spec.get("target_host") or '127.0.0.1'
+            default_target_address = spec.get("target_host") or spec.get("remote_ip") or '127.0.0.1'
+            fn_ip = spec.get("foreign_node_ip")
+            if default_target_address == spec.get("server_ip") or (fn_ip and default_target_address == fn_ip):
+                default_target_address = '127.0.0.1'
+
+            # Dynamic UDP buffer scaling based on number of ports
+            num_ports = len(ports)
+            if num_ports <= 5:
+                udp_read_buf_size = 4194304  # 4MB for 1-5 ports
+                udp_read_queue_size = 2048
+            elif num_ports <= 20:
+                udp_read_buf_size = 1048576  # 1MB for 6-20 ports
+                udp_read_queue_size = 1024
+            else:
+                udp_read_buf_size = 262144   # 256KB for >20 ports
+                udp_read_queue_size = 512
+
             for port in ports:
                 if isinstance(port, dict):
                     local_port = port.get('local_port') or port.get('local') or port.get('port')
@@ -3789,6 +3860,9 @@ class GostAdapter:
                     port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                     target_address = default_target_address
                     target_port_num = port_num
+
+                if target_address == spec.get("server_ip") or (fn_ip and target_address == fn_ip):
+                    target_address = '127.0.0.1'
                     
                 target_addr_formatted = f"[{target_address}]:{target_port_num}" if ":" in target_address and not target_address.startswith("[") else f"{target_address}:{target_port_num}"
                 listen_addr = f":{port_num}" if is_reverse else (f"[::]:{port_num}" if use_ipv6 else f"0.0.0.0:{port_num}")
@@ -3800,9 +3874,10 @@ class GostAdapter:
                             "chain": f"chain-{tunnel_id}",
                             "metadata": {
                                 "keepAlive": True,
-                                "ttl": "10s",
-                                "keepalive.idle": "10s",
-                                "keepalive.interval": "10s",
+                                "ttl": reverse_ttl_str,
+                                "keepalive.idle": ka_interval_str,
+                                "keepalive.interval": ka_interval_str,
+                                "keepalive.timeout": ka_timeout_str,
                                 "bufferSize": 65536
                             }
                         }
@@ -3845,7 +3920,7 @@ class GostAdapter:
                     # - ttl: a client channel is only released after 120s of silence
                     #   (was 10s/30s), so idle moments in a game no longer reset the
                     #   session (new relay handshake + new source port = lag spike).
-                    # - readBufferSize 65535: no truncation of large datagrams (default 4-8KB).
+                    # - readBufferSize scaled dynamically based on port count to prevent memory exhaustion
                     # - readQueueSize: absorbs bursts instead of dropping packets.
                     udp_handler_metadata = {
                         "ttl": UDP_SESSION_TTL,
@@ -3859,13 +3934,14 @@ class GostAdapter:
                             "chain": f"chain-{tunnel_id}",
                             "metadata": {
                                 "keepAlive": True,
-                                "ttl": UDP_SESSION_TTL,
-                                "keepalive.idle": "10s",
-                                "keepalive.interval": "10s",
+                                "ttl": reverse_ttl_str,
+                                "keepalive.idle": ka_interval_str,
+                                "keepalive.interval": ka_interval_str,
+                                "keepalive.timeout": ka_timeout_str,
                                 "readTimeout": UDP_SESSION_TTL,
                                 "bufferSize": 65536,
-                                "readBufferSize": 65535,
-                                "readQueueSize": 2048,
+                                "readBufferSize": udp_read_buf_size,
+                                "readQueueSize": udp_read_queue_size,
                             }
                         }
                         handler_udp = {
@@ -3885,8 +3961,8 @@ class GostAdapter:
                                 "ttl": UDP_SESSION_TTL,
                                 "readTimeout": UDP_SESSION_TTL,
                                 "bufferSize": 65536,
-                                "readBufferSize": 65535,
-                                "readQueueSize": 2048,
+                                "readBufferSize": udp_read_buf_size,
+                                "readQueueSize": udp_read_queue_size,
                             }
                         }
                         handler_udp = {
@@ -4032,7 +4108,8 @@ class GostAdapter:
             await free_ports(ports_to_free)
     
     def status(self, tunnel_id: str) -> Dict[str, Any]:
-        """Get status"""
+        """Get status of GOST tunnel process, configuration, and port health"""
+        config_file = self.config_dir / f"{tunnel_id}.json"
         is_running = False
         
         if tunnel_id in self.processes:
@@ -4042,10 +4119,47 @@ class GostAdapter:
         if not is_running:
             is_running = _is_tunnel_pid_alive(tunnel_id, "gost")
         
+        config_exists = config_file.exists()
+        port_healthy = None
+        if config_exists and is_running:
+            try:
+                cfg_data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
+                server_checked = False
+                client_checked = False
+                client_ports_ok = True
+                for svc in cfg_data.get("services", []):
+                    svc_name = svc.get("name", "")
+                    if svc_name == f"gost-server-{tunnel_id}":
+                        addr = svc.get("addr", "")
+                        if ":" in addr:
+                            p_str = addr.rsplit(":", 1)[1]
+                            if p_str.isdigit():
+                                port_num = int(p_str)
+                                proto = "udp" if svc.get("listener", {}).get("type") in ["kcp", "quic", "udp", "rudp"] else "tcp"
+                                port_healthy = is_port_listening_locally(port_num, proto)
+                                server_checked = True
+                                break
+                    elif svc_name.startswith(("tcp-in-", "udp-in-")):
+                        lis_type = svc.get("listener", {}).get("type", "")
+                        if lis_type in ["tcp", "udp"]:
+                            addr = svc.get("addr", "")
+                            if ":" in addr:
+                                p_str = addr.rsplit(":", 1)[1]
+                                if p_str.isdigit():
+                                    client_checked = True
+                                    if not is_port_listening_locally(int(p_str), lis_type):
+                                        client_ports_ok = False
+                if not server_checked and client_checked:
+                    port_healthy = client_ports_ok
+            except Exception:
+                pass
+
         return {
             "active": is_running,
             "type": "gost",
-            "process_running": is_running
+            "config_exists": config_exists,
+            "process_running": is_running,
+            "port_healthy": port_healthy if port_healthy is not None else True,
         }
 
 
@@ -5077,10 +5191,10 @@ class AdapterManager:
                                 p_num = int(p_val)
                         if p_num:
                             eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
-                            if core == "backhaul" and (
+                            if core in ["backhaul", "gost"] and (
                                 spec.get("tunnel_type") == "tcp+udp" or proto == "tcp+udp"
                             ):
-                                # accept_udp opens both a TCP and a UDP listener; BOTH must be up.
+                                # Dual forward opens both a TCP and a UDP listener; BOTH must be up.
                                 tcp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="tcp")
                                 udp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="udp")
                                 if tcp_up:
@@ -5123,6 +5237,20 @@ class AdapterManager:
                         if p_val and str(p_val).isdigit():
                             p_num = int(p_val)
                     if p_num:
+                        if (core in ["backhaul", "gost"]) and (
+                            spec.get("tunnel_type") == "tcp+udp" or proto == "tcp+udp"
+                        ):
+                            tcp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="tcp")
+                            udp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="udp")
+                            if tcp_up:
+                                listening_ports.append({"port": p_num, "type": "service_tcp"})
+                            else:
+                                missing_ports.append({"port": p_num, "type": "service_tcp"})
+                            if udp_up:
+                                listening_ports.append({"port": p_num, "type": "service_udp"})
+                            else:
+                                missing_ports.append({"port": p_num, "type": "service_udp"})
+                            continue
                         eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
                         is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
                         if is_svc_listening:

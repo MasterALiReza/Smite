@@ -289,9 +289,13 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.ports = ports
         updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
         updatedSpec.listen_port = ports[0]  // Keep for backward compatibility
-      } else if (tunnel.core === 'gost' && (tunnel.type === 'tcp' || tunnel.type === 'udp' || tunnel.type === 'tcp+udp' || tunnel.type === 'grpc' || tunnel.type === 'tcpmux')) {
+      } else if (tunnel.core === 'gost') {
         const remoteIp = formData.remote_ip || '127.0.0.1'
+        const selectedType = formData.type || tunnel.type || 'tcp'
+        updatedSpec.type = selectedType
+        updatedSpec.tunnel_type = selectedType
         updatedSpec.remote_ip = remoteIp
+        updatedSpec.target_host = remoteIp
         updatedSpec.ports = ports
         updatedSpec.port_ranges = port_ranges
         const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
@@ -464,6 +468,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(tunnel.core === 'gost' && {
+          type: formData.type || tunnel.type || 'tcp',
+          transport_type: formData.transport_type,
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
           custom_host: (formData.custom_host && formData.custom_host.trim()) ? formData.custom_host.trim() : null,
@@ -605,11 +611,27 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           </div>
                     {/* Dynamic Core Configuration Sections */}
           {tunnel.core === 'gost' && (
-            <GostSection
-              formData={formData}
-              onChange={(updates) => setFormData((prev) => ({ ...prev, ...updates }))}
-              showToast={showToast}
-            />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+                  {t.tunnels.type}
+                </label>
+                <CustomSelect
+                  value={formData.type || tunnel.type || 'tcp'}
+                  onChange={(val) => setFormData((prev) => ({ ...prev, type: val as string }))}
+                  options={[
+                    { value: 'tcp', label: 'TCP (Standard)' },
+                    { value: 'udp', label: 'UDP (Gaming / Anti-Lag)' },
+                    { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
+                  ]}
+                />
+              </div>
+              <GostSection
+                formData={formData}
+                onChange={(updates) => setFormData((prev) => ({ ...prev, ...updates }))}
+                showToast={showToast}
+              />
+            </div>
           )}
 
           {tunnel.core === 'backhaul' && (

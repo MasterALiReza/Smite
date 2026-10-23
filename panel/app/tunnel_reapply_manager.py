@@ -128,8 +128,8 @@ class TunnelReapplyManager:
                                         flag_modified(tunnel, "spec")
                                         await session.commit()
                                         logger.info(f"Self-Healing: Successfully revived and restored tunnel '{tunnel.name}'")
-                            elif tunnel.status == "active" and tunnel.core == "backhaul":
-                                # Backhaul crash recovery: node is up but the core process died
+                            elif tunnel.status == "active" and tunnel.core in {"backhaul", "gost"}:
+                                # Crash recovery: node is up but the core process died
                                 node_ids = [i for i in (tunnel.iran_node_id or tunnel.node_id, tunnel.foreign_node_id) if i]
                                 process_dead = False
                                 for nid in node_ids:
@@ -153,9 +153,9 @@ class TunnelReapplyManager:
                                     self._dead_strikes[tunnel.id] = strikes
                                     if strikes >= 2:
                                         self._dead_strikes.pop(tunnel.id, None)
-                                        logger.warning(f"Self-Healing: Backhaul process for tunnel '{tunnel.name}' is not running; re-applying")
+                                        logger.warning(f"Self-Healing: {tunnel.core.capitalize()} process for tunnel '{tunnel.name}' is not running; re-applying")
                                         if await self._reapply_tunnel_safe(tunnel, session, client):
-                                            logger.info(f"Self-Healing: Backhaul tunnel '{tunnel.name}' restarted")
+                                            logger.info(f"Self-Healing: {tunnel.core.capitalize()} tunnel '{tunnel.name}' restarted")
                         except Exception as t_err:
                             logger.debug(f"Self-healing check error for tunnel {tunnel.id}: {t_err}")
             except asyncio.CancelledError:

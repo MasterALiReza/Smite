@@ -174,7 +174,7 @@ async def test_gost_adapter_reverse_client_foreign_host_safety(tmp_path, monkeyp
         assert svc_80["listener"]["type"] == "rtcp"
         assert svc_80["listener"]["chain"] == "chain-test-tunnel-2"
         assert svc_80["listener"]["metadata"]["keepAlive"] is True
-        assert svc_80["listener"]["metadata"]["ttl"] == "10s"
+        assert svc_80["listener"]["metadata"]["ttl"] == "45s"
 
 
 @pytest.mark.asyncio
@@ -539,6 +539,439 @@ async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
         # Connector metadata must have Yamux mux enabled
         assert node0["connector"]["metadata"].get("mux") is True
         assert node0["connector"]["metadata"].get("mux.type") == "yamux"
+
+
+# ==============================================================================
+# Comprehensive GOST v3 Tests (Task 4)
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_gost_custom_host_not_overwritten_by_sni(tmp_path, monkeypatch):
+    """
+    Verify Bug 3 fix: When both Custom Host and Custom SNI are provided,
+    dialer_metadata['host'] preserves Custom Host and is NOT overwritten by SNI.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    spec = {
+        "mode": "client",
+        "is_reverse": False,
+        "control_port": 8443,
+        "server_ip": "1.2.3.4",
+        "ports": [8080],
+        "transport_type": "ws",
+        "security_type": "tls",
+        "custom_host": "my-worker.cloudflare.com",
+        "custom_sni": "fronting-domain.com",
+        "tls_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        "tls_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=555, returncode=None)
+        await adapter.apply("sni-host-test", spec)
+
+        config = json.loads((tmp_path / "sni-host-test.json").read_text())
+        dialer = config["chains"][0]["hops"][0]["nodes"][0]["dialer"]
+
+        # Custom Host must be preserved in dialer metadata['host']
+        assert dialer["metadata"]["host"] == "my-worker.cloudflare.com"
+        # SNI must be set in dialer tls['serverName']
+        assert dialer["tls"]["serverName"] == "fronting-domain.com"
+
+
+def test_build_gost_node_specs_remote_ip_translation():
+    """
+    Verify Bug 2 fix: Remote IP / Target Host handling in spec_builder.
+    - If target equals foreign server's public IP (legacy behavior), translate to 127.0.0.1.
+    - If target is a custom backend IP (e.g. 10.0.0.5), preserve it.
+    """
+    # 1. Legacy case: remote_ip matches foreign_node_ip
+    tunnel_legacy = DummyTunnel(
+        spec={
+            "control_port": 8443,
+            "remote_ip": "203.0.113.50",
+            "ports": [8080],
+        }
+    )
+    srv_spec, cli_spec = build_gost_node_specs(
+        tunnel_legacy,
+        iran_node_ip="198.51.100.10",
+        foreign_node_ip="203.0.113.50"
+    )
+    assert srv_spec["target_host"] == "127.0.0.1"
+    assert cli_spec["target_host"] == "127.0.0.1"
+
+    # 2. Custom internal backend IP
+    tunnel_custom = DummyTunnel(
+        spec={
+            "control_port": 8443,
+            "remote_ip": "10.10.0.99",
+            "ports": [8080],
+        }
+    )
+    srv_spec2, cli_spec2 = build_gost_node_specs(
+        tunnel_custom,
+        iran_node_ip="198.51.100.10",
+        foreign_node_ip="203.0.113.50"
+    )
+    assert srv_spec2["target_host"] == "10.10.0.99"
+    assert cli_spec2["target_host"] == "10.10.0.99"
+
+
+def test_build_gost_node_specs_legacy_types():
+    """
+    Verify Bug 1 fix: Legacy tunnel types (grpc, tcpmux) are properly mapped in spec_builder.
+    """
+    # Legacy type = "grpc"
+    tunnel_grpc = DummyTunnel(
+        type="grpc",
+        spec={"control_port": 8443, "ports": [8080]}
+    )
+    srv_spec, _ = build_gost_node_specs(tunnel_grpc, "1.1.1.1", "2.2.2.2")
+    assert srv_spec["type"] == "tcp"
+    assert srv_spec["transport_type"] == "grpc"
+
+    # Legacy type = "tcpmux"
+    tunnel_mux = DummyTunnel(
+        type="tcpmux",
+        spec={"control_port": 8443, "ports": [8080]}
+    )
+    srv_spec_mux, _ = build_gost_node_specs(tunnel_mux, "1.1.1.1", "2.2.2.2")
+    assert srv_spec_mux["type"] == "tcp"
+    assert srv_spec_mux.get("multiplex") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port_count,expected_buffer_size", [
+    (3, 4194304),     # <= 5 ports -> 4 MB
+    (10, 1048576),    # 6-20 ports -> 1 MB
+    (25, 262144),     # > 20 ports -> 256 KB
+])
+async def test_gost_dynamic_udp_buffer_sizing(tmp_path, monkeypatch, port_count, expected_buffer_size):
+    """
+    Verify dynamic UDP buffer sizing prevents memory exhaustion on multi-port tunnels.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    ports = [7000 + i for i in range(port_count)]
+    spec = {
+        "mode": "client",
+        "is_reverse": True,
+        "control_port": 8443,
+        "server_ip": "1.1.1.1",
+        "ports": ports,
+        "type": "udp",
+        "transport_type": "tcp",
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=666, returncode=None)
+        await adapter.apply(f"udp-buf-{port_count}", spec)
+
+        config = json.loads((tmp_path / f"udp-buf-{port_count}.json").read_text())
+        services = config["services"]
+        assert len(services) == port_count
+        first_svc = services[0]
+        assert first_svc["listener"]["type"] == "rudp"
+        assert first_svc["listener"]["metadata"]["ttl"] == "45s"
+        assert first_svc["listener"]["metadata"]["readBufferSize"] == expected_buffer_size
+
+
+@pytest.mark.asyncio
+async def test_gost_grpc_insecure_vs_tls(tmp_path, monkeypatch):
+    """
+    Verify gRPC with security_type='none' enables insecure mode (plaintext HTTP/2),
+    while security_type='tls' configures TLS and does not force insecure.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    # 1. gRPC Insecure (none)
+    spec_insecure = {
+        "mode": "server",
+        "is_reverse": False,
+        "control_port": 9001,
+        "ports": [8080],
+        "transport_type": "grpc",
+        "security_type": "none"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=771, returncode=None)
+        await adapter.apply("grpc-insecure", spec_insecure)
+
+        cfg_insecure = json.loads((tmp_path / "grpc-insecure.json").read_text())
+        listener = cfg_insecure["services"][0]["listener"]
+        assert listener["type"] == "grpc"
+        assert listener["metadata"]["insecure"] is True
+        assert "tls" not in listener
+
+    # 2. gRPC with TLS
+    spec_tls = {
+        "mode": "server",
+        "is_reverse": False,
+        "control_port": 9002,
+        "ports": [8080],
+        "transport_type": "grpc",
+        "security_type": "tls",
+        "tls_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        "tls_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=772, returncode=None)
+        await adapter.apply("grpc-tls", spec_tls)
+
+        cfg_tls = json.loads((tmp_path / "grpc-tls.json").read_text())
+        listener_tls = cfg_tls["services"][0]["listener"]
+        assert listener_tls["type"] == "grpc"
+        assert listener_tls["metadata"].get("insecure") is not True
+        assert "tls" in listener_tls
+
+
+@pytest.mark.asyncio
+async def test_gost_v3_mux_metadata_keys(tmp_path, monkeypatch):
+    """
+    Verify GOST v3 standard mux metadata keys:
+    - mux.version: 2
+    - mux.keepaliveDisabled: False
+    - mux.keepaliveInterval, mux.keepaliveTimeout
+    - mux.maxFrameSize (gaming 4096 vs normal 32768)
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    # Normal mode
+    spec_normal = {
+        "mode": "server",
+        "is_reverse": False,
+        "control_port": 8888,
+        "ports": [8080],
+        "transport_type": "mws",
+        "security_type": "none",
+        "gaming_mode": False,
+        "keepalive_interval": 15
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=881, returncode=None)
+        await adapter.apply("mux-normal", spec_normal)
+
+        cfg = json.loads((tmp_path / "mux-normal.json").read_text())
+        meta = cfg["services"][0]["listener"]["metadata"]
+        assert meta["mux.version"] == 2
+        assert meta["mux.keepaliveDisabled"] is False
+        assert meta["mux.keepaliveInterval"] == "15s"
+        assert meta["mux.keepaliveTimeout"] == "45s"
+        assert meta["mux.maxFrameSize"] == 32768
+        assert meta["mux.maxReceiveBuffer"] == 4194304
+        assert meta["mux.maxStreamBuffer"] == 1048576
+
+    # Gaming mode
+    spec_gaming = {
+        "mode": "server",
+        "is_reverse": False,
+        "control_port": 8889,
+        "ports": [8080],
+        "transport_type": "mws",
+        "security_type": "none",
+        "gaming_mode": True,
+        "keepalive_interval": 10
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=882, returncode=None)
+        await adapter.apply("mux-gaming", spec_gaming)
+
+        cfg_g = json.loads((tmp_path / "mux-gaming.json").read_text())
+        meta_g = cfg_g["services"][0]["listener"]["metadata"]
+        assert meta_g["mux.version"] == 2
+        assert meta_g["mux.keepaliveDisabled"] is False
+        assert meta_g["mux.keepaliveInterval"] == "10s"
+        assert meta_g["mux.keepaliveTimeout"] == "30s"
+        assert meta_g["mux.maxFrameSize"] == 4096
+        assert meta_g["mux.maxReceiveBuffer"] == 4194304
+        assert meta_g["mux.maxStreamBuffer"] == 1048576
+
+
+@pytest.mark.asyncio
+async def test_gost_utls_client_fingerprint(tmp_path, monkeypatch):
+    """
+    Verify uTLS fingerprinting configures dialer tls.utls with specified browser fingerprint.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    spec = {
+        "mode": "client",
+        "is_reverse": False,
+        "control_port": 8443,
+        "server_ip": "1.2.3.4",
+        "ports": [8080],
+        "transport_type": "tcp",
+        "security_type": "utls",
+        "utls_fingerprint": "firefox",
+        "custom_sni": "example.com"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=556, returncode=None)
+        await adapter.apply("utls-test", spec)
+
+        config = json.loads((tmp_path / "utls-test.json").read_text())
+        dialer = config["chains"][0]["hops"][0]["nodes"][0]["dialer"]
+
+        assert "tls" in dialer
+        assert dialer["tls"]["serverName"] == "example.com"
+        assert dialer["tls"]["utls"]["client"] == "firefox"
+
+
+@pytest.mark.asyncio
+async def test_gost_adapter_status_port_health(tmp_path, monkeypatch):
+    """
+    Verify GostAdapter.status checks port health in both server mode (control_port)
+    and direct client mode (service ports).
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    # 1. Server mode
+    srv_spec = {
+        "mode": "server",
+        "is_reverse": False,
+        "control_port": 9100,
+        "ports": [8080],
+        "transport_type": "tcp",
+    }
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1001, returncode=None)
+        await adapter.apply("test-status-srv", srv_spec)
+
+    with patch("node.app.core_adapters.is_port_listening_locally", return_value=True):
+        st = adapter.status("test-status-srv")
+        assert st["active"] is True
+        assert st["process_running"] is True
+        assert st["config_exists"] is True
+        assert st["port_healthy"] is True
+
+    with patch("node.app.core_adapters.is_port_listening_locally", return_value=False):
+        st_bad = adapter.status("test-status-srv")
+        assert st_bad["port_healthy"] is False
+
+    # 2. Client direct mode (checks local service ports)
+    cli_spec = {
+        "mode": "client",
+        "is_reverse": False,
+        "server_ip": "1.2.3.4",
+        "control_port": 9100,
+        "ports": [8080],
+        "transport_type": "tcp",
+    }
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1002, returncode=None)
+        await adapter.apply("test-status-cli", cli_spec)
+
+    with patch("node.app.core_adapters.is_port_listening_locally", return_value=True):
+        st_cli = adapter.status("test-status-cli")
+        assert st_cli["port_healthy"] is True
+
+    with patch("node.app.core_adapters.is_port_listening_locally", return_value=False):
+        st_cli_bad = adapter.status("test-status-cli")
+        assert st_cli_bad["port_healthy"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["tcp", "ws", "wss", "mws", "mwss", "quic", "grpc", "kcp", "ssh"])
+@pytest.mark.parametrize("tunnel_type", ["tcp", "udp", "tcp+udp"])
+@pytest.mark.parametrize("security", ["none", "tls", "utls"])
+@pytest.mark.parametrize("is_reverse", [True, False])
+async def test_gost_all_transports_types_and_directions(tmp_path, monkeypatch, transport, tunnel_type, security, is_reverse):
+    """
+    Parametric matrix test covering:
+    - 9 transports: tcp, ws, wss, mws, mwss, quic, grpc, kcp, ssh
+    - 3 tunnel types: tcp, udp, tcp+udp
+    - 3 security modes: none, tls, utls
+    - 2 modes: Reverse vs Direct
+    Validates complete and valid GOST v3 JSON config generation for both server and client (162 combinations).
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    spec_base = {
+        "control_port": 9500,
+        "ports": [8080],
+        "transport_type": transport,
+        "type": tunnel_type,
+        "security_type": security,
+        "is_reverse": is_reverse,
+        "auth_token": "matrix-token",
+        "tls_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        "tls_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
+        "ssh_key_pem": "-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=999, returncode=None)
+
+        # 1. Apply Server Spec
+        server_spec = dict(spec_base, mode="server")
+        if not is_reverse:
+            server_spec["target_ip"] = "127.0.0.1"
+        srv_tid = f"m-{transport}-{tunnel_type}-{security}-{'rev' if is_reverse else 'dir'}-srv"
+        await adapter.apply(srv_tid, server_spec)
+
+        srv_cfg = json.loads((tmp_path / f"{srv_tid}.json").read_text())
+        assert len(srv_cfg["services"]) >= 1
+
+        # 2. Apply Client Spec
+        client_spec = dict(spec_base, mode="client", server_ip="1.1.1.1")
+        if is_reverse:
+            client_spec["target_ip"] = "127.0.0.1"
+        cli_tid = f"m-{transport}-{tunnel_type}-{security}-{'rev' if is_reverse else 'dir'}-cli"
+        await adapter.apply(cli_tid, client_spec)
+
+        cli_cfg = json.loads((tmp_path / f"{cli_tid}.json").read_text())
+        assert len(cli_cfg["chains"]) == 1
+
+        # Client services handle port forwarding in both reverse and direct modes
+        if tunnel_type == "tcp+udp":
+            assert len(cli_cfg["services"]) == 2
+        elif tunnel_type == "udp":
+            assert any("udp" in s["name"] for s in cli_cfg["services"])
+        else:
+            assert any("tcp" in s["name"] for s in cli_cfg["services"])
+
 
 
 

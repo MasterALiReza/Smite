@@ -147,19 +147,6 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     }
   }
 
-  // Auto-populate remote_ip with foreign server IP when GOST is selected
-  useEffect(() => {
-    if (formData.core === 'gost' && formData.foreign_node_id) {
-      const selectedServer = servers.find(s => s.id === formData.foreign_node_id)
-      if (selectedServer?.metadata?.ip_address) {
-        setFormData(prev => ({
-          ...prev,
-          remote_ip: selectedServer.metadata.ip_address
-        }))
-      }
-    }
-  }, [formData.foreign_node_id, formData.core, servers])
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
@@ -549,7 +536,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         setBackhaulState(prev => ({ ...prev, control_port: generateRandomControlPort() }))
       }
     } else if (core === 'gost') {
-      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'grpc' || formData.type === 'tcpmux') ? formData.type : 'tcp'
+      newType = (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp') ? formData.type : 'tcp'
     } else {
       newType = 'tcp'
     }
@@ -773,10 +760,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
                       ]
                     : [
-                        { value: 'tcp', label: 'TCP' },
-                        { value: 'udp', label: 'UDP' },
-                        { value: 'grpc', label: 'gRPC' },
-                        { value: 'tcpmux', label: 'TCP Mux' },
+                        { value: 'tcp', label: 'TCP (Standard)' },
+                        { value: 'udp', label: 'UDP (Gaming / Anti-Lag)' },
+                        { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
                       ]
                 }
               />

@@ -34,6 +34,45 @@ export const GostSection: React.FC<GostSectionProps> = ({
 }) => {
   const { t } = useLanguage()
 
+  const handleTransportChange = (val: string) => {
+    const updates: Record<string, any> = { transport_type: val }
+    if (val === 'wss' || val === 'mwss') {
+      if (formData.security_type === 'none') {
+        updates.security_type = 'tls'
+      }
+    } else if (val === 'quic') {
+      updates.security_type = 'tls'
+    } else if (val === 'kcp' || val === 'ssh') {
+      updates.security_type = 'none'
+    }
+    onChange(updates)
+  }
+
+  const getSecurityOptions = () => {
+    if (formData.transport_type === 'wss' || formData.transport_type === 'mwss') {
+      return [
+        { value: 'tls', label: 'TLS (Standard Encryption)' },
+        { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
+      ]
+    }
+    if (formData.transport_type === 'quic') {
+      return [{ value: 'tls', label: 'TLS 1.3 (Enforced by QUIC)' }]
+    }
+    if (formData.transport_type === 'kcp' || formData.transport_type === 'ssh') {
+      return [{ value: 'none', label: 'Native Protocol Encryption' }]
+    }
+    return [
+      { value: 'none', label: 'None (Plaintext / Low Overhead)' },
+      { value: 'tls', label: 'TLS (Standard Encryption)' },
+      { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
+    ]
+  }
+
+  const isSecurityLocked =
+    formData.transport_type === 'quic' ||
+    formData.transport_type === 'kcp' ||
+    formData.transport_type === 'ssh'
+
   return (
     <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-purple-50/60 via-gray-50 to-blue-50/40 dark:from-purple-950/20 dark:via-gray-800/60 dark:to-blue-950/20 border border-purple-200/70 dark:border-purple-900/40 space-y-4">
       {/* 1. Header */}
@@ -104,7 +143,7 @@ export const GostSection: React.FC<GostSectionProps> = ({
           </div>
           <CustomSelect
             value={formData.transport_type}
-            onChange={(val) => onChange({ transport_type: val })}
+            onChange={handleTransportChange}
             options={[
               { value: 'tcp', label: 'TCP (Standard)' },
               { value: 'ws', label: 'WebSocket (WS)' },
@@ -119,15 +158,19 @@ export const GostSection: React.FC<GostSectionProps> = ({
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">
             {formData.transport_type === 'quic' &&
-              'Fast 0-RTT UDP handshake. Resilient to packet loss.'}
+              'Fast 0-RTT UDP handshake. Resilient to packet loss (Native TLS 1.3).'}
             {formData.transport_type === 'grpc' &&
               'Multiplexed HTTP/2. Mimics legitimate enterprise API traffic.'}
             {formData.transport_type === 'kcp' &&
-              'Aggressive ARQ UDP. Ideal for high packet-loss links.'}
+              'Aggressive ARQ UDP. Ideal for high packet-loss links (Native encryption).'}
             {formData.transport_type === 'ws' &&
               'Standard WebSocket. Compatible with CDN proxies.'}
+            {formData.transport_type === 'wss' &&
+              'Secure WebSocket with TLS/uTLS encryption.'}
             {formData.transport_type === 'mws' &&
               'Multiplexed WebSocket. Bundles multiple TCP streams.'}
+            {formData.transport_type === 'mwss' &&
+              'Multiplexed Secure WebSocket with TLS/uTLS.'}
             {formData.transport_type === 'tcp' && 'Direct raw TCP socket tunnel.'}
             {formData.transport_type === 'ssh' &&
               'Native SSH subsystem encrypted protocol.'}
@@ -147,18 +190,19 @@ export const GostSection: React.FC<GostSectionProps> = ({
           <CustomSelect
             value={formData.security_type}
             onChange={(val) => onChange({ security_type: val })}
-            options={[
-              { value: 'none', label: 'None (Plaintext / Low Overhead)' },
-              { value: 'tls', label: 'TLS (Standard Encryption)' },
-              { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
-            ]}
+            options={getSecurityOptions()}
+            disabled={isSecurityLocked}
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">
-            {formData.security_type === 'none' &&
+            {(formData.transport_type === 'kcp' || formData.transport_type === 'ssh') &&
+              'Secured by the native protocol encryption layer.'}
+            {formData.transport_type === 'quic' &&
+              'QUIC enforces built-in TLS 1.3 handshake encryption.'}
+            {!isSecurityLocked && formData.security_type === 'none' &&
               'No TLS wrapper. Lowest CPU overhead.'}
-            {formData.security_type === 'tls' &&
+            {!isSecurityLocked && formData.security_type === 'tls' &&
               'Standard TLS 1.3 handshake encryption.'}
-            {formData.security_type === 'utls' &&
+            {!isSecurityLocked && formData.security_type === 'utls' &&
               'Camouflages ClientHello to impersonate real browsers.'}
           </p>
         </div>
@@ -206,10 +250,14 @@ export const GostSection: React.FC<GostSectionProps> = ({
           <div>
             <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
               <Globe size={15} className="text-blue-600 dark:text-blue-400" />
-              Failover & Additional Foreign Endpoints
+              {formData.is_reverse
+                ? 'Failover & Secondary Iran Ingress IPs'
+                : 'Failover & Additional Foreign Endpoints'}
             </label>
             <p className="text-[11px] text-gray-500 dark:text-gray-400">
-              Add secondary foreign IPs for automatic high-availability failover or load balancing (one per line)
+              {formData.is_reverse
+                ? 'In Reverse Mode, foreign server connects to Iran. Add backup Iran IPs/domains for high-availability failover (one per line).'
+                : 'In Direct Mode, Iran server connects to Foreign. Add backup foreign IPs for automatic high-availability failover (one per line).'}
             </p>
           </div>
           {formData.failover_ips && formData.failover_ips.trim().length > 0 && (
@@ -222,7 +270,7 @@ export const GostSection: React.FC<GostSectionProps> = ({
           value={formData.failover_ips || ''}
           onChange={(e) => onChange({ failover_ips: e.target.value })}
           className="w-full px-3 py-2 text-sm sm:text-xs font-mono rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500/20"
-          placeholder={'1.2.3.4\n5.6.7.8'}
+          placeholder={formData.is_reverse ? 'iran-backup.example.com\n198.51.100.2' : '1.2.3.4\n5.6.7.8'}
           rows={2}
         />
 
@@ -364,15 +412,20 @@ export const GostSection: React.FC<GostSectionProps> = ({
           <div className="p-3 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
             <label className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-1 mb-1">
               <EyeOff size={14} className="text-purple-600 dark:text-purple-400" />
-              Stealth SNI (TLS Spoof)
+              Stealth / Custom SNI
             </label>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
-              Mask traffic as legitimate website
+              TLS Server Name (SNI) spoofing for DPI bypass
             </p>
             <input
               type="text"
-              value={formData.stealth_domain || ''}
-              onChange={(e) => onChange({ stealth_domain: e.target.value })}
+              value={formData.custom_sni || formData.stealth_domain || ''}
+              onChange={(e) =>
+                onChange({
+                  stealth_domain: e.target.value,
+                  custom_sni: e.target.value,
+                })
+              }
               className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xs"
               placeholder="e.g. www.google.com"
             />
@@ -466,6 +519,8 @@ export const GostSection: React.FC<GostSectionProps> = ({
       {(formData.cdn_mode ||
         formData.transport_type === 'wss' ||
         formData.transport_type === 'ws' ||
+        formData.transport_type === 'mws' ||
+        formData.transport_type === 'mwss' ||
         formData.transport_type === 'grpc' ||
         formData.security_type === 'tls' ||
         formData.security_type === 'utls' ||
@@ -491,12 +546,17 @@ export const GostSection: React.FC<GostSectionProps> = ({
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Custom SNI
+                Custom SNI (TLS)
               </label>
               <input
                 type="text"
-                value={formData.custom_sni || ''}
-                onChange={(e) => onChange({ custom_sni: e.target.value })}
+                value={formData.custom_sni || formData.stealth_domain || ''}
+                onChange={(e) =>
+                  onChange({
+                    custom_sni: e.target.value,
+                    stealth_domain: e.target.value,
+                  })
+                }
                 className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xs"
                 placeholder="e.g. speedtest.net"
               />
