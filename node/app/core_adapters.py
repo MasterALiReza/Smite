@@ -1335,17 +1335,13 @@ class BackhaulAdapter:
         "mss",
         "so_rcvbuf",
         "so_sndbuf",
-        "accept_udp",
-        "heartbeat",
-        "channel_size",
-        "insecure",
     ]
 
     BACKHAUL_NUMERIC_KEYS = {
         "keepalive_period", "heartbeat", "channel_size", "mux_con", "web_port",
         "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
         "mux_recievebuffer", "mux_streambuffer", "connection_pool", "retry_interval",
-        "dial_timeout"
+        "dial_timeout", "mux_session"
     }
 
     BACKHAUL_BOOLEAN_KEYS = {
@@ -1398,6 +1394,17 @@ class BackhaulAdapter:
             else:
                 transport = "tcpmux"
 
+            explicit_udp = (
+                spec.get("type") in ("udp", "tcp+udp")
+                or spec.get("tunnel_type") in ("udp", "tcp+udp")
+                or is_pure_udp
+            )
+            if is_udp_over_tcp and transport != "tcp":
+                if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
+                    is_udp_over_tcp = False
+                else:
+                    transport = "tcp"
+
             server_options = dict(spec.get("server_options") or {})
             bind_addr = spec.get("bind_addr")
             if not bind_addr:
@@ -1436,7 +1443,12 @@ class BackhaulAdapter:
                     if isinstance(p, str):
                         p_clean = p.strip()
                         if '=' in p_clean:
-                            processed_ports.append(p_clean)
+                            m_rng = re.fullmatch(r"(\d+)-(\d+)=[^:=]+:(\d+)-(\d+)", p_clean)
+                            if m_rng and m_rng.group(1) == m_rng.group(3) and m_rng.group(2) == m_rng.group(4):
+                                # Backhaul cannot parse "A-B=host:A-B"; use native "A-B"
+                                processed_ports.append(f"{m_rng.group(1)}-{m_rng.group(2)}")
+                            else:
+                                processed_ports.append(p_clean)
                         elif p_clean.isdigit():
                             processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
                         elif '-' in p_clean:
@@ -1475,7 +1487,7 @@ class BackhaulAdapter:
                     if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
                         s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
                         if s_p <= e_p:
-                            check_count = min(e_p - s_p + 1, 64)
+                            check_count = min(e_p - s_p + 1, 500)
                             for port_num in range(s_p, s_p + check_count):
                                 ports_to_free.add(port_num)
 
@@ -1499,7 +1511,7 @@ class BackhaulAdapter:
                 "heartbeat", "mux_con", "accept_udp", "skip_optz",
                 "tls_cert", "tls_key", "sniffer", "web_port", "proxy_protocol",
                 "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
-                "mux_recievebuffer", "mux_streambuffer"
+                "mux_recievebuffer", "mux_streambuffer", "mux_session", "sniffer_log"
             ]
             for key in SERVER_OPTION_KEYS:
                 value = server_options.get(key)
@@ -1518,22 +1530,28 @@ class BackhaulAdapter:
                             value = bool(value)
                     server_config[key] = value
 
-            if is_udp_over_tcp:
+            # Upstream implements accept_udp only for transport="tcp"
+            if is_udp_over_tcp and transport == "tcp":
                 server_config["accept_udp"] = True
+            else:
+                server_config.pop("accept_udp", None)
 
             kp = server_options.get("keepalive_period") or spec.get("keepalive_period")
-            if not kp or not isinstance(kp, (int, float)) or kp > 25:
+            if not kp or isinstance(kp, bool) or not isinstance(kp, (int, float)) or kp <= 0:
                 server_config["keepalive_period"] = 20
             else:
                 server_config["keepalive_period"] = int(kp)
 
             hb = server_options.get("heartbeat") or spec.get("heartbeat")
-            if not hb or not isinstance(hb, (int, float)) or hb > 25:
+            if not hb or isinstance(hb, bool) or not isinstance(hb, (int, float)) or hb <= 0:
                 server_config["heartbeat"] = 20
             else:
                 server_config["heartbeat"] = int(hb)
 
             server_config.setdefault("nodelay", True)
+
+            if server_config.get("sniffer") and not server_config.get("sniffer_log"):
+                server_config["sniffer_log"] = str(self.config_dir / f"{tunnel_id}_sniffer.json")
 
             # Write TLS certificates if provided as in-memory PEM
             if spec.get("tls_cert_pem") and spec.get("tls_key_pem"):
@@ -1586,6 +1604,10 @@ class BackhaulAdapter:
                 remote_addr = remote_addr[5:]
             elif remote_addr.startswith('wss://'):
                 remote_addr = remote_addr[6:]
+            elif '://' in remote_addr:
+                remote_addr = remote_addr.split('://', 1)[1]
+            if '/' in remote_addr:
+                remote_addr = remote_addr.split('/', 1)[0]
 
             raw_transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
             is_pure_udp = raw_transport == "udp"
@@ -1601,7 +1623,32 @@ class BackhaulAdapter:
                 transport = raw_transport
             else:
                 transport = "tcpmux"
+
+            explicit_udp = (
+                spec.get("type") in ("udp", "tcp+udp")
+                or spec.get("tunnel_type") in ("udp", "tcp+udp")
+                or is_pure_udp
+            )
+            if is_udp_over_tcp and transport != "tcp":
+                if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
+                    is_udp_over_tcp = False
+                else:
+                    transport = "tcp"
+
             client_options = dict(spec.get("client_options") or {})
+
+            # Upstream ws_dialer.go uses remote_addr as the WebSocket Host header & TLS SNI,
+            # while dialing edge_ip:port on TCP when edge_ip is set.
+            sni_domain = (spec.get("custom_sni") or spec.get("stealth_domain") or "").strip()
+            if sni_domain and transport in ("ws", "wss", "wsmux", "wssmux"):
+                if "://" in sni_domain:
+                    sni_domain = sni_domain.split("://", 1)[1].split("/", 1)[0]
+                sni_domain = sni_domain.split(":", 1)[0].strip()
+                r_host, r_port, _ = parse_address_port(remote_addr)
+                if sni_domain and r_host and r_port and sni_domain != r_host:
+                    if not (client_options.get("edge_ip") or spec.get("edge_ip")):
+                        client_options["edge_ip"] = r_host
+                    remote_addr = f"{sni_domain}:{r_port}"
 
             config_dict: Dict[str, Any] = {
                 "remote_addr": remote_addr,
@@ -1630,12 +1677,9 @@ class BackhaulAdapter:
                         value = bool(value)
                 config_dict[key] = value
 
-            if is_udp_over_tcp:
-                config_dict["accept_udp"] = True
-
-            if transport in ("wss", "wssmux") or spec.get("insecure") or client_options.get("insecure"):
-                config_dict.setdefault("insecure", True)
-
+            # accept_udp / insecure / heartbeat / channel_size are not part of
+            # upstream ClientConfig (UDP is negotiated by the server; wss/wssmux
+            # always skip cert verification), so they are never written here.
             config_dict.setdefault("nodelay", True)
 
             if "connection_pool" not in config_dict:
@@ -1646,16 +1690,10 @@ class BackhaulAdapter:
                 config_dict["dial_timeout"] = 10
 
             kp = client_options.get("keepalive_period") or spec.get("keepalive_period")
-            if not kp or not isinstance(kp, (int, float)) or kp > 25:
+            if not kp or isinstance(kp, bool) or not isinstance(kp, (int, float)) or kp <= 0:
                 config_dict["keepalive_period"] = 20
             else:
                 config_dict["keepalive_period"] = int(kp)
-
-            hb = client_options.get("heartbeat") or spec.get("heartbeat")
-            if not hb or not isinstance(hb, (int, float)) or hb > 25:
-                config_dict["heartbeat"] = 20
-            else:
-                config_dict["heartbeat"] = int(hb)
 
             if "aggressive_pool" not in config_dict:
                 config_dict["aggressive_pool"] = True
@@ -1736,6 +1774,19 @@ class BackhaulAdapter:
                     p_val = int(m.group(1))
                     if 0 < p_val <= 65535:
                         ports_to_free.add(p_val)
+                ports_block = re.search(r'^\s*ports\s*=\s*\[(.*?)\]', txt, re.DOTALL | re.MULTILINE)
+                if ports_block:
+                    for entry in re.findall(r'["\']([^"\']+)["\']', ports_block.group(1)):
+                        local = entry.split("=")[0].strip()
+                        if local.isdigit():
+                            if 0 < int(local) <= 65535:
+                                ports_to_free.add(int(local))
+                        else:
+                            m_r = re.fullmatch(r"(\d{1,5})-(\d{1,5})", local)
+                            if m_r:
+                                a, b = int(m_r.group(1)), int(m_r.group(2))
+                                if 0 < a <= b <= 65535:
+                                    ports_to_free.update(range(a, min(b, a + 499) + 1))
             except Exception:
                 pass
 
@@ -5026,6 +5077,21 @@ class AdapterManager:
                                 p_num = int(p_val)
                         if p_num:
                             eff_proto = "any" if (spec.get("tunnel_type") in ["tcp+udp", "all"] or spec.get("type") in ["tcp+udp", "all"] or proto in ["any", "tcp+udp"]) else proto
+                            if core == "backhaul" and (
+                                spec.get("tunnel_type") == "tcp+udp" or proto == "tcp+udp"
+                            ):
+                                # accept_udp opens both a TCP and a UDP listener; BOTH must be up.
+                                tcp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="tcp")
+                                udp_up = await asyncio.to_thread(is_port_listening_locally, p_num, proto="udp")
+                                if tcp_up:
+                                    listening_ports.append({"port": p_num, "type": "service_tcp"})
+                                else:
+                                    missing_ports.append({"port": p_num, "type": "service_tcp"})
+                                if udp_up:
+                                    listening_ports.append({"port": p_num, "type": "service_udp"})
+                                else:
+                                    missing_ports.append({"port": p_num, "type": "service_udp"})
+                                continue
                             is_svc_listening = await asyncio.to_thread(is_port_listening_locally, p_num, proto=eff_proto)
                             if is_svc_listening:
                                 listening_ports.append({"port": p_num, "type": f"service_{eff_proto}"})

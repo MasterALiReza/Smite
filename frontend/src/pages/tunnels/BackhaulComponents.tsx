@@ -36,26 +36,7 @@ export function BackhaulForm({
   acceptUdpVisible?: boolean
 }) {
   return (
-    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-50/60 via-gray-50 to-teal-50/40 dark:from-emerald-950/20 dark:via-gray-800/60 dark:to-teal-950/20 border border-emerald-200/70 dark:border-emerald-900/40 space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-gray-200/70 dark:border-gray-700/70">
-        <div className="flex items-center gap-2">
-          <span className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300">
-            <RadioTower size={16} />
-          </span>
-          <div>
-            <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">
-              Backhaul Settings
-            </h4>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              High-Throughput Multiplexed Tunneling Core (v0.7.2)
-            </p>
-          </div>
-        </div>
-        <span className="self-start sm:self-auto text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-emerald-100/80 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-          Backhaul Core
-        </span>
-      </div>
-
+    <div className="space-y-4">
       {/* ⚡ Ultra-Low Latency Gaming Mode Card */}
       <label className="p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-gradient-to-r from-indigo-50/90 via-purple-50/40 to-pink-50/30 dark:from-indigo-950/40 dark:via-purple-950/30 dark:to-pink-950/20 flex items-center justify-between cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-all shadow-sm">
         <div className="pr-3">
@@ -335,7 +316,7 @@ export function BackhaulAdvancedDrawer({
                   min={1000}
                   max={1500}
                 />
-                <span className="text-[10px] text-gray-400">Recommended 1360-1400 for WAN gaming</span>
+                <span className="text-[10px] text-gray-400">Recommended 1360-1400 for WAN gaming. Applied by tcp / tcpmux only (ignored by ws/wss upstream)</span>
               </div>
 
               <div>
@@ -346,11 +327,11 @@ export function BackhaulAdvancedDrawer({
                   <input
                     type="number"
                     value={state.server.heartbeat}
-                    onChange={(e) => updateBoth('heartbeat', e.target.value)}
+                    onChange={(e) => updateServer('heartbeat', e.target.value)}
                     placeholder="Heartbeat (12)"
                     className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                     min={1}
-                    max={25}
+                    max={600}
                   />
                   <input
                     type="number"
@@ -359,10 +340,10 @@ export function BackhaulAdvancedDrawer({
                     placeholder="Keepalive (12)"
                     className="w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                     min={1}
-                    max={25}
+                    max={600}
                   />
                 </div>
-                <span className="text-[10px] text-gray-400">Fast link loss detection (≤ 25s)</span>
+                <span className="text-[10px] text-gray-400">Upstream defaults: heartbeat 40s, keepalive 75s (lower = faster link-loss detection)</span>
               </div>
 
               <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer col-span-1 sm:col-span-2">
@@ -395,7 +376,7 @@ export function BackhaulAdvancedDrawer({
                 <input
                   type="number"
                   value={state.server.channel_size}
-                  onChange={(e) => updateBoth('channel_size', e.target.value)}
+                  onChange={(e) => updateServer('channel_size', e.target.value)}
                   placeholder="2048 (default) or 8192 (gaming)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                   min={512}
@@ -455,6 +436,48 @@ export function BackhaulAdvancedDrawer({
                   onChange={(e) => updateClient('aggressive_pool', e.target.checked)}
                 />
               </label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Retry Interval (s)
+                </label>
+                <input
+                  type="number"
+                  value={state.client.retry_interval}
+                  onChange={(e) => updateClient('retry_interval', e.target.value)}
+                  placeholder="3 (default)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={0}
+                />
+                <span className="text-[10px] text-gray-400">Delay between reconnect attempts</span>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Dial Timeout (s)
+                </label>
+                <input
+                  type="number"
+                  value={state.client.dial_timeout}
+                  onChange={(e) => updateClient('dial_timeout', e.target.value)}
+                  placeholder="10 (default)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={0}
+                />
+                <span className="text-[10px] text-gray-400">Max time to establish a connection</span>
+              </div>
+              <div className="col-span-1 sm:col-span-2">
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  CDN Edge IP / Clean IP (edge_ip)
+                </label>
+                <input
+                  type="text"
+                  value={state.client.edge_ip}
+                  onChange={(e) => updateClient('edge_ip', e.target.value)}
+                  placeholder="e.g. 104.16.0.1 (ws / wss / wsmux / wssmux only)"
+                  className="w-full px-3 py-1.5 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                />
+                <span className="text-[10px] text-gray-400">Dial this IP while Host/SNI stay on the original address (CDN fronting)</span>
+              </div>
             </div>
           </div>
 
@@ -519,6 +542,35 @@ export function BackhaulAdvancedDrawer({
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
               </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Mux Receive Buffer (bytes)
+                </label>
+                <input
+                  type="number"
+                  value={state.server.mux_recievebuffer}
+                  onChange={(e) => updateBoth('mux_recievebuffer', e.target.value)}
+                  placeholder="4194304 (default 4MB)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={0}
+                />
+                <span className="text-[10px] text-gray-400">tcpmux / wsmux / wssmux only</span>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Mux Sessions
+                </label>
+                <input
+                  type="number"
+                  value={state.server.mux_session}
+                  onChange={(e) => updateBoth('mux_session', e.target.value)}
+                  placeholder="1 (default)"
+                  className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                  min={0}
+                />
+                <span className="text-[10px] text-gray-400">tcpmux / wsmux / wssmux only</span>
+              </div>
             </div>
           </div>
 
@@ -570,6 +622,19 @@ export function BackhaulAdvancedDrawer({
                 />
               </div>
 
+              <label className="p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold text-gray-800 dark:text-gray-200 block">Traffic Sniffer</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">Needed for web monitor traffic stats</span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                  checked={state.server.sniffer}
+                  onChange={(e) => updateServer('sniffer', e.target.checked)}
+                />
+              </label>
+
               <div className="col-span-1 sm:col-span-2">
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Custom Port Mappings & Ranges
@@ -578,7 +643,7 @@ export function BackhaulAdvancedDrawer({
                   value={state.customPorts}
                   onChange={(e) => onChange({ ...state, customPorts: e.target.value })}
                   className="w-full min-h-[90px] px-3 py-2 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
-                  placeholder={`One entry per line. Examples:\n443\n443=127.0.0.1:8080\n27000-27050=127.0.0.1:27000-27050`}
+                  placeholder={`One entry per line. Examples:\n443\n443=127.0.0.1:8080\n27000-27050\n27000-27050=127.0.0.1:8080`}
                 />
                 <span className="text-[10px] text-gray-400">Leave empty to use single port from main form</span>
               </div>
@@ -658,6 +723,8 @@ export function buildBackhaulSpec(
       .filter(Boolean)
   } else if (publicPorts.length > 0) {
     ports = publicPorts.map(p => {
+      // Backhaul only understands a 1:1 range as a bare "A-B" (it cannot parse "A-B=host:A-B")
+      if (p.includes('-')) return p
       const listenedPort = listenIp !== '0.0.0.0' ? `${listenIp}:${p}` : `${p}`
       return `${listenedPort}=${targetHost}:${p}`
     })
@@ -670,9 +737,8 @@ export function buildBackhaulSpec(
   const serverOptions: Record<string, any> = {}
   Object.entries(advanced.server).forEach(([key, value]) => {
     if (booleanServerKeys.has(key)) {
-      if (value) {
-        serverOptions[key] = true
-      }
+      // keep explicit false so options like nodelay can really be disabled
+      serverOptions[key] = Boolean(value)
       return
     }
     if (numericServerKeys.has(key)) {
@@ -693,9 +759,7 @@ export function buildBackhaulSpec(
   const clientOptions: Record<string, any> = {}
   Object.entries(advanced.client).forEach(([key, value]) => {
     if (booleanClientKeys.has(key)) {
-      if (value) {
-        clientOptions[key] = true
-      }
+      clientOptions[key] = Boolean(value)
       return
     }
     if (numericClientKeys.has(key)) {
@@ -714,20 +778,21 @@ export function buildBackhaulSpec(
   })
 
   if (isUdpOverTcp) {
+    // accept_udp is a [server]-only upstream option (and only works with transport "tcp")
     serverOptions.accept_udp = true
-    clientOptions.accept_udp = true
   }
-  if (!serverOptions.keepalive_period || Number(serverOptions.keepalive_period) > 25) {
+  delete clientOptions.accept_udp
+  delete clientOptions.heartbeat
+  delete clientOptions.channel_size
+  delete clientOptions.insecure
+  if (!serverOptions.keepalive_period || Number(serverOptions.keepalive_period) <= 0) {
     serverOptions.keepalive_period = base.gaming_mode ? 12 : 20
   }
-  if (!serverOptions.heartbeat || Number(serverOptions.heartbeat) > 25) {
+  if (!serverOptions.heartbeat || Number(serverOptions.heartbeat) <= 0) {
     serverOptions.heartbeat = base.gaming_mode ? 12 : 20
   }
-  if (!clientOptions.keepalive_period || Number(clientOptions.keepalive_period) > 25) {
+  if (!clientOptions.keepalive_period || Number(clientOptions.keepalive_period) <= 0) {
     clientOptions.keepalive_period = base.gaming_mode ? 12 : 20
-  }
-  if (!clientOptions.heartbeat || Number(clientOptions.heartbeat) > 25) {
-    clientOptions.heartbeat = base.gaming_mode ? 12 : 20
   }
 
   const spec: Record<string, any> = {
@@ -840,7 +905,18 @@ export function parseBackhaulSpec(spec: Record<string, any>, currentType: string
   }
 
   if (Array.isArray(spec.ports) && spec.ports.length > 0) {
-    advanced.customPorts = spec.ports.join('\n')
+    // Only keep a custom mapping list when it cannot be regenerated from the main
+    // "Forwarded Ports" field (i.e. some entry maps to a different target port).
+    const hasNonTrivialMapping = spec.ports.some((p: unknown) => {
+      if (typeof p !== 'string' || !p.includes('=')) return false
+      const [left, right] = p.split('=')
+      const localPort = left.includes(':') ? left.split(':').pop() : left
+      const remotePort = right.includes(':') ? right.split(':').pop() : right
+      return (localPort ?? '').trim() !== (remotePort ?? '').trim()
+    })
+    if (hasNonTrivialMapping) {
+      advanced.customPorts = spec.ports.join('\n')
+    }
   }
 
   const serverOptions = spec.server_options || {}

@@ -22,7 +22,7 @@ import {
 import {
   Tunnel, TunnelCategory, BackhaulTransport, BackhaulFormState,
   BackhaulAdvancedState, BackhaulAdvancedServerState, BackhaulAdvancedClientState,
-  generateRandomControlPort, createDefaultBackhaulState, createDefaultBackhaulAdvancedState,
+  generateRandomControlPort, createDefaultBackhaulState, createDefaultBackhaulAdvancedState, resetGamingAdvanced,
   numericServerKeys, booleanServerKeys, stringServerKeys,
   numericClientKeys, booleanClientKeys, stringClientKeys, getCategoryColorClasses
 } from './types'
@@ -477,9 +477,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         ...(formData.core === 'backhaul' && {
           transport_type: backhaulState.transport || 'tcpmux',
           security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
-          custom_sni: ((backhaulAdvanced as any).sni || (formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
-          stealth_domain: ((backhaulAdvanced as any).sni || (formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
-          gaming_mode: backhaulState.gaming_mode || backhaulAdvanced.server.nodelay || false,
+          custom_sni: ((formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
+          stealth_domain: ((formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
+          gaming_mode: Boolean(backhaulState.gaming_mode),
           port_ranges: ((backhaulAdvanced as any).port_ranges && (backhaulAdvanced as any).port_ranges.trim())
             ? (backhaulAdvanced as any).port_ranges.split(',').map((s: string) => s.trim()).filter(Boolean)
             : (port_ranges.length > 0 ? port_ranges : null),
@@ -739,7 +739,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                   setFormData({ ...formData, type: value })
                   if (formData.core === 'backhaul') {
                     if (value === 'udp' || value === 'tcp+udp') {
-                      setBackhaulState((prev) => ({ ...prev, accept_udp: true }))
+                      // UDP-over-TCP (accept_udp) only exists for transport "tcp" upstream
+                      setBackhaulState((prev) => ({ ...prev, accept_udp: true, transport: 'tcp' }))
+                      setFormData((prev) => ({ ...prev, type: value, transport_type: 'tcp' }))
                     } else if (value === 'tcp') {
                       setBackhaulState((prev) => ({ ...prev, accept_udp: false }))
                     }
@@ -799,6 +801,16 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                 if (partial.transport) {
                   setFormData((prev) => ({ ...prev, transport_type: partial.transport as string }))
                 }
+                if (
+                  partial.transport &&
+                  partial.transport !== 'tcp' &&
+                  partial.transport !== 'udp' &&
+                  partial.accept_udp !== true
+                ) {
+                  // other transports ignore accept_udp upstream: keep the tunnel TCP-only
+                  setBackhaulState((prev) => ({ ...prev, accept_udp: false }))
+                  setFormData((prev) => ({ ...prev, type: 'tcp' }))
+                }
                 if (partial.accept_udp !== undefined) {
                   if (partial.accept_udp && formData.type === 'tcp') {
                     setFormData((prev) => ({ ...prev, type: 'tcp+udp' }))
@@ -835,6 +847,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
                         aggressive_pool: true,
                       },
                     }))
+                  } else {
+                    // Gaming Mode off: restore standard tuning values
+                    setBackhaulAdvanced(resetGamingAdvanced)
                   }
                 }
               }}
@@ -842,7 +857,6 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
               acceptUdpVisible={
                 backhaulState.transport === 'tcp' ||
-                backhaulState.transport === 'tcpmux' ||
                 backhaulState.transport === 'udp'
               }
               showToast={showToast}

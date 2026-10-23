@@ -1979,7 +1979,7 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                             mode=verify_mode,
                             ports=verify_ports,
                             control_port=verify_ctrl_port,
-                            proto="udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp"
+                            proto=("tcp+udp" if (tunnel.type == "tcp+udp" and tunnel.core == "backhaul") else ("udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp"))
                         )
                     except Exception as ve:
                         logger.debug(f"Verification probe error: {ve}")

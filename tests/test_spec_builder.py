@@ -157,10 +157,43 @@ def test_spec_builder_backhaul_udp_over_tcp():
     )
     server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     
-    assert server_spec["transport"] == "tcpmux"
-    assert client_spec["transport"] == "tcpmux"
+    # Upstream only implements accept_udp for transport=tcp
+    assert server_spec["transport"] == "tcp"
+    assert client_spec["transport"] == "tcp"
     assert server_spec["accept_udp"] is True
     assert client_spec["accept_udp"] is True
+
+
+def test_spec_builder_backhaul_keepalive_heartbeat_not_clamped():
+    tunnel = DummyTunnel(
+        id="t-bh-ka", core="backhaul", type="tcp",
+        spec={"ports": [8080], "transport": "tcpmux", "token": "t",
+              "server_options": {"keepalive_period": 75, "heartbeat": 40},
+              "client_options": {"keepalive_period": 75, "heartbeat": 40}},
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert server_spec["server_options"]["keepalive_period"] == 75
+    assert server_spec["server_options"]["heartbeat"] == 40
+    assert client_spec["client_options"]["keepalive_period"] == 75
+
+
+def test_spec_builder_backhaul_ws_drops_stale_accept_udp():
+    tunnel = DummyTunnel(
+        id="t-bh-ws", core="backhaul", type="tcp",
+        spec={"ports": [8080], "transport": "wssmux", "token": "t", "accept_udp": True},
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert server_spec["transport"] == "wssmux"
+    assert not server_spec.get("accept_udp")
+
+
+def test_spec_builder_backhaul_range_with_equals_collapsed():
+    tunnel = DummyTunnel(
+        id="t-bh-rng", core="backhaul", type="tcp",
+        spec={"ports": ["27000-27050=127.0.0.1:27000-27050"], "transport": "tcp", "token": "t"},
+    )
+    server_spec, _ = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert server_spec["ports"] == ["27000-27050"]
 
 
 def test_spec_builder_backhaul_port_ranges_and_control_collision():

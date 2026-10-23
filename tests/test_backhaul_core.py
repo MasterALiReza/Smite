@@ -150,7 +150,8 @@ async def test_backhaul_adapter_server_apply_and_cert_files(tmp_path, monkeypatc
         config_file = tmp_path / f"{tunnel_id}.toml"
         assert config_file.exists()
         cfg_text = config_file.read_text(encoding="utf-8")
-        assert "accept_udp = true" in cfg_text
+        # wss does not support accept_udp upstream; must not be written
+        assert "accept_udp" not in cfg_text
         assert str(cert_file) in cfg_text or f"{tunnel_id}_cert.pem" in cfg_text
 
         # Test cleanup on remove
@@ -326,3 +327,35 @@ async def test_backhaul_log_rotation_on_apply(tmp_path, monkeypatch):
 
         # After apply, the log file should have been truncated (opened with "w")
         assert log_file.stat().st_size < 1000
+
+
+@pytest.mark.asyncio
+async def test_backhaul_adapter_client_config_is_upstream_valid(tmp_path, monkeypatch):
+    """Client TOML must not contain keys absent from upstream ClientConfig and must honour false/large values."""
+    adapter = BackhaulAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
+    spec = {
+        "mode": "client",
+        "remote_addr": "1.1.1.1:3080",
+        "transport": "tcp",
+        "token": "tok",
+        "accept_udp": True,
+        "client_options": {
+            "keepalive_period": 75, "heartbeat": 40, "channel_size": 4096,
+            "insecure": True, "nodelay": False, "aggressive_pool": False,
+        },
+    }
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        dummy = MagicMock()
+        dummy.pid = 1234
+        dummy.returncode = None
+        mock_proc.return_value = dummy
+        await adapter.apply("tun-client-test", spec)
+    txt = (tmp_path / "tun-client-test.toml").read_text(encoding="utf-8")
+    assert "keepalive_period = 75" in txt
+    assert "nodelay = false" in txt
+    assert "aggressive_pool = false" in txt
+    for bad in ("accept_udp", "heartbeat", "channel_size", "insecure"):
+        assert bad not in txt

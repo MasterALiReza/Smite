@@ -23,6 +23,8 @@ class TunnelReapplyManager:
         self.interval = 60
         self.interval_unit = "minutes"
         self.request: Optional[Request] = None
+        # consecutive 'process dead' observations per tunnel (debounce for active tunnels)
+        self._dead_strikes: dict = {}
     
     async def load_settings(self):
         """Load settings from database"""
@@ -126,6 +128,34 @@ class TunnelReapplyManager:
                                         flag_modified(tunnel, "spec")
                                         await session.commit()
                                         logger.info(f"Self-Healing: Successfully revived and restored tunnel '{tunnel.name}'")
+                            elif tunnel.status == "active" and tunnel.core == "backhaul":
+                                # Backhaul crash recovery: node is up but the core process died
+                                node_ids = [i for i in (tunnel.iran_node_id or tunnel.node_id, tunnel.foreign_node_id) if i]
+                                process_dead = False
+                                for nid in node_ids:
+                                    try:
+                                        resp = await asyncio.wait_for(client.get_tunnel_status(nid, tunnel.id), timeout=3.5)
+                                    except Exception:
+                                        continue  # unreachable node: handled by node health, not here
+                                    data = (resp or {}).get("data") if isinstance(resp, dict) else None
+                                    if (
+                                        isinstance(resp, dict)
+                                        and resp.get("status") == "success"
+                                        and isinstance(data, dict)
+                                        and data.get("process_running") is False
+                                    ):
+                                        process_dead = True
+                                        break
+                                if not process_dead:
+                                    self._dead_strikes.pop(tunnel.id, None)
+                                else:
+                                    strikes = self._dead_strikes.get(tunnel.id, 0) + 1
+                                    self._dead_strikes[tunnel.id] = strikes
+                                    if strikes >= 2:
+                                        self._dead_strikes.pop(tunnel.id, None)
+                                        logger.warning(f"Self-Healing: Backhaul process for tunnel '{tunnel.name}' is not running; re-applying")
+                                        if await self._reapply_tunnel_safe(tunnel, session, client):
+                                            logger.info(f"Self-Healing: Backhaul tunnel '{tunnel.name}' restarted")
                         except Exception as t_err:
                             logger.debug(f"Self-healing check error for tunnel {tunnel.id}: {t_err}")
             except asyncio.CancelledError:

@@ -73,6 +73,7 @@ export interface BackhaulAdvancedServerState {
   mux_framesize: string
   mux_recievebuffer: string
   mux_streambuffer: string
+  mux_session: string
 }
 
 export interface BackhaulAdvancedClientState {
@@ -94,6 +95,7 @@ export interface BackhaulAdvancedClientState {
   mux_framesize: string
   mux_recievebuffer: string
   mux_streambuffer: string
+  mux_session: string
 }
 
 export interface BackhaulAdvancedState {
@@ -107,7 +109,7 @@ export const generateRandomControlPort = (): string => {
 }
 
 export const createDefaultBackhaulState = (): BackhaulFormState => ({
-  transport: 'tcp',
+  transport: 'tcpmux',
   control_port: generateRandomControlPort(),
   public_port: '443',
   listen_ip: '0.0.0.0',
@@ -141,6 +143,7 @@ export const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => (
     mux_framesize: '32768',
     mux_recievebuffer: '',
     mux_streambuffer: '',
+    mux_session: '',
   },
   client: {
     connection_pool: '8',
@@ -161,9 +164,26 @@ export const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => (
     mux_framesize: '32768',
     mux_recievebuffer: '',
     mux_streambuffer: '',
+    mux_session: '',
   },
   customPorts: '',
 })
+
+export const resetGamingAdvanced = (prev: BackhaulAdvancedState): BackhaulAdvancedState => {
+  const d = createDefaultBackhaulAdvancedState()
+  const keys = [
+    'channel_size', 'mux_framesize', 'mss', 'keepalive_period',
+    'heartbeat', 'so_rcvbuf', 'so_sndbuf', 'nodelay',
+  ]
+  const server: any = { ...prev.server }
+  const client: any = { ...prev.client }
+  keys.forEach((k) => {
+    server[k] = (d.server as any)[k]
+    client[k] = (d.client as any)[k]
+  })
+  client.aggressive_pool = d.client.aggressive_pool
+  return { ...prev, server, client }
+}
 
 export const numericServerKeys = new Set([
   'keepalive_period',
@@ -178,6 +198,7 @@ export const numericServerKeys = new Set([
   'mux_framesize',
   'mux_recievebuffer',
   'mux_streambuffer',
+  'mux_session',
 ])
 export const booleanServerKeys = new Set(['nodelay', 'skip_optz', 'sniffer', 'proxy_protocol'])
 export const stringServerKeys = new Set(['log_level', 'tls_cert', 'tls_key', 'sniffer_log'])
@@ -196,6 +217,7 @@ export const numericClientKeys = new Set([
   'mux_framesize',
   'mux_recievebuffer',
   'mux_streambuffer',
+  'mux_session',
 ])
 export const booleanClientKeys = new Set(['nodelay', 'aggressive_pool', 'skip_optz'])
 export const stringClientKeys = new Set(['log_level', 'edge_ip'])

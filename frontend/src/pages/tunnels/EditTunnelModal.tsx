@@ -22,7 +22,7 @@ import {
 import {
   Tunnel, TunnelCategory, BackhaulTransport, BackhaulFormState,
   BackhaulAdvancedState, BackhaulAdvancedServerState, BackhaulAdvancedClientState,
-  generateRandomControlPort, createDefaultBackhaulState, createDefaultBackhaulAdvancedState,
+  generateRandomControlPort, createDefaultBackhaulState, createDefaultBackhaulAdvancedState, resetGamingAdvanced,
   numericServerKeys, booleanServerKeys, stringServerKeys,
   numericClientKeys, booleanClientKeys, stringClientKeys, getCategoryColorClasses
 } from './types'
@@ -413,7 +413,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           const targetHost = updatedSpec.target_host || '127.0.0.1'
           updatedSpec.ports = ports.map(p => `${p}=${targetHost}:${p}`)
         }
-        const bhSniVal = (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim()
+        const bhSniVal = (formData.custom_sni || '').trim()
         if (bhSniVal) {
           updatedSpec.custom_sni = bhSniVal
           updatedSpec.stealth_domain = bhSniVal
@@ -440,10 +440,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           stealth_domain: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
         }),
         ...(tunnel.core === 'backhaul' && {
-          type: (backhaulState.accept_udp ? (tunnel.type === 'udp' ? 'udp' : 'tcp+udp') : 'tcp'),
+          type: (backhaulState.accept_udp ? (formData.type === 'udp' ? 'udp' : 'tcp+udp') : 'tcp'),
           security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
-          custom_sni: (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim() || null,
-          stealth_domain: (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim() || null,
+          custom_sni: (formData.custom_sni || '').trim() || null,
+          stealth_domain: (formData.custom_sni || '').trim() || null,
           gaming_mode: Boolean(backhaulState.gaming_mode),
           is_reverse: true,
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
@@ -613,6 +613,32 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           )}
 
           {tunnel.core === 'backhaul' && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+                {t.tunnels.type}
+              </label>
+              <CustomSelect
+                value={formData.type || (backhaulState.accept_udp ? 'tcp+udp' : 'tcp')}
+                onChange={(val) => {
+                  const value = val as string
+                  if (value === 'udp' || value === 'tcp+udp') {
+                    setFormData((prev) => ({ ...prev, type: value, transport_type: 'tcp' }))
+                    setBackhaulState((prev) => ({ ...prev, accept_udp: true, transport: 'tcp' }))
+                  } else {
+                    setFormData((prev) => ({ ...prev, type: 'tcp' }))
+                    setBackhaulState((prev) => ({ ...prev, accept_udp: false }))
+                  }
+                }}
+                options={[
+                  { value: 'tcp', label: 'TCP (Standard)' },
+                  { value: 'udp', label: 'UDP (Gaming / Anti-Lag)' },
+                  { value: 'tcp+udp', label: 'TCP + UDP (Dual Forward)' },
+                ]}
+              />
+            </div>
+          )}
+
+          {tunnel.core === 'backhaul' && (
             <BackhaulSection
               state={backhaulState}
               advancedState={backhaulAdvanced}
@@ -620,6 +646,16 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                 setBackhaulState((prev) => ({ ...prev, ...partial }))
                 if (partial.transport) {
                   setFormData((prev) => ({ ...prev, transport_type: partial.transport as string }))
+                }
+                if (
+                  partial.transport &&
+                  partial.transport !== 'tcp' &&
+                  partial.transport !== 'udp' &&
+                  partial.accept_udp !== true
+                ) {
+                  // other transports ignore accept_udp upstream: keep the tunnel TCP-only
+                  setBackhaulState((prev) => ({ ...prev, accept_udp: false }))
+                  setFormData((prev) => ({ ...prev, type: 'tcp' }))
                 }
                 if (partial.accept_udp !== undefined) {
                   if (partial.accept_udp && formData.type === 'tcp') {
@@ -657,6 +693,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         aggressive_pool: true,
                       },
                     }))
+                  } else {
+                    // Gaming Mode off: restore standard tuning values
+                    setBackhaulAdvanced(resetGamingAdvanced)
                   }
                 }
               }}
@@ -664,7 +703,6 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
               onOpenAdvanced={() => setShowBackhaulAdvanced(true)}
               acceptUdpVisible={
                 backhaulState.transport === 'tcp' ||
-                backhaulState.transport === 'tcpmux' ||
                 backhaulState.transport === 'udp'
               }
               showToast={showToast}

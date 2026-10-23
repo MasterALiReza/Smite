@@ -251,8 +251,7 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
       gaming_mode: false,
     },
     isActive: (backhaulState) =>
-      (backhaulState.transport === 'tcpmux' || backhaulState.transport === 'tcp') &&
-      !backhaulState.gaming_mode,
+      backhaulState.transport === 'tcpmux' && !backhaulState.gaming_mode,
     toastTitle: 'Preset Applied',
     toastMessage: 'Fast Multiplex (tcpmux) Preset applied',
   },
@@ -264,7 +263,8 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
     badge: 'Gaming / UDP Anti-Lag',
     description: 'Yamux nodelay + 8K channel size + aggressive pool for instant UDP responses.',
     appliedValues: {
-      transport: 'tcpmux',
+      // Upstream Backhaul implements accept_udp only for transport=tcp
+      transport: 'tcp',
       accept_udp: true,
       gaming_mode: true,
     },
@@ -281,7 +281,7 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
     description: 'Secure TLS 1.3 WebSocket encapsulation capable of routing via CDN proxies.',
     appliedValues: {
       transport: 'wssmux',
-      accept_udp: true,
+      accept_udp: false,
       gaming_mode: false,
     },
     isActive: (backhaulState) =>

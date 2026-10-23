@@ -14,6 +14,7 @@ Eliminates code duplication across:
 - panel/app/tunnel_reapply_manager.py
 """
 import hashlib
+import re
 import random
 import logging
 from typing import Dict, Any, Tuple, Optional, List
@@ -389,6 +390,25 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     else:
         transport = "tcpmux"
 
+    # Upstream Musixal/Backhaul only implements accept_udp for transport="tcp";
+    # tcpmux/ws/wss/wsmux/wssmux never open a UDP listener. Map UDP-capable
+    # tunnels onto tcp so UDP actually works.
+    if is_udp_over_tcp and transport != "tcp":
+        explicit_udp = tunnel_type in ("udp", "tcp+udp") or is_pure_udp
+        if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
+            # Stale accept_udp flag on a TCP-only tunnel: drop it.
+            is_udp_over_tcp = False
+            server_spec["accept_udp"] = False
+            client_spec["accept_udp"] = False
+            if getattr(tunnel, "spec", None) is not None:
+                tunnel.spec["accept_udp"] = False
+        else:
+            logger.info(
+                f"Backhaul tunnel {getattr(tunnel, 'id', '?')}: transport '{transport}' "
+                "does not support UDP upstream; switching to 'tcp' with accept_udp=true"
+            )
+            transport = "tcp"
+
     if is_udp_over_tcp:
         server_spec["accept_udp"] = True
         client_spec["accept_udp"] = True
@@ -519,7 +539,12 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
             if isinstance(p, str):
                 p_clean = p.strip()
                 if '=' in p_clean:
-                    processed_ports.append(p_clean)
+                    # Backhaul cannot parse "A-B=host:A-B"; collapse to native "A-B"
+                    m_rng = re.fullmatch(r"(\d+)-(\d+)=[^:=]+:(\d+)-(\d+)", p_clean)
+                    if m_rng and m_rng.group(1) == m_rng.group(3) and m_rng.group(2) == m_rng.group(4):
+                        processed_ports.append(f"{m_rng.group(1)}-{m_rng.group(2)}")
+                    else:
+                        processed_ports.append(p_clean)
                 elif p_clean.isdigit():
                     processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
                 elif '-' in p_clean:
@@ -633,10 +658,10 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
 
     for opts in (server_options, client_options):
         kp = opts.get("keepalive_period")
-        if kp is None or not isinstance(kp, (int, float)) or kp > 25:
+        if kp is None or isinstance(kp, bool) or not isinstance(kp, (int, float)) or kp <= 0:
             opts["keepalive_period"] = 12 if is_gaming_mode else 20
         hb = opts.get("heartbeat")
-        if hb is None or not isinstance(hb, (int, float)) or hb > 25:
+        if hb is None or isinstance(hb, bool) or not isinstance(hb, (int, float)) or hb <= 0:
             opts["heartbeat"] = 12 if is_gaming_mode else 20
         if is_udp_over_tcp:
             opts["accept_udp"] = True
@@ -646,7 +671,7 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         "keepalive_period", "heartbeat", "channel_size", "mux_con", "web_port",
         "mss", "so_rcvbuf", "so_sndbuf", "mux_version", "mux_framesize",
         "mux_recievebuffer", "mux_streambuffer", "connection_pool", "retry_interval",
-        "dial_timeout"
+        "dial_timeout", "mux_session"
     }
     backhaul_boolean_keys = {
         "nodelay", "skip_optz", "sniffer", "proxy_protocol", "aggressive_pool", "accept_udp", "insecure"
@@ -669,7 +694,8 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
     v072_keys = [
         "mss", "so_rcvbuf", "so_sndbuf", "proxy_protocol", "skip_optz",
         "channel_size", "mux_version", "mux_framesize", "mux_recievebuffer",
-        "mux_streambuffer", "mux_con", "sniffer", "web_port"
+        "mux_streambuffer", "mux_con", "sniffer", "web_port",
+        "mux_session", "edge_ip", "retry_interval", "dial_timeout", "sniffer_log"
     ]
     for k in v072_keys:
         if k in server_options and k not in server_spec:
