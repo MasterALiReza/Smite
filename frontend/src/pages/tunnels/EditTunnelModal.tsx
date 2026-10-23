@@ -119,24 +119,24 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     node_ipv6: tunnel.spec?.node_ipv6 || '',
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
-    custom_host: tunnel.custom_host || '',
-    custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
-    ws_path: tunnel.ws_path || '',
+    custom_host: tunnel.custom_host || tunnel.spec?.custom_host || '',
+    custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || '',
+    ws_path: tunnel.ws_path || tunnel.spec?.ws_path || '',
     is_reverse: tunnel.is_reverse !== undefined && tunnel.is_reverse !== null
       ? Boolean(tunnel.is_reverse)
       : (tunnel.spec?.is_reverse !== undefined && tunnel.spec?.is_reverse !== null
           ? Boolean(tunnel.spec.is_reverse)
           : !tunnel.spec?.force_direct),
-    stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.spec?.custom_sni || '',
+    stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || '',
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type || 'none',
     selector_strategy: tunnel.selector_strategy || 'fifo',
     utls_fingerprint: tunnel.utls_fingerprint || 'chrome',
     keepalive_interval: tunnel.keepalive_interval || 15,
     failover_ips: tunnel.failover_ips && Array.isArray(tunnel.failover_ips) ? tunnel.failover_ips.join('\n') : '',
-    rate_limit_mbps: tunnel.rate_limit_mbps ? tunnel.rate_limit_mbps.toString() : '',
+    rate_limit_mbps: (tunnel.rate_limit_mbps ?? tunnel.spec?.rate_limit_mbps) ? String(tunnel.rate_limit_mbps ?? tunnel.spec?.rate_limit_mbps) : '',
     allowed_ips: tunnel.allowed_ips && Array.isArray(tunnel.allowed_ips) ? tunnel.allowed_ips.join('\n') : '',
-    rate_limit_enabled: !!tunnel.rate_limit_mbps,
+    rate_limit_enabled: !!(tunnel.rate_limit_mbps || tunnel.spec?.rate_limit_mbps),
     allowed_ips_enabled: !!(tunnel.allowed_ips && tunnel.allowed_ips.length > 0),
     category: tunnel.category || '',
   })
@@ -279,9 +279,12 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           updatedSpec.transport = formData.rathole_transport
           updatedSpec.transport_type = formData.rathole_transport
         }
-        if (formData.custom_sni) {
-          updatedSpec.custom_sni = formData.custom_sni
-          updatedSpec.stealth_domain = formData.custom_sni
+        if (formData.custom_sni && formData.custom_sni.trim()) {
+          updatedSpec.custom_sni = formData.custom_sni.trim()
+          updatedSpec.stealth_domain = formData.custom_sni.trim()
+        } else {
+          delete updatedSpec.custom_sni
+          delete updatedSpec.stealth_domain
         }
         updatedSpec.ports = ports
         updatedSpec.remote_port = ports[0]  // Keep for backward compatibility
@@ -296,6 +299,31 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
         updatedSpec.is_reverse = Boolean(formData.is_reverse)
         updatedSpec.force_direct = !formData.is_reverse
+        if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
+          updatedSpec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
+        } else {
+          delete updatedSpec.rate_limit_mbps
+        }
+        if (formData.stealth_domain && formData.stealth_domain.trim()) {
+          updatedSpec.stealth_domain = formData.stealth_domain.trim()
+        } else {
+          delete updatedSpec.stealth_domain
+        }
+        if (formData.custom_sni && formData.custom_sni.trim()) {
+          updatedSpec.custom_sni = formData.custom_sni.trim()
+        } else {
+          delete updatedSpec.custom_sni
+        }
+        if (formData.custom_host && formData.custom_host.trim()) {
+          updatedSpec.custom_host = formData.custom_host.trim()
+        } else {
+          delete updatedSpec.custom_host
+        }
+        if (formData.ws_path && formData.ws_path.trim()) {
+          updatedSpec.ws_path = formData.ws_path.trim()
+        } else {
+          delete updatedSpec.ws_path
+        }
       } else if (tunnel.core === 'chisel') {
         updatedSpec.ports = ports
         updatedSpec.port_ranges = port_ranges
@@ -350,15 +378,22 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.transport_type = formData.frp_transport || 'tcp'
         updatedSpec.transport = formData.frp_transport || 'tcp'
         updatedSpec.security_type = formData.frp_security || 'tls'
-        updatedSpec.custom_sni = formData.frp_sni || ''
+        if (formData.frp_sni && formData.frp_sni.trim()) {
+          updatedSpec.custom_sni = formData.frp_sni.trim()
+          updatedSpec.stealth_domain = formData.frp_sni.trim()
+        } else {
+          delete updatedSpec.custom_sni
+          delete updatedSpec.stealth_domain
+        }
         updatedSpec.use_encryption = formData.frp_encryption
         updatedSpec.use_compression = formData.frp_compression
         updatedSpec.enable_health_check = formData.frp_health_check !== false
         updatedSpec.health_check_type = formData.frp_health_check !== false ? (tunnel.type === 'http' ? 'http' : 'tcp') : null
-        if (formData.frp_bandwidth_limit) {
-          updatedSpec.bandwidth_limit = formData.frp_bandwidth_limit
+        if (formData.frp_bandwidth_limit && formData.frp_bandwidth_limit.trim()) {
+          updatedSpec.bandwidth_limit = formData.frp_bandwidth_limit.trim()
         } else {
           delete updatedSpec.bandwidth_limit
+          delete updatedSpec.rate_limit_mbps
         }
         if (formData.frp_proxy_protocol && formData.frp_proxy_protocol !== 'none') {
           updatedSpec.proxy_protocol_version = formData.frp_proxy_protocol
@@ -378,6 +413,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           const targetHost = updatedSpec.target_host || '127.0.0.1'
           updatedSpec.ports = ports.map(p => `${p}=${targetHost}:${p}`)
         }
+        const bhSniVal = (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim()
+        if (bhSniVal) {
+          updatedSpec.custom_sni = bhSniVal
+          updatedSpec.stealth_domain = bhSniVal
+        } else {
+          delete updatedSpec.custom_sni
+          delete updatedSpec.stealth_domain
+        }
       }
 
       if (tunnel.core === 'gost' && formData.ws_path && !formData.ws_path.startsWith('/')) {
@@ -392,40 +435,48 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         transport_type: tunnel.core === 'backhaul'
           ? (backhaulState.transport || 'tcpmux')
           : (tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type))),
+        ...(tunnel.core === 'rathole' && {
+          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          stealth_domain: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+        }),
         ...(tunnel.core === 'backhaul' && {
           type: (backhaulState.accept_udp ? (tunnel.type === 'udp' ? 'udp' : 'tcp+udp') : 'tcp'),
           security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
-          custom_sni: backhaulAdvanced.client.edge_ip || formData.custom_sni || null,
+          custom_sni: (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim() || null,
+          stealth_domain: (backhaulAdvanced.client?.edge_ip || formData.custom_sni || '').trim() || null,
           gaming_mode: Boolean(backhaulState.gaming_mode),
           is_reverse: true,
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(tunnel.core === 'frp' && {
           security_type: formData.frp_security || 'tls',
-          custom_sni: formData.frp_sni || null,
+          custom_sni: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
+          stealth_domain: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
+          rate_limit_mbps: null,
         }),
         ...(tunnel.core === 'chisel' && {
           security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
-          custom_sni: formData.chisel_custom_sni || null,
-          custom_host: formData.chisel_custom_host || null,
+          custom_sni: (formData.chisel_custom_sni && formData.chisel_custom_sni.trim()) ? formData.chisel_custom_sni.trim() : null,
+          stealth_domain: (formData.chisel_custom_sni && formData.chisel_custom_sni.trim()) ? formData.chisel_custom_sni.trim() : null,
+          custom_host: (formData.chisel_custom_host && formData.chisel_custom_host.trim()) ? formData.chisel_custom_host.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(tunnel.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
-          custom_host: formData.custom_host,
-          custom_sni: formData.custom_sni,
-          ws_path: formData.ws_path,
+          custom_host: (formData.custom_host && formData.custom_host.trim()) ? formData.custom_host.trim() : null,
+          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          ws_path: (formData.ws_path && formData.ws_path.trim()) ? formData.ws_path.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
-          stealth_domain: formData.stealth_domain || null,
+          stealth_domain: (formData.stealth_domain && formData.stealth_domain.trim()) ? formData.stealth_domain.trim() : null,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
           utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
           keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map((ip: string) => ip.trim()).filter((ip: string) => ip.length > 0) : null,
-          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
+          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0 ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
             ? formData.allowed_ips.split('\n').map((ip: string) => ip.trim()).filter((ip: string) => ip.length > 0)
             : null,

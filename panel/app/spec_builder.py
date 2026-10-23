@@ -236,15 +236,27 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
         server_spec["websocket_tls"] = use_tls
         client_spec["websocket_tls"] = use_tls
 
-        custom_sni = (
-            server_spec.get("custom_sni")
-            or server_spec.get("stealth_domain")
-            or getattr(tunnel, "custom_sni", None)
-            or getattr(tunnel, "stealth_domain", None)
-        )
+        if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
+            custom_sni = (
+                (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
+                or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
+            )
+        else:
+            custom_sni = (
+                server_spec.get("custom_sni")
+                or server_spec.get("stealth_domain")
+            )
         if custom_sni:
             client_spec["custom_sni"] = custom_sni
             server_spec["custom_sni"] = custom_sni
+        else:
+            server_spec.pop("custom_sni", None)
+            server_spec.pop("stealth_domain", None)
+            client_spec.pop("custom_sni", None)
+            client_spec.pop("stealth_domain", None)
+            if getattr(tunnel, "spec", None) is not None and isinstance(tunnel.spec, dict):
+                tunnel.spec.pop("custom_sni", None)
+                tunnel.spec.pop("stealth_domain", None)
 
         host_part = f"[{iran_node_ip}]" if is_valid_ipv6(iran_node_ip) else iran_node_ip
         proto = "wss://" if use_tls else "ws://"
@@ -327,15 +339,27 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         or "none"
     ).lower()
 
-    custom_sni = (
-        getattr(tunnel, "custom_sni", None)
-        or getattr(tunnel, "stealth_domain", None)
-        or server_spec.get("custom_sni")
-        or server_spec.get("stealth_domain")
-    )
+    if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
+        custom_sni = (
+            (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
+            or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
+        )
+    else:
+        custom_sni = (
+            server_spec.get("custom_sni")
+            or server_spec.get("stealth_domain")
+        )
     if custom_sni:
         server_spec["custom_sni"] = custom_sni
         client_spec["custom_sni"] = custom_sni
+    else:
+        server_spec.pop("custom_sni", None)
+        server_spec.pop("stealth_domain", None)
+        client_spec.pop("custom_sni", None)
+        client_spec.pop("stealth_domain", None)
+        if getattr(tunnel, "spec", None) is not None and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("custom_sni", None)
+            tunnel.spec.pop("stealth_domain", None)
 
     server_spec["security_type"] = security_type
     client_spec["security_type"] = security_type
@@ -762,17 +786,20 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         auth = f"smite:{auth}"
 
     # 5. Anti-DPI & Stealth (Custom SNI, Host Header, Decoy Backend)
-    custom_sni = (
-        getattr(tunnel, "custom_sni", None)
-        or getattr(tunnel, "stealth_domain", None)
-        or spec.get("custom_sni")
-        or spec.get("stealth_domain")
-    )
-    custom_host = (
-        getattr(tunnel, "custom_host", None)
-        or spec.get("custom_host")
-        or spec.get("hostname")
-    )
+    if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
+        custom_sni = (
+            (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
+            or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
+        )
+    else:
+        custom_sni = (
+            spec.get("custom_sni")
+            or spec.get("stealth_domain")
+        )
+    if hasattr(tunnel, "custom_host"):
+        custom_host = tunnel.custom_host.strip() if tunnel.custom_host else None
+    else:
+        custom_host = spec.get("custom_host") or spec.get("hostname")
     raw_backend = (
         getattr(tunnel, "backend_url", None)
         or spec.get("backend_url")
@@ -880,8 +907,13 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         server_spec_dict.pop("decoy_url", None)
     if custom_sni:
         server_spec_dict["custom_sni"] = custom_sni
+    else:
+        server_spec_dict.pop("custom_sni", None)
+        server_spec_dict.pop("stealth_domain", None)
     if custom_host:
         server_spec_dict["custom_host"] = custom_host
+    else:
+        server_spec_dict.pop("custom_host", None)
     if use_tls and tls_cert_pem and tls_key_pem:
         server_spec_dict["tls_cert_pem"] = tls_cert_pem
         server_spec_dict["tls_key_pem"] = tls_key_pem
@@ -916,8 +948,13 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         client_spec_dict["fingerprint"] = fingerprint
     if custom_sni:
         client_spec_dict["custom_sni"] = custom_sni
+    else:
+        client_spec_dict.pop("custom_sni", None)
+        client_spec_dict.pop("stealth_domain", None)
     if custom_host:
         client_spec_dict["custom_host"] = custom_host
+    else:
+        client_spec_dict.pop("custom_host", None)
     if user_agent:
         client_spec_dict["user_agent"] = user_agent
     if custom_headers:
@@ -949,8 +986,13 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         tunnel.spec["is_reverse"] = is_reverse
         if custom_sni:
             tunnel.spec["custom_sni"] = custom_sni
+        else:
+            tunnel.spec.pop("custom_sni", None)
+            tunnel.spec.pop("stealth_domain", None)
         if custom_host:
             tunnel.spec["custom_host"] = custom_host
+        else:
+            tunnel.spec.pop("custom_host", None)
         if backend_url:
             tunnel.spec["backend_url"] = backend_url
         else:
@@ -1102,12 +1144,16 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             use_tls = (explicit_security in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", True))
             security_type = explicit_security or ("tls" if use_tls else "none")
 
-    custom_sni = (
-        getattr(tunnel, "custom_sni", None)
-        or getattr(tunnel, "stealth_domain", None)
-        or server_spec.get("custom_sni")
-        or server_spec.get("stealth_domain")
-    )
+    if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
+        custom_sni = (
+            (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
+            or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
+        )
+    else:
+        custom_sni = (
+            server_spec.get("custom_sni")
+            or server_spec.get("stealth_domain")
+        )
 
     # In-memory self-signed TLS certificates for WSS / TLS server
     if use_tls:
@@ -1185,7 +1231,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     default_compression = False if (tunnel_type in ["udp", "tcp+udp"] or getattr(tunnel, "gaming_mode", False) or is_transport_encrypted) else True
     use_encryption = bool(server_spec.get("use_encryption", default_encryption))
     use_compression = bool(server_spec.get("use_compression", default_compression))
-    
+
     # Internal health check configuration
     # FRP ONLY supports 'tcp' and 'http' health checks. It has NO UDP health check.
     # Health checks must NOT be enabled by default to prevent premature unregistering of proxies
@@ -1208,12 +1254,26 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
 
     # Bandwidth limit per proxy: normalize units (FRP schema only accepts KB and MB)
-    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or server_spec.get("rate_limit_mbps")
-    raw_bw = server_spec.get("bandwidth_limit")
+    if hasattr(tunnel, "rate_limit_mbps"):
+        rate_limit_mbps = tunnel.rate_limit_mbps
+    else:
+        rate_limit_mbps = server_spec.get("rate_limit_mbps")
+    if rate_limit_mbps is not None:
+        try:
+            rate_limit_mbps = float(rate_limit_mbps)
+            if rate_limit_mbps <= 0:
+                rate_limit_mbps = None
+        except (ValueError, TypeError):
+            rate_limit_mbps = None
+
+    if hasattr(tunnel, "rate_limit_mbps") and rate_limit_mbps is None:
+        raw_bw = None
+    else:
+        raw_bw = server_spec.get("bandwidth_limit")
     if not raw_bw and rate_limit_mbps and float(rate_limit_mbps) > 0:
         # Mbps (megabits) -> FRP bytes/sec units: 1 Mbps = 125 KB/s
         raw_bw = f"{max(1, int(float(rate_limit_mbps) * 125))}KB"
-    
+
     bandwidth_limit = None
     if raw_bw:
         clean_bw = str(raw_bw).strip().upper().replace(" ", "")
@@ -1285,6 +1345,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     if custom_sni:
         client_spec["custom_sni"] = custom_sni
         server_spec["custom_sni"] = custom_sni
+    else:
+        client_spec.pop("custom_sni", None)
+        client_spec.pop("stealth_domain", None)
+        server_spec.pop("custom_sni", None)
+        server_spec.pop("stealth_domain", None)
+        if tunnel.spec is not None and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("custom_sni", None)
+            tunnel.spec.pop("stealth_domain", None)
     client_spec["use_encryption"] = use_encryption
     client_spec["use_compression"] = use_compression
     client_spec["tunnel_type"] = tunnel_type
@@ -1315,6 +1383,10 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     else:
         client_spec.pop("bandwidth_limit", None)
         client_spec.pop("bandwidth_limit_mode", None)
+        client_spec.pop("rate_limit_mbps", None)
+        server_spec.pop("bandwidth_limit", None)
+        server_spec.pop("bandwidth_limit_mode", None)
+        server_spec.pop("rate_limit_mbps", None)
 
     if proxy_protocol_version and tunnel_type in ["tcp", "http", "https"]:
         client_spec["proxy_protocol_version"] = proxy_protocol_version
@@ -1357,6 +1429,8 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             tunnel.spec["bandwidth_limit"] = bandwidth_limit
         else:
             tunnel.spec.pop("bandwidth_limit", None)
+            tunnel.spec.pop("bandwidth_limit_mode", None)
+            tunnel.spec.pop("rate_limit_mbps", None)
         if proxy_protocol_version and tunnel_type in ["tcp", "http", "https"]:
             tunnel.spec["proxy_protocol_version"] = proxy_protocol_version
         else:
@@ -1432,7 +1506,7 @@ def build_gost_node_specs(
             parsed_port = int(raw_port) if raw_port is not None else None
         except (ValueError, TypeError):
             parsed_port = None
-        
+
         # If no control_port or legacy 44300 default, allocate a unique deterministic port
         if not parsed_port or parsed_port == 44300 or parsed_port < 1024:
             tunnel_id_str = str(getattr(tunnel, "id", "") or "default-gost")
@@ -1491,11 +1565,57 @@ def build_gost_node_specs(
 
     cdn_mode = getattr(tunnel, "cdn_mode", False) or spec.get("cdn_mode", False) or False
     gaming_mode = getattr(tunnel, "gaming_mode", False) or spec.get("gaming_mode", False) or False
-    custom_host = getattr(tunnel, "custom_host", None) or spec.get("custom_host")
-    custom_sni = getattr(tunnel, "custom_sni", None) or spec.get("custom_sni")
-    ws_path = getattr(tunnel, "ws_path", None) or spec.get("ws_path")
-    stealth_domain = getattr(tunnel, "stealth_domain", None) or spec.get("stealth_domain")
-    rate_limit_mbps = getattr(tunnel, "rate_limit_mbps", None) or spec.get("rate_limit_mbps")
+    if hasattr(tunnel, "custom_host"):
+        custom_host = tunnel.custom_host.strip() if tunnel.custom_host else None
+    else:
+        custom_host = spec.get("custom_host")
+    if custom_host is None:
+        spec.pop("custom_host", None)
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("custom_host", None)
+
+    if hasattr(tunnel, "custom_sni"):
+        custom_sni = tunnel.custom_sni.strip() if tunnel.custom_sni else None
+    else:
+        custom_sni = spec.get("custom_sni")
+    if custom_sni is None:
+        spec.pop("custom_sni", None)
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("custom_sni", None)
+
+    if hasattr(tunnel, "ws_path"):
+        ws_path = tunnel.ws_path.strip() if tunnel.ws_path else None
+    else:
+        ws_path = spec.get("ws_path")
+    if ws_path is None:
+        spec.pop("ws_path", None)
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("ws_path", None)
+
+    if hasattr(tunnel, "stealth_domain"):
+        stealth_domain = tunnel.stealth_domain.strip() if tunnel.stealth_domain else None
+    else:
+        stealth_domain = spec.get("stealth_domain")
+    if stealth_domain is None:
+        spec.pop("stealth_domain", None)
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("stealth_domain", None)
+
+    if hasattr(tunnel, "rate_limit_mbps"):
+        rate_limit_mbps = tunnel.rate_limit_mbps
+    else:
+        rate_limit_mbps = spec.get("rate_limit_mbps")
+    if rate_limit_mbps is not None:
+        try:
+            rate_limit_mbps = float(rate_limit_mbps)
+            if rate_limit_mbps <= 0:
+                rate_limit_mbps = None
+        except (ValueError, TypeError):
+            rate_limit_mbps = None
+    if rate_limit_mbps is None:
+        spec.pop("rate_limit_mbps", None)
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("rate_limit_mbps", None)
     transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
     security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "none"
     failover_ips = getattr(tunnel, "failover_ips", None) or spec.get("failover_ips")

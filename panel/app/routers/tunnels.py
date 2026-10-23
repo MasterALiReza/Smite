@@ -1523,34 +1523,78 @@ async def update_tunnel(
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
     
-    spec_changed = (
-        (tunnel_update.spec is not None and tunnel_update.spec != tunnel.spec) or
-        (tunnel_update.cdn_mode is not None and tunnel_update.cdn_mode != tunnel.cdn_mode) or
-        (tunnel_update.gaming_mode is not None and tunnel_update.gaming_mode != tunnel.gaming_mode) or
-        (tunnel_update.custom_host is not None and tunnel_update.custom_host != tunnel.custom_host) or
-        (tunnel_update.custom_sni is not None and tunnel_update.custom_sni != tunnel.custom_sni) or
-        (tunnel_update.ws_path is not None and tunnel_update.ws_path != tunnel.ws_path) or
-        (tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse) or
-        (tunnel_update.node_id is not None and tunnel_update.node_id != tunnel.node_id) or
-        (tunnel_update.foreign_node_id is not None and tunnel_update.foreign_node_id != tunnel.foreign_node_id) or
-        (tunnel_update.iran_node_id is not None and tunnel_update.iran_node_id != tunnel.iran_node_id) or
-        (tunnel_update.port_ranges is not None and tunnel_update.port_ranges != tunnel.port_ranges) or
-        (tunnel_update.stealth_domain is not None and tunnel_update.stealth_domain != tunnel.stealth_domain) or
-        (tunnel_update.allowed_ips is not None and tunnel_update.allowed_ips != tunnel.allowed_ips) or
-        (tunnel_update.rate_limit_mbps is not None and tunnel_update.rate_limit_mbps != tunnel.rate_limit_mbps) or
-        (tunnel_update.transport_type is not None and tunnel_update.transport_type != tunnel.transport_type) or
-        (tunnel_update.security_type is not None and tunnel_update.security_type != tunnel.security_type) or
-        (tunnel_update.failover_ips is not None and tunnel_update.failover_ips != tunnel.failover_ips) or
-        (tunnel_update.utls_fingerprint is not None and tunnel_update.utls_fingerprint != tunnel.utls_fingerprint) or
-        (tunnel_update.custom_headers is not None and tunnel_update.custom_headers != tunnel.custom_headers) or
-        (tunnel_update.obfuscation_type is not None and tunnel_update.obfuscation_type != tunnel.obfuscation_type) or
-        (tunnel_update.mux_type is not None and tunnel_update.mux_type != tunnel.mux_type) or
-        (tunnel_update.relay_hops is not None and tunnel_update.relay_hops != tunnel.relay_hops) or
-        (tunnel_update.bypass_ips is not None and tunnel_update.bypass_ips != tunnel.bypass_ips) or
-        (tunnel_update.dns_resolvers is not None and tunnel_update.dns_resolvers != tunnel.dns_resolvers) or
-        (tunnel_update.selector_strategy is not None and tunnel_update.selector_strategy != tunnel.selector_strategy) or
-        (tunnel_update.keepalive_interval is not None and tunnel_update.keepalive_interval != tunnel.keepalive_interval)
-    )
+    fields_set = getattr(tunnel_update, "model_fields_set", set())
+    if not fields_set:
+        fields_set = getattr(tunnel_update, "__fields_set__", set())
+
+    def is_field_set(fname: str) -> bool:
+        if fields_set:
+            return fname in fields_set
+        return getattr(tunnel_update, fname, None) is not None
+
+    spec_changed = False
+
+    if is_field_set("spec") and tunnel_update.spec != tunnel.spec:
+        spec_changed = True
+    if is_field_set("cdn_mode") and bool(tunnel_update.cdn_mode) != bool(tunnel.cdn_mode):
+        spec_changed = True
+    if is_field_set("gaming_mode") and bool(tunnel_update.gaming_mode) != bool(tunnel.gaming_mode):
+        spec_changed = True
+    if is_field_set("custom_host") and (tunnel_update.custom_host.strip() if tunnel_update.custom_host else None) != tunnel.custom_host:
+        spec_changed = True
+    if is_field_set("custom_sni") and (tunnel_update.custom_sni.strip() if tunnel_update.custom_sni else None) != tunnel.custom_sni:
+        spec_changed = True
+    if is_field_set("ws_path") and (tunnel_update.ws_path.strip() if tunnel_update.ws_path else None) != tunnel.ws_path:
+        spec_changed = True
+    if is_field_set("is_reverse") and tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse:
+        spec_changed = True
+    if is_field_set("node_id") and (tunnel_update.node_id.strip() if tunnel_update.node_id else None) != tunnel.node_id:
+        spec_changed = True
+    if is_field_set("foreign_node_id") and (tunnel_update.foreign_node_id.strip() if tunnel_update.foreign_node_id else None) != tunnel.foreign_node_id:
+        spec_changed = True
+    if is_field_set("iran_node_id") and (tunnel_update.iran_node_id.strip() if tunnel_update.iran_node_id else None) != tunnel.iran_node_id:
+        spec_changed = True
+    if is_field_set("port_ranges") and (tunnel_update.port_ranges if tunnel_update.port_ranges else None) != tunnel.port_ranges:
+        spec_changed = True
+    if is_field_set("stealth_domain") and (tunnel_update.stealth_domain.strip() if tunnel_update.stealth_domain else None) != tunnel.stealth_domain:
+        spec_changed = True
+    if is_field_set("allowed_ips") and tunnel_update.allowed_ips != tunnel.allowed_ips:
+        spec_changed = True
+    if is_field_set("rate_limit_mbps"):
+        parsed_rl = tunnel_update.rate_limit_mbps
+        if parsed_rl is not None:
+            try:
+                parsed_rl = float(parsed_rl)
+                if parsed_rl <= 0:
+                    parsed_rl = None
+            except (ValueError, TypeError):
+                parsed_rl = None
+        if parsed_rl != tunnel.rate_limit_mbps:
+            spec_changed = True
+    if is_field_set("transport_type") and tunnel_update.transport_type and tunnel_update.transport_type != tunnel.transport_type:
+        spec_changed = True
+    if is_field_set("security_type") and tunnel_update.security_type and tunnel_update.security_type != tunnel.security_type:
+        spec_changed = True
+    if is_field_set("failover_ips") and tunnel_update.failover_ips != tunnel.failover_ips:
+        spec_changed = True
+    if is_field_set("utls_fingerprint") and tunnel_update.utls_fingerprint != tunnel.utls_fingerprint:
+        spec_changed = True
+    if is_field_set("custom_headers") and tunnel_update.custom_headers != tunnel.custom_headers:
+        spec_changed = True
+    if is_field_set("obfuscation_type") and tunnel_update.obfuscation_type != tunnel.obfuscation_type:
+        spec_changed = True
+    if is_field_set("mux_type") and tunnel_update.mux_type != tunnel.mux_type:
+        spec_changed = True
+    if is_field_set("relay_hops") and tunnel_update.relay_hops != tunnel.relay_hops:
+        spec_changed = True
+    if is_field_set("bypass_ips") and tunnel_update.bypass_ips != tunnel.bypass_ips:
+        spec_changed = True
+    if is_field_set("dns_resolvers") and tunnel_update.dns_resolvers != tunnel.dns_resolvers:
+        spec_changed = True
+    if is_field_set("selector_strategy") and tunnel_update.selector_strategy != tunnel.selector_strategy:
+        spec_changed = True
+    if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval != tunnel.keepalive_interval:
+        spec_changed = True
     
     if tunnel_update.name is not None:
         tunnel.name = tunnel_update.name
@@ -1561,17 +1605,36 @@ async def update_tunnel(
             ports = tunnel_update.spec.get("ports", [])
             logger.info(f"Backhaul tunnel update {tunnel_id}: preserving ports from update: {ports} (count: {len(ports) if isinstance(ports, list) else 'N/A'})")
         tunnel.spec = tunnel_update.spec
-    if tunnel_update.cdn_mode is not None:
-        tunnel.cdn_mode = tunnel_update.cdn_mode
-    if tunnel_update.gaming_mode is not None:
-        tunnel.gaming_mode = tunnel_update.gaming_mode
-    if tunnel_update.custom_host is not None:
-        tunnel.custom_host = tunnel_update.custom_host
-    if tunnel_update.custom_sni is not None:
-        tunnel.custom_sni = tunnel_update.custom_sni
-    if tunnel_update.ws_path is not None:
-        tunnel.ws_path = tunnel_update.ws_path
-    if tunnel_update.is_reverse is not None:
+    if is_field_set("cdn_mode"):
+        tunnel.cdn_mode = bool(tunnel_update.cdn_mode)
+    if is_field_set("gaming_mode"):
+        tunnel.gaming_mode = bool(tunnel_update.gaming_mode)
+    if is_field_set("custom_host"):
+        tunnel.custom_host = tunnel_update.custom_host.strip() if tunnel_update.custom_host else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.custom_host:
+                tunnel.spec["custom_host"] = tunnel.custom_host
+            else:
+                tunnel.spec.pop("custom_host", None)
+    if is_field_set("custom_sni"):
+        tunnel.custom_sni = tunnel_update.custom_sni.strip() if tunnel_update.custom_sni else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.custom_sni:
+                tunnel.spec["custom_sni"] = tunnel.custom_sni
+            else:
+                tunnel.spec.pop("custom_sni", None)
+                if not getattr(tunnel, "stealth_domain", None) or tunnel.core in ["frp", "backhaul", "rathole", "chisel"]:
+                    tunnel.spec.pop("stealth_domain", None)
+                    if tunnel.core in ["frp", "backhaul", "rathole", "chisel"]:
+                        tunnel.stealth_domain = None
+    if is_field_set("ws_path"):
+        tunnel.ws_path = tunnel_update.ws_path.strip() if tunnel_update.ws_path else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.ws_path:
+                tunnel.spec["ws_path"] = tunnel.ws_path
+            else:
+                tunnel.spec.pop("ws_path", None)
+    if is_field_set("is_reverse") and tunnel_update.is_reverse is not None:
         tunnel.is_reverse = tunnel_update.is_reverse
         if isinstance(tunnel.spec, dict):
             tunnel.spec["is_reverse"] = tunnel_update.is_reverse
@@ -1583,45 +1646,86 @@ async def update_tunnel(
             if tunnel.is_reverse is not None:
                 tunnel.spec["is_reverse"] = tunnel.is_reverse
                 tunnel.spec["force_direct"] = not tunnel.is_reverse
-    if tunnel_update.node_id is not None:
-        tunnel.node_id = tunnel_update.node_id if tunnel_update.node_id.strip() else None
-    if tunnel_update.foreign_node_id is not None:
-        tunnel.foreign_node_id = tunnel_update.foreign_node_id if tunnel_update.foreign_node_id.strip() else None
-    if tunnel_update.iran_node_id is not None:
-        tunnel.iran_node_id = tunnel_update.iran_node_id if tunnel_update.iran_node_id.strip() else None
-    if tunnel_update.port_ranges is not None:
-        tunnel.port_ranges = tunnel_update.port_ranges
-    if tunnel_update.stealth_domain is not None:
-        tunnel.stealth_domain = tunnel_update.stealth_domain
-    if tunnel_update.allowed_ips is not None:
-        tunnel.allowed_ips = tunnel_update.allowed_ips
-    if tunnel_update.rate_limit_mbps is not None:
-        tunnel.rate_limit_mbps = tunnel_update.rate_limit_mbps
-    if tunnel_update.transport_type is not None:
+    if is_field_set("node_id"):
+        tunnel.node_id = tunnel_update.node_id.strip() if (tunnel_update.node_id and tunnel_update.node_id.strip()) else None
+    if is_field_set("foreign_node_id"):
+        tunnel.foreign_node_id = tunnel_update.foreign_node_id.strip() if (tunnel_update.foreign_node_id and tunnel_update.foreign_node_id.strip()) else None
+    if is_field_set("iran_node_id"):
+        tunnel.iran_node_id = tunnel_update.iran_node_id.strip() if (tunnel_update.iran_node_id and tunnel_update.iran_node_id.strip()) else None
+    if is_field_set("port_ranges"):
+        tunnel.port_ranges = tunnel_update.port_ranges if tunnel_update.port_ranges else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.port_ranges:
+                tunnel.spec["port_ranges"] = tunnel.port_ranges
+            else:
+                tunnel.spec.pop("port_ranges", None)
+    if is_field_set("stealth_domain"):
+        tunnel.stealth_domain = tunnel_update.stealth_domain.strip() if tunnel_update.stealth_domain else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.stealth_domain:
+                tunnel.spec["stealth_domain"] = tunnel.stealth_domain
+            else:
+                tunnel.spec.pop("stealth_domain", None)
+                if not getattr(tunnel, "custom_sni", None) or tunnel.core in ["frp", "backhaul", "rathole", "chisel"]:
+                    tunnel.spec.pop("custom_sni", None)
+                    if tunnel.core in ["frp", "backhaul", "rathole", "chisel"]:
+                        tunnel.custom_sni = None
+    if is_field_set("allowed_ips"):
+        tunnel.allowed_ips = tunnel_update.allowed_ips if tunnel_update.allowed_ips else None
+        if isinstance(tunnel.spec, dict):
+            if tunnel.allowed_ips:
+                tunnel.spec["allowed_ips"] = tunnel.allowed_ips
+            else:
+                tunnel.spec.pop("allowed_ips", None)
+    if is_field_set("rate_limit_mbps"):
+        new_rl_val = tunnel_update.rate_limit_mbps
+        if new_rl_val is not None:
+            try:
+                new_rl_val = float(new_rl_val)
+                if new_rl_val <= 0:
+                    new_rl_val = None
+            except (ValueError, TypeError):
+                new_rl_val = None
+        tunnel.rate_limit_mbps = new_rl_val
+        if isinstance(tunnel.spec, dict):
+            if new_rl_val is not None:
+                tunnel.spec["rate_limit_mbps"] = new_rl_val
+            else:
+                tunnel.spec.pop("rate_limit_mbps", None)
+                if tunnel.core == "frp":
+                    tunnel.spec.pop("bandwidth_limit", None)
+                    tunnel.spec.pop("bandwidth_limit_mode", None)
+    elif tunnel.core == "frp" and tunnel_update.spec is not None:
+        if not tunnel_update.spec.get("bandwidth_limit") and not getattr(tunnel, "rate_limit_mbps", None):
+            if isinstance(tunnel.spec, dict):
+                tunnel.spec.pop("bandwidth_limit", None)
+                tunnel.spec.pop("bandwidth_limit_mode", None)
+                tunnel.spec.pop("rate_limit_mbps", None)
+    if is_field_set("transport_type") and tunnel_update.transport_type:
         tunnel.transport_type = tunnel_update.transport_type
-    if tunnel_update.security_type is not None:
+    if is_field_set("security_type") and tunnel_update.security_type:
         tunnel.security_type = tunnel_update.security_type
-    if tunnel_update.failover_ips is not None:
-        tunnel.failover_ips = tunnel_update.failover_ips
-    if tunnel_update.utls_fingerprint is not None:
+    if is_field_set("failover_ips"):
+        tunnel.failover_ips = tunnel_update.failover_ips if tunnel_update.failover_ips else None
+    if is_field_set("utls_fingerprint"):
         tunnel.utls_fingerprint = tunnel_update.utls_fingerprint
-    if tunnel_update.custom_headers is not None:
-        tunnel.custom_headers = tunnel_update.custom_headers
-    if tunnel_update.obfuscation_type is not None:
+    if is_field_set("custom_headers"):
+        tunnel.custom_headers = tunnel_update.custom_headers if tunnel_update.custom_headers else None
+    if is_field_set("obfuscation_type"):
         tunnel.obfuscation_type = tunnel_update.obfuscation_type
-    if tunnel_update.mux_type is not None:
+    if is_field_set("mux_type"):
         tunnel.mux_type = tunnel_update.mux_type
-    if tunnel_update.relay_hops is not None:
-        tunnel.relay_hops = tunnel_update.relay_hops
-    if tunnel_update.bypass_ips is not None:
-        tunnel.bypass_ips = tunnel_update.bypass_ips
-    if tunnel_update.dns_resolvers is not None:
-        tunnel.dns_resolvers = tunnel_update.dns_resolvers
-    if tunnel_update.category is not None:
-        tunnel.category = tunnel_update.category.strip() if tunnel_update.category.strip() else None
-    if tunnel_update.selector_strategy is not None:
+    if is_field_set("relay_hops"):
+        tunnel.relay_hops = tunnel_update.relay_hops if tunnel_update.relay_hops else None
+    if is_field_set("bypass_ips"):
+        tunnel.bypass_ips = tunnel_update.bypass_ips if tunnel_update.bypass_ips else None
+    if is_field_set("dns_resolvers"):
+        tunnel.dns_resolvers = tunnel_update.dns_resolvers if tunnel_update.dns_resolvers else None
+    if is_field_set("category"):
+        tunnel.category = tunnel_update.category.strip() if (tunnel_update.category and tunnel_update.category.strip()) else None
+    if is_field_set("selector_strategy"):
         tunnel.selector_strategy = tunnel_update.selector_strategy
-    if tunnel_update.keepalive_interval is not None:
+    if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval is not None:
         tunnel.keepalive_interval = tunnel_update.keepalive_interval
         
     if spec_changed or tunnel_update.spec is not None:
@@ -1954,7 +2058,26 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             spec_for_node["custom_sni"] = getattr(tunnel, "custom_sni", None)
             spec_for_node["ws_path"] = getattr(tunnel, "ws_path", None)
             spec_for_node["stealth_domain"] = getattr(tunnel, "stealth_domain", None)
-            spec_for_node["rate_limit_mbps"] = getattr(tunnel, "rate_limit_mbps", None)
+            if not spec_for_node.get("custom_host"):
+                spec_for_node.pop("custom_host", None)
+            if not spec_for_node.get("custom_sni"):
+                spec_for_node.pop("custom_sni", None)
+            if not spec_for_node.get("ws_path"):
+                spec_for_node.pop("ws_path", None)
+            if not spec_for_node.get("stealth_domain"):
+                spec_for_node.pop("stealth_domain", None)
+            rl_val = getattr(tunnel, "rate_limit_mbps", None)
+            if rl_val is not None:
+                try:
+                    rl_val = float(rl_val)
+                    if rl_val <= 0:
+                        rl_val = None
+                except (ValueError, TypeError):
+                    rl_val = None
+            if rl_val is not None:
+                spec_for_node["rate_limit_mbps"] = rl_val
+            else:
+                spec_for_node.pop("rate_limit_mbps", None)
             spec_for_node["allowed_ips"] = getattr(tunnel, "allowed_ips", None)
             spec_for_node["port_ranges"] = getattr(tunnel, "port_ranges", None)
             spec_for_node["transport_type"] = getattr(tunnel, "transport_type", "tcp")
@@ -1964,6 +2087,12 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             spec_for_node["keepalive_interval"] = getattr(tunnel, "keepalive_interval", 15)
         
         if tunnel.core == "frp":
+            if not getattr(tunnel, "rate_limit_mbps", None) and not spec_for_node.get("bandwidth_limit"):
+                spec_for_node.pop("bandwidth_limit", None)
+                spec_for_node.pop("rate_limit_mbps", None)
+            if not getattr(tunnel, "custom_sni", None) and not getattr(tunnel, "stealth_domain", None):
+                spec_for_node.pop("custom_sni", None)
+                spec_for_node.pop("stealth_domain", None)
             try:
                 spec_for_node = prepare_frp_spec_for_node(spec_for_node, node, request)
                 logger.info(f"FRP spec prepared for tunnel {tunnel.id}: server_addr={spec_for_node.get('server_addr')}, server_port={spec_for_node.get('server_port')}, spec={sanitize_spec_for_log(spec_for_node)}")

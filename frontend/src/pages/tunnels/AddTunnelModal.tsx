@@ -233,6 +233,31 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         spec.remote_port = fallbackPort  // Keep first port for backward compatibility
         spec.is_reverse = Boolean(formData.is_reverse)
         spec.force_direct = !formData.is_reverse
+        if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
+          spec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
+        } else {
+          delete spec.rate_limit_mbps
+        }
+        if (formData.stealth_domain && formData.stealth_domain.trim()) {
+          spec.stealth_domain = formData.stealth_domain.trim()
+        } else {
+          delete spec.stealth_domain
+        }
+        if (formData.custom_sni && formData.custom_sni.trim()) {
+          spec.custom_sni = formData.custom_sni.trim()
+        } else {
+          delete spec.custom_sni
+        }
+        if (formData.custom_host && formData.custom_host.trim()) {
+          spec.custom_host = formData.custom_host.trim()
+        } else {
+          delete spec.custom_host
+        }
+        if (formData.ws_path && formData.ws_path.trim()) {
+          spec.ws_path = formData.ws_path.trim()
+        } else {
+          delete spec.ws_path
+        }
       }
       
       if (formData.core === 'rathole') {
@@ -249,9 +274,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         spec.listen_port = ports[0]
         spec.transport = formData.rathole_transport || 'tcp'
         spec.transport_type = formData.rathole_transport || 'tcp'
-        if (formData.custom_sni) {
-          spec.custom_sni = formData.custom_sni
-          spec.stealth_domain = formData.custom_sni
+        if (formData.custom_sni && formData.custom_sni.trim()) {
+          spec.custom_sni = formData.custom_sni.trim()
+          spec.stealth_domain = formData.custom_sni.trim()
+        } else {
+          delete spec.custom_sni
+          delete spec.stealth_domain
         }
       }
       
@@ -274,9 +302,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         if (formData.chisel_backend_url) {
           spec.backend_url = formData.chisel_backend_url
         }
-        if (formData.chisel_custom_sni) {
-          spec.custom_sni = formData.chisel_custom_sni
-          spec.stealth_domain = formData.chisel_custom_sni
+        if (formData.chisel_custom_sni && formData.chisel_custom_sni.trim()) {
+          spec.custom_sni = formData.chisel_custom_sni.trim()
+          spec.stealth_domain = formData.chisel_custom_sni.trim()
+        } else {
+          delete spec.custom_sni
+          delete spec.stealth_domain
         }
         if (formData.chisel_custom_host) {
           spec.custom_host = formData.chisel_custom_host
@@ -366,7 +397,13 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         spec.transport_type = formData.frp_transport || 'tcp'
         spec.transport = formData.frp_transport || 'tcp'
         spec.security_type = formData.frp_security || 'tls'
-        spec.custom_sni = formData.frp_sni || ''
+        if (formData.frp_sni && formData.frp_sni.trim()) {
+          spec.custom_sni = formData.frp_sni.trim()
+          spec.stealth_domain = formData.frp_sni.trim()
+        } else {
+          delete spec.custom_sni
+          delete spec.stealth_domain
+        }
         spec.use_encryption = formData.frp_encryption
         spec.use_compression = formData.frp_compression
         spec.enable_health_check = formData.frp_health_check !== false
@@ -398,18 +435,18 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         ...(formData.core === 'gost' && {
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
-          custom_host: formData.custom_host,
-          custom_sni: formData.custom_sni,
-          ws_path: formData.ws_path,
+          custom_host: (formData.custom_host && formData.custom_host.trim()) ? formData.custom_host.trim() : null,
+          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          ws_path: (formData.ws_path && formData.ws_path.trim()) ? formData.ws_path.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
-          stealth_domain: formData.stealth_domain || null,
+          stealth_domain: (formData.stealth_domain && formData.stealth_domain.trim()) ? formData.stealth_domain.trim() : null,
           transport_type: formData.transport_type,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
           utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
           keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
-          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps ? parseFloat(formData.rate_limit_mbps) : null,
+          rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0 ? parseFloat(formData.rate_limit_mbps) : null,
           allowed_ips: formData.allowed_ips_enabled && formData.allowed_ips 
             ? formData.allowed_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
             : null,
@@ -418,25 +455,30 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         ...(formData.core === 'frp' && {
           transport_type: formData.frp_transport || 'tcp',
           security_type: formData.frp_security || 'tls',
-          custom_sni: formData.frp_sni || null,
+          custom_sni: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
+          stealth_domain: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           is_reverse: formData.is_reverse !== false,
         }),
         ...(formData.core === 'chisel' && {
           transport_type: formData.chisel_transport || 'ws',
           security_type: formData.chisel_transport === 'wss' ? 'tls' : 'none',
-          custom_sni: formData.chisel_custom_sni || null,
-          custom_host: formData.chisel_custom_host || null,
+          custom_sni: (formData.chisel_custom_sni && formData.chisel_custom_sni.trim()) ? formData.chisel_custom_sni.trim() : null,
+          stealth_domain: (formData.chisel_custom_sni && formData.chisel_custom_sni.trim()) ? formData.chisel_custom_sni.trim() : null,
+          custom_host: (formData.chisel_custom_host && formData.chisel_custom_host.trim()) ? formData.chisel_custom_host.trim() : null,
           is_reverse: formData.is_reverse !== false,
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(formData.core === 'rathole' && {
           transport_type: formData.rathole_transport || 'tcp',
+          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          stealth_domain: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
           is_reverse: true,
         }),
         ...(formData.core === 'backhaul' && {
           transport_type: backhaulState.transport || 'tcpmux',
           security_type: (backhaulState.transport === 'wss' || backhaulState.transport === 'wssmux') ? 'tls' : 'none',
-          custom_sni: (backhaulAdvanced as any).sni || null,
+          custom_sni: ((backhaulAdvanced as any).sni || (formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
+          stealth_domain: ((backhaulAdvanced as any).sni || (formData.custom_sni && formData.custom_sni.trim()) || '').trim() || null,
           gaming_mode: backhaulState.gaming_mode || backhaulAdvanced.server.nodelay || false,
           port_ranges: ((backhaulAdvanced as any).port_ranges && (backhaulAdvanced as any).port_ranges.trim())
             ? (backhaulAdvanced as any).port_ranges.split(',').map((s: string) => s.trim()).filter(Boolean)
