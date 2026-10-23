@@ -608,22 +608,17 @@ const Tunnels = () => {
         </div>
       </div>
 
-      {/* ── Sticky Toolbar Wrapper: Sticks flush to top edge on scroll with zero gap and full frosted backdrop mask ── */}
+      {/* ── Sticky Toolbar: Unified full-bleed frosted header bar flush against the top edge ── */}
       <div
-        className={`sticky -top-3.5 sm:-top-6 lg:-top-8 z-20 -mx-3.5 sm:-mx-6 lg:-mx-8 px-3.5 sm:px-6 lg:px-8 py-2 sm:py-2.5 transition-all duration-200 ease-out ${
-          isScrolled
-            ? 'bg-slate-50/95 dark:bg-[#070a13]/95 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] shadow-xs'
-            : 'bg-transparent border-b border-transparent'
+        className={`sticky -top-3.5 sm:-top-6 lg:-top-8 z-20 -mx-3.5 sm:-mx-6 lg:-mx-8 px-3.5 sm:px-6 lg:px-8 py-2.5 sm:py-3 backdrop-blur-2xl border-b transition-all duration-200 ease-out ${
+          isScrolled ? 'shadow-md dark:shadow-2xl' : 'shadow-xs'
+        } ${
+          selectedTunnelIds.size > 0
+            ? 'bg-indigo-50/95 dark:bg-[#0f1424]/95 border-indigo-200/90 dark:border-indigo-500/30'
+            : 'bg-slate-50/95 dark:bg-[#070a13]/95 border-slate-200/80 dark:border-white/[0.08]'
         }`}
       >
         <div className="max-w-7xl mx-auto">
-          <div
-            className={`transition-all duration-200 rounded-2xl border p-2 backdrop-blur-xl shadow-xs ${
-              selectedTunnelIds.size > 0
-                ? 'bg-indigo-50/90 dark:bg-[#0f1424]/95 border-indigo-200/80 dark:border-indigo-500/25 ring-2 ring-indigo-500/20'
-                : 'bg-white/95 dark:bg-[#0c101d]/95 border-slate-200/80 dark:border-white/[0.08] ring-1 ring-black/5 dark:ring-white/5'
-            }`}
-          >
         {selectedTunnelIds.size > 0 ? (
           /* ── Contextual Bulk Selection Mode (Mobile-Optimized Grid + Desktop Inline) ── */
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 px-0.5 py-0.5 animate-fade-in">
@@ -1020,7 +1015,6 @@ const Tunnels = () => {
             </div>
           </div>
         )}
-          </div>
         </div>
       </div>
 
