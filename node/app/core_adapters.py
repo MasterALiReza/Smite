@@ -1550,6 +1550,13 @@ class BackhaulAdapter:
                 server_config["heartbeat"] = int(hb)
 
             server_config.setdefault("nodelay", True)
+            if transport in ("tcpmux", "wsmux", "wssmux"):
+                server_config.setdefault("mux_version", 2)
+                if spec.get("gaming_mode"):
+                    server_config.setdefault("mux_streambuffer", 2097152)
+                else:
+                    server_config.setdefault("mux_recievebuffer", 16777216)
+                    server_config.setdefault("mux_streambuffer", 4194304)
 
             if server_config.get("sniffer") and not server_config.get("sniffer_log"):
                 server_config["sniffer_log"] = str(self.config_dir / f"{tunnel_id}_sniffer.json")
@@ -1682,6 +1689,13 @@ class BackhaulAdapter:
             # upstream ClientConfig (UDP is negotiated by the server; wss/wssmux
             # always skip cert verification), so they are never written here.
             config_dict.setdefault("nodelay", True)
+            if transport in ("tcpmux", "wsmux", "wssmux"):
+                config_dict.setdefault("mux_version", 2)
+                if spec.get("gaming_mode"):
+                    config_dict.setdefault("mux_streambuffer", 2097152)
+                else:
+                    config_dict.setdefault("mux_recievebuffer", 16777216)
+                    config_dict.setdefault("mux_streambuffer", 4194304)
 
             if "connection_pool" not in config_dict:
                 config_dict["connection_pool"] = 8
@@ -3234,12 +3248,25 @@ class GostAdapter:
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
         mux_type = spec.get("mux_type") or "yamux"
         is_reverse_mode = bool(is_reverse)
-        # For reverse tunnels (rtcp), multiplexing (yamux) is mandatory to prevent socket closure after the first connection
-        enable_mux = (bool(spec.get("gaming_mode")) or bool(spec.get("multiplex")) or is_udp_mode or is_reverse_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
+        is_gaming_mode = bool(spec.get("gaming_mode"))
+        # Avoid Nested Double-SMUX in reverse mode: the relay handler/dialer already
+        # creates a BIND SMUX session. Do not wrap underlying transport in an extra
+        # layer of mtcp/mtls multiplexing unless explicitly requested via mux or tcpmux.
+        is_explicit_mux = (
+            bool(spec.get("multiplex"))
+            or bool(spec.get("enable_mux"))
+            or raw_proto in ["tcpmux", "mux"]
+            or (spec.get("transport_type") or "").lower() in ["tcpmux", "mux"]
+            or (spec.get("transport") or "").lower() in ["tcpmux", "mux"]
+        )
+        if is_reverse_mode:
+            enable_mux = is_explicit_mux and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
+        else:
+            enable_mux = (is_gaming_mode or is_explicit_mux or is_udp_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
         # Low-latency tuning for UDP/gaming tunnels. Everything here only changes how
         # THIS side sends or buffers, so it is wire compatible with a peer running an
         # older agent (safe during rolling updates).
-        low_latency = is_udp_mode or bool(spec.get("gaming_mode")) or spec.get("latency_profile") == "gaming-v1"
+        low_latency = is_gaming_mode or spec.get("latency_profile") == "gaming-v1" or is_udp_mode
 
         raw_interval = spec.get("keepalive_interval") or 15
         try:
@@ -3256,14 +3283,16 @@ class GostAdapter:
         reverse_ttl_str = f"{reverse_ttl_sec}s"
 
         # Standard GOST v3 multiplexing metadata (mux.version: 2, xtaci/smux)
+        # Keep mux.maxFrameSize at 32768 (32KB) for normal tunnels, tcp+udp dual forward,
+        # and anti-packet-loss presets. Only set 4KB frame size when competitive gaming_mode is explicitly enabled.
         mux_tuning = {
             "mux.version": 2,
             "mux.keepaliveDisabled": False,
             "mux.keepaliveInterval": ka_interval_str,
             "mux.keepaliveTimeout": ka_timeout_str,
-            "mux.maxFrameSize": 4096 if (low_latency and enable_mux) else 32768,
-            "mux.maxReceiveBuffer": 4194304,
-            "mux.maxStreamBuffer": 1048576,
+            "mux.maxFrameSize": 4096 if is_gaming_mode else 32768,
+            "mux.maxReceiveBuffer": 33554432,
+            "mux.maxStreamBuffer": 8388608,
         }
 
         config = {
@@ -3375,7 +3404,7 @@ class GostAdapter:
                     "keepAliveTimeout": ka_timeout_str,
                     "idleTimeout": "300s",
                     "nodelay": True,
-                    "bufferSize": 65536,
+                    "bufferSize": 262144,
                 }
                 if spec.get("ws_path"):
                     listener_metadata["path"] = spec.get("ws_path")
@@ -3670,7 +3699,7 @@ class GostAdapter:
                 dialer_metadata["timeout"] = "20s"
                 dialer_metadata["idleTimeout"] = "300s"
                 dialer_metadata["nodelay"] = True
-                dialer_metadata["bufferSize"] = 65536
+                dialer_metadata["bufferSize"] = 262144
                 if ws_mux:
                     dialer_metadata["mux"] = True
                     dialer_metadata["nodelay"] = True
@@ -3707,7 +3736,7 @@ class GostAdapter:
             hop_nodes = []
             
             connector_metadata = {
-                "bufferSize": 65536
+                "bufferSize": 262144
             }
             if enable_mux:
                 connector_metadata["mux.type"] = mux_type
@@ -3878,7 +3907,7 @@ class GostAdapter:
                                 "keepalive.idle": ka_interval_str,
                                 "keepalive.interval": ka_interval_str,
                                 "keepalive.timeout": ka_timeout_str,
-                                "bufferSize": 65536
+                                "bufferSize": 262144
                             }
                         }
                         handler_tcp = {
@@ -3925,7 +3954,7 @@ class GostAdapter:
                     udp_handler_metadata = {
                         "ttl": UDP_SESSION_TTL,
                         "readTimeout": UDP_SESSION_TTL,
-                        "bufferSize": 65536,
+                        "bufferSize": 262144,
                         "retryDelay": "1s"
                     }
                     if is_reverse:
@@ -3939,7 +3968,7 @@ class GostAdapter:
                                 "keepalive.interval": ka_interval_str,
                                 "keepalive.timeout": ka_timeout_str,
                                 "readTimeout": UDP_SESSION_TTL,
-                                "bufferSize": 65536,
+                                "bufferSize": 262144,
                                 "readBufferSize": udp_read_buf_size,
                                 "readQueueSize": udp_read_queue_size,
                             }
@@ -3960,7 +3989,7 @@ class GostAdapter:
                                 "keepAlive": True,
                                 "ttl": UDP_SESSION_TTL,
                                 "readTimeout": UDP_SESSION_TTL,
-                                "bufferSize": 65536,
+                                "bufferSize": 262144,
                                 "readBufferSize": udp_read_buf_size,
                                 "readQueueSize": udp_read_queue_size,
                             }

@@ -639,11 +639,16 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         client_options.setdefault("heartbeat", 12)
         server_options.setdefault("mux_framesize", 4096)
         client_options.setdefault("mux_framesize", 4096)
-        server_options.setdefault("mux_streambuffer", 131072)
-        client_options.setdefault("mux_streambuffer", 131072)
+        server_options.setdefault("mux_streambuffer", 2097152)
+        client_options.setdefault("mux_streambuffer", 2097152)
         server_options.setdefault("mss", 1380)
         client_options.setdefault("mss", 1380)
         client_options.setdefault("aggressive_pool", True)
+    else:
+        server_options.setdefault("mux_recievebuffer", 16777216)
+        client_options.setdefault("mux_recievebuffer", 16777216)
+        server_options.setdefault("mux_streambuffer", 4194304)
+        client_options.setdefault("mux_streambuffer", 4194304)
 
     # Use SMUX v2 by default for multiplexed transports to avoid HOL blocking
     if transport in ("tcpmux", "wsmux", "wssmux"):

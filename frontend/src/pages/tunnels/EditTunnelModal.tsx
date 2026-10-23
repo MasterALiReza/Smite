@@ -699,8 +699,6 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         mss: '1380',
                         keepalive_period: '12',
                         heartbeat: '12',
-                        so_rcvbuf: '2097152',
-                        so_sndbuf: '2097152',
                       },
                       client: {
                         ...prev.client,
@@ -710,8 +708,6 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                         mss: '1380',
                         keepalive_period: '12',
                         heartbeat: '12',
-                        so_rcvbuf: '2097152',
-                        so_sndbuf: '2097152',
                         aggressive_pool: true,
                       },
                     }))

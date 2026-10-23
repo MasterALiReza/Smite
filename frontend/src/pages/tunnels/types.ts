@@ -139,10 +139,10 @@ export const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => (
     mss: '',
     so_rcvbuf: '',
     so_sndbuf: '',
-    mux_version: '1',
+    mux_version: '2',
     mux_framesize: '32768',
-    mux_recievebuffer: '',
-    mux_streambuffer: '',
+    mux_recievebuffer: '16777216',
+    mux_streambuffer: '4194304',
     mux_session: '',
   },
   client: {
@@ -160,10 +160,10 @@ export const createDefaultBackhaulAdvancedState = (): BackhaulAdvancedState => (
     mss: '',
     so_rcvbuf: '',
     so_sndbuf: '',
-    mux_version: '1',
+    mux_version: '2',
     mux_framesize: '32768',
-    mux_recievebuffer: '',
-    mux_streambuffer: '',
+    mux_recievebuffer: '16777216',
+    mux_streambuffer: '4194304',
     mux_session: '',
   },
   customPorts: '',
@@ -174,6 +174,7 @@ export const resetGamingAdvanced = (prev: BackhaulAdvancedState): BackhaulAdvanc
   const keys = [
     'channel_size', 'mux_framesize', 'mss', 'keepalive_period',
     'heartbeat', 'so_rcvbuf', 'so_sndbuf', 'nodelay',
+    'mux_recievebuffer', 'mux_streambuffer',
   ]
   const server: any = { ...prev.server }
   const client: any = { ...prev.client }

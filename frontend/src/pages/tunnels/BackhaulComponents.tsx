@@ -494,11 +494,11 @@ export function BackhaulAdvancedDrawer({
                   Yamux Protocol Version
                 </label>
                 <CustomSelect
-                  value={state.server.mux_version || '1'}
+                  value={state.server.mux_version || '2'}
                   onChange={(val) => updateBoth('mux_version', val)}
                   options={[
-                    { value: '1', label: 'Version 1 (Standard)' },
-                    { value: '2', label: 'Version 2 (Modern)' },
+                    { value: '2', label: 'Version 2 (Modern / High Speed)' },
+                    { value: '1', label: 'Version 1 (Legacy)' },
                   ]}
                 />
               </div>
@@ -538,7 +538,7 @@ export function BackhaulAdvancedDrawer({
                   type="number"
                   value={state.server.mux_streambuffer}
                   onChange={(e) => updateBoth('mux_streambuffer', e.target.value)}
-                  placeholder="e.g. 131072 (128KB)"
+                  placeholder="4194304 (default 4MB) or 2097152 (gaming)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                 />
               </div>
@@ -551,7 +551,7 @@ export function BackhaulAdvancedDrawer({
                   type="number"
                   value={state.server.mux_recievebuffer}
                   onChange={(e) => updateBoth('mux_recievebuffer', e.target.value)}
-                  placeholder="4194304 (default 4MB)"
+                  placeholder="16777216 (default 16MB)"
                   className="w-full px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
                   min={0}
                 />

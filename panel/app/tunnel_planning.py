@@ -92,9 +92,13 @@ async def ensure_conflict_free_control_port(db: Any, tunnel: Any, node_ids: Iter
 
 
 def is_latency_sensitive(tunnel: Any) -> bool:
-    """UDP tunnels are used for games/VoIP/WireGuard; gaming_mode marks the rest."""
-    tunnel_type = (getattr(tunnel, "type", None) or (tunnel.spec or {}).get("type") or "tcp").lower()
-    return bool(getattr(tunnel, "gaming_mode", False)) or tunnel_type in ("udp", "tcp+udp")
+    """Only activate gaming-v1 profile if gaming_mode is explicitly enabled."""
+    if isinstance(tunnel, dict):
+        return bool(tunnel.get("gaming_mode") or (tunnel.get("spec") or {}).get("gaming_mode"))
+    return bool(
+        getattr(tunnel, "gaming_mode", False)
+        or (getattr(tunnel, "spec", None) or {}).get("gaming_mode", False)
+    )
 
 
 async def apply_latency_profile(tunnel: Any, client: Any, node_ids: Iterable[str]) -> bool:
@@ -105,20 +109,26 @@ async def apply_latency_profile(tunnel: Any, client: Any, node_ids: Iterable[str
     agent that understands them, otherwise one side would ignore the option and the
     tunnel would not connect.
     """
-    if not is_latency_sensitive(tunnel):
-        return False
-    spec = dict(tunnel.spec or {})
+    spec = dict(getattr(tunnel, "spec", None) or {})
     changed = False
+    if not is_latency_sensitive(tunnel):
+        if spec.get(LATENCY_PROFILE_KEY) is not None:
+            spec.pop(LATENCY_PROFILE_KEY, None)
+            changed = True
+        if changed:
+            tunnel.spec = spec
+            flag_modified(tunnel, "spec")
+        return changed
     if spec.get(LATENCY_PROFILE_KEY) != GAMING_PROFILE:
         spec[LATENCY_PROFILE_KEY] = GAMING_PROFILE
         changed = True
-    if tunnel.core == "frp" and "tcp_mux" not in spec:
+    if getattr(tunnel, "core", None) == "frp" and "tcp_mux" not in spec:
         try:
             if await client.nodes_support("frp_tcp_mux_option", *list(node_ids)):
                 spec["tcp_mux"] = False
                 changed = True
         except Exception as e:
-            logger.debug(f"Capability check failed for tunnel {tunnel.id}: {e}")
+            logger.debug(f"Capability check failed for tunnel {getattr(tunnel, 'id', '')}: {e}")
     if changed:
         tunnel.spec = spec
         flag_modified(tunnel, "spec")

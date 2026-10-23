@@ -39,8 +39,6 @@ export const BackhaulSection: React.FC<BackhaulSectionProps> = ({
           mss: '1380',
           keepalive_period: '12',
           heartbeat: '12',
-          so_rcvbuf: '2097152',
-          so_sndbuf: '2097152',
         },
         client: {
           ...prev.client,
@@ -50,8 +48,6 @@ export const BackhaulSection: React.FC<BackhaulSectionProps> = ({
           mss: '1380',
           keepalive_period: '12',
           heartbeat: '12',
-          so_rcvbuf: '2097152',
-          so_sndbuf: '2097152',
           aggressive_pool: true,
         },
       }))

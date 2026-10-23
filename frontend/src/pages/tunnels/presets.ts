@@ -67,7 +67,7 @@ export const GOST_PRESETS: TunnelPreset[] = [
       transport_type: 'wss',
       security_type: 'tls',
       stealth_domain: 'dl.google.com',
-      gaming_mode: true,
+      gaming_mode: false,
       keepalive_interval: 15,
     },
     isActive: (formData) =>

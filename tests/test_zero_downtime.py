@@ -354,11 +354,9 @@ async def test_backhaul_adapter_pure_udp_client_and_server(monkeypatch, tmp_path
     await adapter.apply("bh-cli-udp", client_spec)
     cli_cfg = (tmp_path / "bh-cli-udp.toml").read_text(encoding="utf-8")
     assert 'transport = "tcp"' in cli_cfg
-    assert 'accept_udp = true' in cli_cfg
     assert 'nodelay = true' in cli_cfg
     assert 'mss = 1380' in cli_cfg
     assert 'skip_optz = true' in cli_cfg
-    assert 'channel_size = 8192' in cli_cfg
     await adapter.remove("bh-cli-udp")
 
 

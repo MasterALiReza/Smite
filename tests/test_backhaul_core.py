@@ -80,6 +80,28 @@ def test_spec_builder_backhaul_pure_udp_mapping():
     assert client_spec["transport"] == "tcp"
     assert client_spec["accept_udp"] is True
     assert client_spec["remote_addr"] == "1.1.1.1:3080"
+    assert server_spec["server_options"]["mux_recievebuffer"] == 16777216
+    assert server_spec["server_options"]["mux_streambuffer"] == 4194304
+    assert client_spec["client_options"]["mux_recievebuffer"] == 16777216
+    assert client_spec["client_options"]["mux_streambuffer"] == 4194304
+
+
+def test_spec_builder_backhaul_gaming_buffer():
+    """Verify Backhaul gaming mode sets mux_streambuffer to at least 2MB (2097152)."""
+    tunnel = DummyTunnel(
+        spec={
+            "transport_type": "tcpmux",
+            "control_port": 3080,
+            "ports": [8080],
+            "token": "game-token",
+            "gaming_mode": True
+        }
+    )
+    tunnel.gaming_mode = True
+    server_spec, client_spec = build_backhaul_node_specs(tunnel, iran_node_ip="1.1.1.1", foreign_node_ip="2.2.2.2")
+    assert server_spec["server_options"]["mux_streambuffer"] == 2097152
+    assert client_spec["client_options"]["mux_streambuffer"] == 2097152
+    assert server_spec["server_options"]["mux_framesize"] == 4096
 
 
 def test_spec_builder_backhaul_wss_tls_certs():
@@ -359,3 +381,43 @@ async def test_backhaul_adapter_client_config_is_upstream_valid(tmp_path, monkey
     assert "aggressive_pool = false" in txt
     for bad in ("accept_udp", "heartbeat", "channel_size", "insecure"):
         assert bad not in txt
+
+
+@pytest.mark.asyncio
+async def test_backhaul_adapter_defaults_high_throughput_buffers(tmp_path, monkeypatch):
+    """Verify BackhaulAdapter injects high throughput buffers for multiplexed transports when unspecified."""
+    adapter = BackhaulAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/backhaul"))
+    
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1235, returncode=None)
+
+        # 1. Server mode
+        srv_spec = {
+            "mode": "server",
+            "bind_addr": "0.0.0.0:3080",
+            "transport": "tcpmux",
+            "token": "tok",
+            "ports": [8080]
+        }
+        await adapter.apply("bh-high-srv", srv_spec)
+        srv_txt = (tmp_path / "bh-high-srv.toml").read_text(encoding="utf-8")
+        assert "mux_version = 2" in srv_txt
+        assert "mux_recievebuffer = 16777216" in srv_txt
+        assert "mux_streambuffer = 4194304" in srv_txt
+
+        # 2. Client mode
+        cli_spec = {
+            "mode": "client",
+            "remote_addr": "1.1.1.1:3080",
+            "transport": "tcpmux",
+            "token": "tok"
+        }
+        await adapter.apply("bh-high-cli", cli_spec)
+        cli_txt = (tmp_path / "bh-high-cli.toml").read_text(encoding="utf-8")
+        assert "mux_version = 2" in cli_txt
+        assert "mux_recievebuffer = 16777216" in cli_txt
+        assert "mux_streambuffer = 4194304" in cli_txt
+

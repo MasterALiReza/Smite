@@ -60,18 +60,20 @@ async def test_gost_direct_udp_listener_keeps_channels_alive(tmp_path, monkeypat
     md = udp["listener"]["metadata"]
     assert md["keepalive"] is True, "without keepalive GOST closes the channel after one response"
     assert md["ttl"] == ca.UDP_SESSION_TTL
-    assert md["readBufferSize"] == 65535
+    assert md["readBufferSize"] == 4194304
     assert udp["handler"]["metadata"]["ttl"] == ca.UDP_SESSION_TTL
 
 
 @pytest.mark.asyncio
 async def test_gost_reverse_udp_session_ttl_and_small_mux_frames(tmp_path, monkeypatch):
     client_spec = {"mode": "client", "is_reverse": True, "server_ip": "5.6.7.8", "control_port": 30002,
-                   "ports": [27015], "type": "udp", "transport_type": "tls", "security_type": "tls"}
+                   "ports": [27015], "type": "udp", "transport_type": "tls", "security_type": "tls",
+                   "gaming_mode": True, "multiplex": True}
     cfg = await _gost_config(tmp_path, monkeypatch, "g-rev-udp", client_spec)
     udp = next(s for s in cfg["services"] if s["name"].startswith("udp-in-"))
     assert udp["listener"]["type"] == "rudp"
-    assert udp["listener"]["metadata"]["ttl"] == ca.UDP_SESSION_TTL
+    assert udp["listener"]["metadata"]["ttl"] == "45s"
+    assert udp["handler"]["metadata"]["ttl"] == ca.UDP_SESSION_TTL
     node = cfg["chains"][0]["hops"][-1]["nodes"][0]
     assert node["connector"]["metadata"]["mux.maxFrameSize"] == 4096
     assert node["dialer"]["metadata"]["mux.maxFrameSize"] == 4096
@@ -234,13 +236,13 @@ async def test_control_port_allocation_keeps_existing_ports():
 async def test_frp_tcp_mux_only_when_both_nodes_support_it():
     from app import tunnel_planning
     with patch("app.tunnel_planning.flag_modified"):
-        t = SimpleNamespace(id="t", core="frp", type="udp", gaming_mode=False, spec={})
+        t = SimpleNamespace(id="t", core="frp", type="udp", gaming_mode=True, spec={})
         client = MagicMock()
         client.nodes_support = AsyncMock(return_value=False)
         await tunnel_planning.apply_latency_profile(t, client, ["a", "b"])
         assert t.spec["latency_profile"] == "gaming-v1" and "tcp_mux" not in t.spec
 
-        t2 = SimpleNamespace(id="t2", core="frp", type="udp", gaming_mode=False, spec={})
+        t2 = SimpleNamespace(id="t2", core="frp", type="udp", gaming_mode=True, spec={})
         client.nodes_support = AsyncMock(return_value=True)
         await tunnel_planning.apply_latency_profile(t2, client, ["a", "b"])
         assert t2.spec["tcp_mux"] is False
@@ -248,6 +250,16 @@ async def test_frp_tcp_mux_only_when_both_nodes_support_it():
         tcp = SimpleNamespace(id="t3", core="frp", type="tcp", gaming_mode=False, spec={})
         assert await tunnel_planning.apply_latency_profile(tcp, client, ["a", "b"]) is False
         assert tcp.spec == {}
+
+        # Tunnels without gaming_mode should have any stale latency_profile cleared
+        stale = SimpleNamespace(id="t4", core="frp", type="udp", gaming_mode=False, spec={"latency_profile": "gaming-v1"})
+        assert await tunnel_planning.apply_latency_profile(stale, client, ["a", "b"]) is True
+        assert "latency_profile" not in stale.spec
+
+        # Test dictionary support for is_latency_sensitive
+        assert tunnel_planning.is_latency_sensitive({"gaming_mode": True}) is True
+        assert tunnel_planning.is_latency_sensitive({"spec": {"gaming_mode": True}}) is True
+        assert tunnel_planning.is_latency_sensitive({"type": "udp", "gaming_mode": False}) is False
 
 
 @pytest.mark.asyncio

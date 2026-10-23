@@ -234,9 +234,29 @@ def test_spec_builder_backhaul_gaming_mode_and_v072_tuning():
     assert client_spec["client_options"]["nodelay"] is True
     assert server_spec["server_options"]["channel_size"] == 8192
     assert server_spec["server_options"]["mux_framesize"] == 4096
+    assert server_spec["server_options"]["mux_streambuffer"] == 2097152
+    assert client_spec["client_options"]["mux_streambuffer"] == 2097152
     assert server_spec["proxy_protocol"] is True
     assert server_spec["skip_optz"] is True
     assert client_spec["mss"] == 1380
+
+
+def test_spec_builder_backhaul_high_throughput_default_buffers():
+    """Verify non-gaming Backhaul tunnels get high-throughput 16MB receive and 4MB stream buffers."""
+    tunnel = DummyTunnel(
+        id="t-backhaul-throughput",
+        core="backhaul",
+        type="tcp",
+        gaming_mode=False,
+        spec={"ports": [8080], "transport": "tcpmux"}
+    )
+    server_spec, client_spec = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert server_spec["server_options"]["mux_recievebuffer"] == 16777216
+    assert server_spec["server_options"]["mux_streambuffer"] == 4194304
+    assert client_spec["client_options"]["mux_recievebuffer"] == 16777216
+    assert client_spec["client_options"]["mux_streambuffer"] == 4194304
+    assert server_spec["server_options"]["mux_version"] == 2
+    assert client_spec["client_options"]["mux_version"] == 2
 
 
 

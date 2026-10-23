@@ -496,7 +496,8 @@ async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
         "control_port": 8443,
         "ports": [8080],
         "gost_type": "kcp",
-        "auth_token": "kcp-token-123"
+        "auth_token": "kcp-token-123",
+        "multiplex": True
     }
 
     with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
@@ -523,7 +524,8 @@ async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
         "server_ip": "1.1.1.1",
         "ports": [8080],
         "gost_type": "kcp",
-        "auth_token": "kcp-token-123"
+        "auth_token": "kcp-token-123",
+        "multiplex": True
     }
 
     with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
@@ -781,8 +783,8 @@ async def test_gost_v3_mux_metadata_keys(tmp_path, monkeypatch):
         assert meta["mux.keepaliveInterval"] == "15s"
         assert meta["mux.keepaliveTimeout"] == "45s"
         assert meta["mux.maxFrameSize"] == 32768
-        assert meta["mux.maxReceiveBuffer"] == 4194304
-        assert meta["mux.maxStreamBuffer"] == 1048576
+        assert meta["mux.maxReceiveBuffer"] == 33554432
+        assert meta["mux.maxStreamBuffer"] == 8388608
 
     # Gaming mode
     spec_gaming = {
@@ -809,8 +811,8 @@ async def test_gost_v3_mux_metadata_keys(tmp_path, monkeypatch):
         assert meta_g["mux.keepaliveInterval"] == "10s"
         assert meta_g["mux.keepaliveTimeout"] == "30s"
         assert meta_g["mux.maxFrameSize"] == 4096
-        assert meta_g["mux.maxReceiveBuffer"] == 4194304
-        assert meta_g["mux.maxStreamBuffer"] == 1048576
+        assert meta_g["mux.maxReceiveBuffer"] == 33554432
+        assert meta_g["mux.maxStreamBuffer"] == 8388608
 
 
 @pytest.mark.asyncio
@@ -971,6 +973,127 @@ async def test_gost_all_transports_types_and_directions(tmp_path, monkeypatch, t
             assert any("udp" in s["name"] for s in cli_cfg["services"])
         else:
             assert any("tcp" in s["name"] for s in cli_cfg["services"])
+
+
+@pytest.mark.asyncio
+async def test_gost_reverse_mode_no_double_smux(tmp_path, monkeypatch):
+    """
+    Verify GOST reverse tunnels without explicit multiplexing do NOT enable
+    an outer layer of Yamux/SMUX (avoiding nested double-SMUX over relay).
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1001, returncode=None)
+
+        # 1. Reverse Server (Iran node)
+        srv_spec = {
+            "mode": "server",
+            "is_reverse": True,
+            "control_port": 25001,
+            "ports": [8080],
+            "transport_type": "tcp",
+            "security_type": "none",
+        }
+        await adapter.apply("gost-rev-clean-srv", srv_spec)
+        srv_cfg = json.loads((tmp_path / "gost-rev-clean-srv.json").read_text())
+        listener_meta = srv_cfg["services"][0]["listener"]["metadata"]
+        assert listener_meta.get("mux") is None, "Server listener must not wrap transport in Yamux"
+        assert listener_meta.get("mux.type") is None
+
+        # 2. Reverse Client (Foreign node)
+        cli_spec = {
+            "mode": "client",
+            "is_reverse": True,
+            "server_ip": "1.1.1.1",
+            "control_port": 25001,
+            "ports": [8080],
+            "transport_type": "tcp",
+            "security_type": "none",
+        }
+        await adapter.apply("gost-rev-clean-cli", cli_spec)
+        cli_cfg = json.loads((tmp_path / "gost-rev-clean-cli.json").read_text())
+        node = cli_cfg["chains"][0]["hops"][-1]["nodes"][0]
+        dialer_meta = node["dialer"].get("metadata", {})
+        connector_meta = node["connector"].get("metadata", {})
+        assert dialer_meta.get("mux") is None, "Client dialer must not wrap transport in Yamux"
+        assert connector_meta.get("mux") is None, "Client connector must not wrap transport in Yamux"
+
+
+@pytest.mark.asyncio
+async def test_gost_reverse_mode_explicit_mux_enabled(tmp_path, monkeypatch):
+    """
+    Verify GOST reverse tunnels WITH explicit multiplex: True or enable_mux: True
+    DO configure mux metadata.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1002, returncode=None)
+
+        cli_spec = {
+            "mode": "client",
+            "is_reverse": True,
+            "server_ip": "1.1.1.1",
+            "control_port": 25002,
+            "ports": [8080],
+            "transport_type": "tcp",
+            "security_type": "none",
+            "multiplex": True,
+        }
+        await adapter.apply("gost-rev-mux-cli", cli_spec)
+        cli_cfg = json.loads((tmp_path / "gost-rev-mux-cli.json").read_text())
+        node = cli_cfg["chains"][0]["hops"][-1]["nodes"][0]
+        assert node["dialer"]["metadata"]["mux"] is True
+        assert node["connector"]["metadata"]["mux"] is True
+        assert node["connector"]["metadata"]["mux.maxReceiveBuffer"] == 33554432
+        assert node["connector"]["metadata"]["mux.maxStreamBuffer"] == 8388608
+        assert node["connector"]["metadata"]["mux.maxFrameSize"] == 32768
+
+
+@pytest.mark.asyncio
+async def test_gost_anti_packetloss_frame_size_32k(tmp_path, monkeypatch):
+    """
+    Verify anti-packet-loss preset (WSS + TLS, non-gaming) preserves 32KB mux.maxFrameSize.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=1003, returncode=None)
+
+        # Anti-packet-loss preset: WSS + TLS with gaming_mode=False
+        spec = {
+            "mode": "server",
+            "is_reverse": False,
+            "control_port": 8443,
+            "ports": [8080],
+            "transport_type": "wss",
+            "security_type": "tls",
+            "gaming_mode": False,
+            "enable_mux": True,
+        }
+        await adapter.apply("gost-anti-loss", spec)
+        cfg = json.loads((tmp_path / "gost-anti-loss.json").read_text())
+        meta = cfg["services"][0]["listener"]["metadata"]
+        assert meta["mux.maxFrameSize"] == 32768
+        assert meta["mux.maxReceiveBuffer"] == 33554432
+        assert meta["mux.maxStreamBuffer"] == 8388608
+
 
 
 
