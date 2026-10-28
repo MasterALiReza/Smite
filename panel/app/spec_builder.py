@@ -958,9 +958,10 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
             logger.warning(f"Could not generate in-memory cert with SAN for chisel: {e}")
 
     if use_tls and not (tls_cert_pem and tls_key_pem):
-        # Fail closed: WSS must never fall back to plaintext because cert
-        # provisioning failed after the running server was already stopped.
-        raise ValueError("Chisel WSS requires a TLS certificate; refusing to apply without one")
+        logger.warning(
+            f"Chisel WSS tunnel {getattr(tunnel, 'id', 'unknown')} missing in-memory certificate; "
+            "allowing node-side generation"
+        )
 
     # Build server spec
     server_spec_dict = spec.copy()
@@ -1103,7 +1104,6 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
 
 def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Generate server (Iran) and client (Foreign) specs for FRP core with WSS, QUIC, Strict Auth, Health Checks, Bandwidth Limits, and VHost routing"""
-    import re
     spec = tunnel.spec.copy() if tunnel.spec else {}
     server_spec = spec.copy()
     server_spec["mode"] = "server"
@@ -1947,9 +1947,10 @@ def build_gost_node_specs(
                 tunnel.spec["tls_cert_pem"] = tls_cert_pem
                 tunnel.spec["tls_key_pem"] = tls_key_pem
         else:
-            # Fail closed for transport-level TLS added by this contract;
-            # legacy raw-TCP/KCP tunnels never reach this branch.
-            raise ValueError("GOST TLS requires a server certificate; refusing to apply without one")
+            logger.warning(
+                f"GOST TLS tunnel {getattr(tunnel, 'id', 'unknown')} missing in-memory certificate; "
+                "allowing node-side generation"
+            )
 
     return server_spec, client_spec
 

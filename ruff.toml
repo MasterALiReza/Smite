@@ -1,0 +1,7 @@
+# Ruff configuration for Smite
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E9", "F"]
+ignore = ["F401", "F841", "F541"]

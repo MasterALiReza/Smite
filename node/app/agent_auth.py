@@ -247,63 +247,138 @@ def ensure_management_tls_identity() -> None:
     if cert_exists != key_exists:
         raise RuntimeError("Node management TLS identity is incomplete; restore the missing cert or key")
 
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-
     if cert_exists:
         try:
-            certificate = x509.load_pem_x509_certificate(TLS_CERT_FILE.read_bytes())
-            private_key = serialization.load_pem_private_key(TLS_KEY_FILE.read_bytes(), password=None)
-            cert_public = certificate.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            key_public = private_key.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            if cert_public != key_public:
-                raise ValueError("certificate and private key do not match")
-            return
+            try:
+                from cryptography import x509
+                from cryptography.hazmat.primitives import serialization
+
+                certificate = x509.load_pem_x509_certificate(TLS_CERT_FILE.read_bytes())
+                private_key = serialization.load_pem_private_key(TLS_KEY_FILE.read_bytes(), password=None)
+                cert_public = certificate.public_key().public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                key_public = private_key.public_key().public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if cert_public != key_public:
+                    raise ValueError("certificate and private key do not match")
+                return
+            except ImportError:
+                import ssl
+
+                ctx = ssl.create_default_context()
+                ctx.load_cert_chain(str(TLS_CERT_FILE), str(TLS_KEY_FILE))
+                return
         except Exception as error:
             raise RuntimeError("Node management TLS identity is corrupt; restore it instead of rotating the pin") from error
 
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    now = datetime.now(timezone.utc)
-    common_name = re.sub(r"[^A-Za-z0-9_.-]", "-", settings.node_name or "smite-node")[:64]
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
-    san_entries = [x509.DNSName("localhost"), x509.DNSName(socket.gethostname())]
-    san_entries.extend(x509.IPAddress(ipaddress.ip_address(value)) for value in _management_ip_addresses())
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=5))
-        .not_valid_after(now + timedelta(days=3650))
-        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .sign(private_key, hashes.SHA256())
-    )
-    key_bytes = private_key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    )
-    cert_bytes = certificate.public_bytes(serialization.Encoding.PEM)
-    _atomic_write_bytes(TLS_KEY_FILE, key_bytes, 0o600)
+    # 1. Try python cryptography library
     try:
-        _atomic_write_bytes(TLS_CERT_FILE, cert_bytes, 0o644)
-    except Exception:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.now(timezone.utc)
+        common_name = re.sub(r"[^A-Za-z0-9_.-]", "-", settings.node_name or "smite-node")[:64]
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+        san_entries = [x509.DNSName("localhost"), x509.DNSName(socket.gethostname())]
+        san_entries.extend(x509.IPAddress(ipaddress.ip_address(value)) for value in _management_ip_addresses())
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(days=3650))
+            .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(private_key, hashes.SHA256())
+        )
+        key_bytes = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        cert_bytes = certificate.public_bytes(serialization.Encoding.PEM)
+        _atomic_write_bytes(TLS_KEY_FILE, key_bytes, 0o600)
         try:
-            TLS_KEY_FILE.unlink()
-        except OSError:
-            pass
-        raise
+            _atomic_write_bytes(TLS_CERT_FILE, cert_bytes, 0o644)
+        except Exception:
+            try:
+                TLS_KEY_FILE.unlink()
+            except OSError:
+                pass
+            raise
+        return
+    except ImportError:
+        logger.debug("Cryptography library not installed; trying system openssl CLI fallback")
+    except Exception as e:
+        logger.warning(f"Failed to generate TLS identity with cryptography: {e}; trying openssl CLI")
+
+    # 2. Try system openssl CLI fallback
+    import shutil
+    import subprocess
+    import tempfile
+
+    openssl_bin = shutil.which("openssl")
+    if openssl_bin:
+        try:
+            common_name = re.sub(r"[^A-Za-z0-9_.-]", "-", settings.node_name or "smite-node")[:64]
+            san_items = ["DNS:localhost", f"DNS:{socket.gethostname()}"]
+            for ip in _management_ip_addresses():
+                san_items.append(f"IP:{ip}")
+            san_str = ",".join(san_items)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_key = Path(tmp_dir) / "key.pem"
+                tmp_cert = Path(tmp_dir) / "cert.pem"
+
+                # Try with -addext (OpenSSL 1.1.1+)
+                cmd = [
+                    openssl_bin, "req", "-x509", "-newkey", "rsa:2048", "-days", "3650",
+                    "-nodes", "-subj", f"/CN={common_name}",
+                    "-addext", f"subjectAltName={san_str}",
+                    "-keyout", str(tmp_key), "-out", str(tmp_cert)
+                ]
+                res = subprocess.run(cmd, capture_output=True, timeout=10)
+                if res.returncode != 0:
+                    # Fallback without -addext for older openssl versions
+                    cmd = [
+                        openssl_bin, "req", "-x509", "-newkey", "rsa:2048", "-days", "3650",
+                        "-nodes", "-subj", f"/CN={common_name}",
+                        "-keyout", str(tmp_key), "-out", str(tmp_cert)
+                    ]
+                    res = subprocess.run(cmd, capture_output=True, timeout=10)
+
+                if res.returncode == 0 and tmp_key.exists() and tmp_cert.exists():
+                    key_bytes = tmp_key.read_bytes()
+                    cert_bytes = tmp_cert.read_bytes()
+                    _atomic_write_bytes(TLS_KEY_FILE, key_bytes, 0o600)
+                    try:
+                        _atomic_write_bytes(TLS_CERT_FILE, cert_bytes, 0o644)
+                    except Exception:
+                        try:
+                            TLS_KEY_FILE.unlink()
+                        except OSError:
+                            pass
+                        raise
+                    logger.info("Generated management TLS identity using system OpenSSL CLI")
+                    return
+        except Exception as e:
+            logger.warning(f"Failed to generate TLS identity with openssl CLI: {e}")
+
+    logger.warning(
+        "Neither cryptography library nor openssl CLI is available; "
+        "node agent will run in HTTP mode without management TLS identity."
+    )
+
 
 
 def management_tls_metadata() -> Optional[Dict[str, str]]:

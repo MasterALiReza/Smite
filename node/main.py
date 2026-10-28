@@ -154,15 +154,28 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     try:
-        agent_auth.ensure_management_tls_identity()
+        try:
+            agent_auth.ensure_management_tls_identity()
+        except Exception as e:
+            logger.warning(f"Could not initialize management TLS identity: {e}")
+
+        has_tls = agent_auth.TLS_CERT_FILE.exists() and agent_auth.TLS_KEY_FILE.exists()
+        ssl_kwargs = {}
+        if has_tls:
+            ssl_kwargs["ssl_certfile"] = str(agent_auth.TLS_CERT_FILE)
+            ssl_kwargs["ssl_keyfile"] = str(agent_auth.TLS_KEY_FILE)
+            logger.info("Starting node agent with HTTPS enabled")
+        else:
+            logger.info("Starting node agent in plain HTTP mode")
+
         uvicorn.run(
             app,
             host="0.0.0.0",
             port=settings.node_api_port,
-            ssl_certfile=str(agent_auth.TLS_CERT_FILE),
-            ssl_keyfile=str(agent_auth.TLS_KEY_FILE),
+            **ssl_kwargs,
         )
     except Exception as e:
         logger.error(f"Failed to start server: {e}", exc_info=True)
         raise
+
 

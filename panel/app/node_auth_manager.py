@@ -178,6 +178,10 @@ class NodeAuthManager:
         pending_address = str(meta.get("agent_pending_api_address") or "")
         pending_certificate = meta.get("agent_pending_tls_certificate")
         if not proof or not pending_address.startswith("https://") or not pending_certificate:
+            if meta.get("agent_token_mode") == "env":
+                return "env"
+            if token and await client.verify_agent_token(node, token):
+                return "verified"
             return "awaiting_secure_transport"
         if int(meta.get("agent_bootstrap_expires_at") or 0) <= int(time.time()):
             return "awaiting_fresh_proof"

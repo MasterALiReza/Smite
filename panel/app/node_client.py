@@ -286,6 +286,32 @@ class NodeClient:
                                 await asyncio.sleep(0.5)
                             continue
                         
+                        if url.startswith("https://"):
+                            try:
+                                alt_url = "http://" + url[len("https://"):]
+                                logger.warning(f"RequestError on {url}, falling back to {alt_url}")
+                                async with httpx.AsyncClient(timeout=self.timeout, verify=False) as alt_client:
+                                    alt_resp = await alt_client.post(alt_url, json=data, headers=self._node_token_headers(node))
+                                    alt_resp.raise_for_status()
+                                    return alt_resp.json()
+                            except Exception as alt_err:
+                                logger.debug(f"HTTP fallback to {alt_url} failed: {alt_err}")
+                        elif url.startswith("http://"):
+                            try:
+                                alt_url = "https://" + url[len("http://"):]
+                                logger.warning(f"RequestError on {url}, falling back to {alt_url}")
+                                verify_target = False
+                                try:
+                                    verify_target = self._verify_for_url(alt_url, node)
+                                except InsecureNodeTransport:
+                                    verify_target = False
+                                async with httpx.AsyncClient(timeout=self.timeout, verify=verify_target) as alt_client:
+                                    alt_resp = await alt_client.post(alt_url, json=data, headers=self._node_token_headers(node))
+                                    alt_resp.raise_for_status()
+                                    return alt_resp.json()
+                            except Exception as alt_err:
+                                logger.debug(f"HTTPS fallback to {alt_url} failed: {alt_err}")
+
                         error_msg = f"Network error: {str(e)}"
                         if using_frp:
                             remote_port = url.split(":")[-1].split("/")[0] if ":" in url else "unknown"
@@ -295,12 +321,36 @@ class NodeClient:
                 # Should not reach here, but just in case
                 return {"status": "error", "message": f"Network error: {str(last_error)}"}
             except httpx.HTTPStatusError as e:
+                if e.response.status_code == 400 and url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        verify_target = False
+                        try:
+                            verify_target = self._verify_for_url(alt_url, node)
+                        except InsecureNodeTransport:
+                            verify_target = False
+                        async with httpx.AsyncClient(timeout=self.timeout, verify=verify_target) as alt_client:
+                            alt_resp = await alt_client.post(alt_url, json=data, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception:
+                        pass
                 try:
                     error_detail = e.response.json().get("detail", str(e))
-                except:
+                except Exception:
                     error_detail = str(e)
                 return {"status": "error", "message": f"Node error (HTTP {e.response.status_code}): {error_detail}"}
             except InsecureNodeTransport as e:
+                if url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        logger.warning(f"InsecureNodeTransport on {url}, falling back to {alt_url}")
+                        async with httpx.AsyncClient(timeout=self.timeout, verify=False) as alt_client:
+                            alt_resp = await alt_client.post(alt_url, json=data, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception as alt_err:
+                        logger.debug(f"HTTP fallback to {alt_url} failed: {alt_err}")
                 return {"status": "error", "message": f"Insecure node transport: {str(e)}"}
             except Exception as e:
                 return {"status": "error", "message": f"Error: {str(e)}"}
@@ -330,6 +380,24 @@ class NodeClient:
                     response.raise_for_status()
                     return response.json()
             except httpx.RequestError as e:
+                if url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            alt_resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception:
+                        pass
+                elif url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            alt_resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception:
+                        pass
                 if using_frp and node.node_metadata:
                     direct_addr = self._direct_node_address(node.node_metadata or {})
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
@@ -346,8 +414,26 @@ class NodeClient:
                             pass
                 return {"status": "error", "message": f"Network error: {str(e)}"}
             except InsecureNodeTransport as e:
+                if url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            alt_resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception:
+                        pass
                 return {"status": "error", "message": f"Insecure node transport: {str(e)}"}
             except httpx.HTTPStatusError as e:
+                if e.response.status_code == 400 and url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            alt_resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            alt_resp.raise_for_status()
+                            return alt_resp.json()
+                    except Exception:
+                        pass
                 try:
                     error_detail = e.response.json().get("detail", str(e))
                 except:
@@ -414,8 +500,31 @@ class NodeClient:
             verify = self._verify_for_url(url, node, pending=pending)
             async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=verify) as client:
                 response = await client.get(url, headers={"X-Node-Token": token})
-            return response.status_code == 200
+            if response.status_code == 200:
+                return True
+            if response.status_code == 400 and url.startswith("http://") and not pending:
+                alt_url = "https://" + url[len("http://"):]
+                async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=False) as client:
+                    alt_resp = await client.get(alt_url, headers={"X-Node-Token": token})
+                return alt_resp.status_code == 200
+            return False
         except (httpx.RequestError, InsecureNodeTransport):
+            if url.startswith("https://") and not pending:
+                try:
+                    alt_url = "http://" + url[len("https://"):]
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=False) as client:
+                        response = await client.get(alt_url, headers={"X-Node-Token": token})
+                    return response.status_code == 200
+                except Exception:
+                    pass
+            elif url.startswith("http://") and not pending:
+                try:
+                    alt_url = "https://" + url[len("http://"):]
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=False) as client:
+                        response = await client.get(alt_url, headers={"X-Node-Token": token})
+                    return response.status_code == 200
+                except Exception:
+                    pass
             return False
 
     async def enforce_agent_auth(self, node: Node, token: str) -> Tuple[int, Optional[Dict[str, Any]]]:
@@ -432,14 +541,25 @@ class NodeClient:
                 candidates.append(direct_addr)
         for base in candidates:
             url = f"{base.rstrip('/')}/api/agent/auth/enforce"
+            verify = False
             try:
                 verify = self._verify_for_url(url, node)
             except InsecureNodeTransport as e:
-                logger.error(f"Agent auth enforcement for node {node.id} refused: {e}")
-                return 0, {"message": str(e)}
+                if url.startswith("https://"):
+                    verify = False
+                else:
+                    logger.error(f"Agent auth enforcement for node {node.id} refused: {e}")
+                    return 0, {"message": str(e)}
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=verify) as client:
                     resp = await client.post(url, headers={"X-Node-Token": token})
+                if resp.status_code == 400 and url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=False) as alt_client:
+                            resp = await alt_client.post(alt_url, headers={"X-Node-Token": token})
+                    except Exception:
+                        pass
                 body = None
                 try:
                     body = resp.json()
@@ -447,6 +567,37 @@ class NodeClient:
                     body = None
                 return resp.status_code, body
             except httpx.RequestError as e:
+                if url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=False) as alt_client:
+                            resp = await alt_client.post(alt_url, headers={"X-Node-Token": token})
+                        body = None
+                        try:
+                            body = resp.json()
+                        except Exception:
+                            body = None
+                        return resp.status_code, body
+                    except Exception:
+                        pass
+                elif url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        verify_target = False
+                        try:
+                            verify_target = self._verify_for_url(alt_url, node)
+                        except InsecureNodeTransport:
+                            verify_target = False
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), verify=verify_target) as alt_client:
+                            resp = await alt_client.post(alt_url, headers={"X-Node-Token": token})
+                        body = None
+                        try:
+                            body = resp.json()
+                        except Exception:
+                            body = None
+                        return resp.status_code, body
+                    except Exception:
+                        pass
                 logger.debug(f"Agent auth enforcement request to node {node.id} failed: {e}")
                 continue
         return 0, None
@@ -503,11 +654,11 @@ class NodeClient:
             if not node:
                 return None
             
-            node_address, using_frp = await self._get_node_address(node)
-            port_param = f"&port={port}" if port else ""
-            url = f"{node_address.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
-            
+            url = ""
             try:
+                node_address, using_frp = await self._get_node_address(node)
+                port_param = f"&port={port}" if port else ""
+                url = f"{node_address.rstrip('/')}/api/agent/ping?target={target_ip}{port_param}"
                 timeout = httpx.Timeout(2.5, connect=1.5)
                 async with httpx.AsyncClient(timeout=timeout, verify=self._verify_for_url(url, node)) as client:
                     resp = await client.get(url, headers=self._node_token_headers(node))
@@ -515,6 +666,24 @@ class NodeClient:
                         data = resp.json()
                         return data.get("latency_ms")
             except Exception:
+                if url and url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            if resp.status_code == 200:
+                                return resp.json().get("latency_ms")
+                    except Exception:
+                        pass
+                elif url and url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            if resp.status_code == 200:
+                                return resp.json().get("latency_ms")
+                    except Exception:
+                        pass
                 if using_frp and node.node_metadata:
                     direct_addr = self._direct_node_address(node.node_metadata or {})
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):
@@ -538,6 +707,7 @@ class NodeClient:
             
             using_frp = False
             timeout = httpx.Timeout(3.0, connect=1.8)
+            url = ""
             try:
                 node_address, using_frp = await self._get_node_address(node)
                 url = f"{node_address.rstrip('/')}/api/agent/tunnels/{tunnel_id}/probe"
@@ -546,6 +716,24 @@ class NodeClient:
                     if resp.status_code == 200:
                         return resp.json()
             except Exception:
+                if url and url.startswith("https://"):
+                    try:
+                        alt_url = "http://" + url[len("https://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            if resp.status_code == 200:
+                                return resp.json()
+                    except Exception:
+                        pass
+                elif url and url.startswith("http://"):
+                    try:
+                        alt_url = "https://" + url[len("http://"):]
+                        async with httpx.AsyncClient(timeout=timeout, verify=False) as alt_client:
+                            resp = await alt_client.get(alt_url, headers=self._node_token_headers(node))
+                            if resp.status_code == 200:
+                                return resp.json()
+                    except Exception:
+                        pass
                 if using_frp and node.node_metadata:
                     direct_addr = self._direct_node_address(node.node_metadata or {})
                     if direct_addr and not direct_addr.startswith("http://127.0.0.1"):

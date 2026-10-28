@@ -418,7 +418,7 @@ services:
       - PANEL_API_PORT=${pport_var}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os,urllib.request; tok=os.environ.get('NODE_API_TOKEN',''); hdr={'X-Node-Token':tok} if tok else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:${port_var}/api/agent/status',headers=hdr))"]
+      test: ["CMD-SHELL", "python -c \"import os, ssl, urllib.request; port=os.environ.get('NODE_API_PORT','8888'); [exit(0) for scheme, ctx in (('https', ssl._create_unverified_context()), ('http', None)) if getattr(urllib.request.urlopen(f'{scheme}://localhost:{port}/api/agent/status', context=ctx, timeout=3), 'status', 0) == 200]; exit(1)\""]
       interval: 30s
       timeout: 10s
       retries: 3

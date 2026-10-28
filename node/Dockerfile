@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     gzip \
     ca-certificates \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Stage 2: Install rathole (cached layer)
@@ -100,8 +101,14 @@ RUN set -eux; \
 # Stage 4: Python dependencies (cached layer)
 FROM base AS deps
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY . /tmp/build_context/
+RUN if [ -f /tmp/build_context/node/requirements.txt ]; then \
+        cp /tmp/build_context/node/requirements.txt requirements.txt; \
+    elif [ -f /tmp/build_context/requirements.txt ]; then \
+        cp /tmp/build_context/requirements.txt requirements.txt; \
+    fi && \
+    rm -rf /tmp/build_context && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Stage 5: Final image
 FROM base
@@ -124,14 +131,25 @@ COPY --from=backhaul-bin /opt/backhaul/backhaul /usr/local/bin/backhaul
 COPY --from=deps /usr/local /usr/local
 
 # Copy application code (changes most frequently)
-COPY . .
+COPY . /tmp/build_context/
+RUN if [ -d /tmp/build_context/node ]; then \
+        cp -r /tmp/build_context/node/* /app/; \
+    else \
+        cp -r /tmp/build_context/* /app/; \
+    fi && \
+    rm -rf /tmp/build_context
 
 EXPOSE 8888
 
 RUN echo '#!/bin/sh' > /app/start.sh && \
-    echo 'set -eu' >> /app/start.sh && \
-    echo 'python -c "from app.agent_auth import ensure_management_tls_identity; ensure_management_tls_identity()"' >> /app/start.sh && \
-    echo 'exec uvicorn main:app --host 0.0.0.0 --port "${NODE_API_PORT:-8888}" --ssl-certfile /var/lib/smite-node/agent_tls.crt --ssl-keyfile /var/lib/smite-node/agent_tls.key --log-level info --access-log' >> /app/start.sh && \
+    echo 'set -e' >> /app/start.sh && \
+    echo 'python -c "from app.agent_auth import ensure_management_tls_identity; ensure_management_tls_identity()" || true' >> /app/start.sh && \
+    echo 'if [ -f /var/lib/smite-node/agent_tls.crt ] && [ -f /var/lib/smite-node/agent_tls.key ]; then' >> /app/start.sh && \
+    echo '    exec uvicorn main:app --host 0.0.0.0 --port "${NODE_API_PORT:-8888}" --ssl-certfile /var/lib/smite-node/agent_tls.crt --ssl-keyfile /var/lib/smite-node/agent_tls.key --log-level info --access-log' >> /app/start.sh && \
+    echo 'else' >> /app/start.sh && \
+    echo '    exec uvicorn main:app --host 0.0.0.0 --port "${NODE_API_PORT:-8888}" --log-level info --access-log' >> /app/start.sh && \
+    echo 'fi' >> /app/start.sh && \
     chmod +x /app/start.sh
 
 CMD ["/bin/sh", "/app/start.sh"]
+

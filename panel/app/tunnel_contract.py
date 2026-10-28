@@ -16,19 +16,19 @@ from typing import Any, Dict, Optional
 CONTRACT_VERSION = 1
 
 CORE_TYPES: Dict[str, Dict[str, Any]] = {
-    "gost": {"tcp", "udp", "tcp+udp", "grpc", "tcpmux"},
-    "rathole": {"tcp", "udp", "tcp+udp"},
-    "backhaul": {"tcp", "udp", "tcp+udp"},
-    "chisel": {"tcp", "udp", "tcp+udp", "socks5"},
-    "frp": {"tcp", "udp", "tcp+udp", "http", "https"},
+    "gost": {"tcp", "udp", "tcp+udp", "grpc", "tcpmux", "all", "reverse", "relay", "tunnel"},
+    "rathole": {"tcp", "udp", "tcp+udp", "noise", "all"},
+    "backhaul": {"tcp", "udp", "tcp+udp", "tcpmux", "all"},
+    "chisel": {"tcp", "udp", "tcp+udp", "all", "socks5"},
+    "frp": {"tcp", "udp", "tcp+udp", "http", "https", "stcp", "sudp", "xtcp", "tcpmux", "all"},
 }
 
 CORE_TRANSPORTS: Dict[str, set] = {
-    "gost": {"tcp", "ws", "wss", "mws", "mwss", "quic", "grpc", "kcp", "ssh"},
-    "rathole": {"tcp", "noise", "ws", "wss"},
-    "backhaul": {"tcp", "tcpmux", "ws", "wsmux", "wss", "wssmux"},
-    "chisel": {"ws", "wss"},
-    "frp": {"tcp", "kcp", "quic", "websocket", "wss"},
+    "gost": {"tcp", "ws", "wss", "mws", "mwss", "quic", "grpc", "kcp", "ssh", "tls", "mtcp", "mtls", "tcpmux", "mux", "wssmux"},
+    "rathole": {"tcp", "noise", "ws", "wss", "tls"},
+    "backhaul": {"tcp", "tcpmux", "ws", "wsmux", "wss", "wssmux", "mux"},
+    "chisel": {"ws", "wss", "tls"},
+    "frp": {"tcp", "kcp", "quic", "websocket", "wss", "tls", "tcpmux"},
 }
 
 DEFAULT_TRANSPORT = {
@@ -45,7 +45,7 @@ TRANSPORT_ALIASES: Dict[str, Dict[str, str]] = {
     "rathole": {"websocket": "ws", "https": "wss", "tls": "wss"},
     "backhaul": {"websocket": "ws", "https": "wss", "tls": "wss", "mux": "tcpmux"},
     "chisel": {"websocket": "ws", "https": "wss", "tls": "wss"},
-    "frp": {"ws": "websocket", "https": "wss", "tls": "wss"},
+    "frp": {"ws": "websocket", "https": "wss", "tls": "wss", "mux": "tcpmux"},
 }
 
 # GOST expresses a carrier choice through its Type selector. These composite
@@ -56,11 +56,11 @@ GOST_GRPC_COMPATIBLE_TRANSPORTS = {"", "tcp", "grpc"}
 BACKHAUL_WEB_CARRIERS = {"ws", "wsmux", "wss", "wssmux"}
 
 _TLS_CARRIERS = {
-    "gost": {"wss", "mwss", "quic", "grpc", "ssh"},
-    "rathole": {"wss", "noise"},
+    "gost": {"wss", "mwss", "quic", "grpc", "ssh", "tls", "mtls"},
+    "rathole": {"wss", "noise", "tls"},
     "backhaul": {"wss", "wssmux"},
-    "chisel": {"wss"},
-    "frp": {"wss", "quic"},
+    "chisel": {"wss", "tls"},
+    "frp": {"wss", "quic", "tls"},
 }
 
 

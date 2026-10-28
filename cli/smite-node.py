@@ -98,15 +98,19 @@ def discover_nodes():
         # Check API status
         api_status = "unreachable"
         active_tunnels = 0
-        try:
-            req = urllib.request.Request(f"http://localhost:{port}/api/agent/status")
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode())
-                    api_status = "healthy"
-                    active_tunnels = data.get("active_tunnels", 0)
-        except Exception:
-            pass
+        import ssl
+        for scheme in ("http", "https"):
+            try:
+                ctx = ssl._create_unverified_context() if scheme == "https" else None
+                req = urllib.request.Request(f"{scheme}://localhost:{port}/api/agent/status")
+                with urllib.request.urlopen(req, context=ctx, timeout=1.5) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode())
+                        api_status = "healthy"
+                        active_tunnels = data.get("active_tunnels", 0)
+                        break
+            except Exception:
+                continue
 
         nodes.append({
             "index": idx,
@@ -391,13 +395,16 @@ with tempfile.TemporaryDirectory(prefix="smite-preflight-") as directory:
 
 
 def _agent_status(port, timeout=2.5):
-    try:
-        req = urllib.request.Request(f"http://localhost:{port}/api/agent/status")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                return json.loads(resp.read().decode())
-    except Exception:
-        return None
+    import ssl
+    for scheme in ("http", "https"):
+        try:
+            ctx = ssl._create_unverified_context() if scheme == "https" else None
+            req = urllib.request.Request(f"{scheme}://localhost:{port}/api/agent/status")
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                if resp.status == 200:
+                    return json.loads(resp.read().decode())
+        except Exception:
+            continue
     return None
 
 

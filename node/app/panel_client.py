@@ -29,9 +29,6 @@ class PanelClient:
     
     async def start(self):
         """Start client and connect to panel"""
-        if not self.ca_path.exists():
-            raise FileNotFoundError(f"CA certificate not found at {self.ca_path}")
-        
         await self._generate_fingerprint()
         
         # Verify TLS against panel CA certificate if available

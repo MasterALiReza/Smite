@@ -131,10 +131,25 @@ async def _probe_agent_status(host: str, port: int, transport: Optional["NodeAge
                 url = _api_address("http", host, port) + "/api/agent/status"
                 async with httpx.AsyncClient(timeout=2.0) as client:
                     resp = await client.get(url)
+                if resp.status_code == 400:
+                    alt_url = _api_address("https", host, port) + "/api/agent/status"
+                    async with httpx.AsyncClient(timeout=2.0, verify=False) as alt_client:
+                        alt_resp = await alt_client.get(alt_url)
+                    if alt_resp.status_code in (200, 401):
+                        return "connected"
             if resp.status_code in (200, 401):
                 return "connected"
         except Exception as error:
             last_error = error
+            if transport is None:
+                try:
+                    alt_url = _api_address("https", host, port) + "/api/agent/status"
+                    async with httpx.AsyncClient(timeout=2.0, verify=False) as alt_client:
+                        alt_resp = await alt_client.get(alt_url)
+                    if alt_resp.status_code in (200, 401):
+                        return "connected"
+                except Exception:
+                    pass
         if attempt < 2:
             await asyncio.sleep(1.0)
     if last_error:
