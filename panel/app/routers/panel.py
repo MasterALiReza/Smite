@@ -7,6 +7,7 @@ from app.config import settings
 from app.models import Admin
 from typing import Optional
 from app.routers.auth import get_current_user, get_current_user_optional
+from pydantic import BaseModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -32,16 +33,25 @@ async def get_ca_cert(download: bool = False, current_user: Optional[Admin] = De
         needs_generation = True
     elif cert_path.stat().st_size == 0:
         needs_generation = True
-        try:
-            cert_path.unlink()
-        except:
-            pass
     
     if needs_generation:
         if not current_user:
             logger.warning(f"Unauthenticated request to /ca attempted to trigger certificate generation")
             raise HTTPException(status_code=404, detail="CA certificate not initialized. Admin login required.")
-        
+
+        from app.node_server import trust_material_generation_allowed
+        if not await trust_material_generation_allowed(True):
+            raise HTTPException(
+                status_code=409,
+                detail="CA certificate is missing but nodes are registered or the mutation guard is engaged; "
+                       "restore certs/ca.crt and certs/ca.key from backup instead of minting a new CA.",
+            )
+
+        try:
+            cert_path.unlink()
+        except OSError:
+            pass
+
         logger.info(f"Generating CA certificate at {cert_path}...")
         h2_server = NodeServer()
         h2_server.cert_path = str(cert_path)
@@ -94,16 +104,25 @@ async def get_server_ca_cert(download: bool = False, current_user: Optional[Admi
         needs_generation = True
     elif cert_path.stat().st_size == 0:
         needs_generation = True
-        try:
-            cert_path.unlink()
-        except:
-            pass
     
     if needs_generation:
         if not current_user:
             logger.warning(f"Unauthenticated request to /ca/server attempted to trigger certificate generation")
             raise HTTPException(status_code=404, detail="Server CA certificate not initialized. Admin login required.")
-        
+
+        from app.node_server import trust_material_generation_allowed
+        if not await trust_material_generation_allowed(True):
+            raise HTTPException(
+                status_code=409,
+                detail="Server CA certificate is missing but nodes are registered or the mutation guard is engaged; "
+                       "restore certs/ca-server.crt and certs/ca-server.key from backup instead of minting a new CA.",
+            )
+
+        try:
+            cert_path.unlink()
+        except OSError:
+            pass
+
         logger.info(f"Generating Server CA certificate at {cert_path}...")
         h2_server = NodeServer()
         h2_server.cert_path = str(cert_path)
@@ -140,6 +159,61 @@ async def get_server_ca_cert(download: bool = False, current_user: Optional[Admi
 async def health():
     """Health check"""
     return {"status": "ok"}
+
+
+class MutationGuardEngage(BaseModel):
+    reason: str
+    owner: str = ""
+    expires_in_minutes: Optional[int] = None
+
+
+class MutationGuardRelease(BaseModel):
+    confirm: str
+
+
+@router.get("/mutation-guard")
+async def get_mutation_guard(current_user: Admin = Depends(get_current_user)):
+    """Report whether automatic fleet mutations are suspended (admin only)"""
+    from app.mutation_guard import mutation_guard
+    return mutation_guard.state()
+
+
+@router.post("/mutation-guard")
+async def engage_mutation_guard(
+    payload: MutationGuardEngage,
+    current_user: Admin = Depends(get_current_user),
+):
+    """Suspend automatic tunnel/token/reset/SSL mutations (admin only)"""
+    from app.mutation_guard import GuardError, mutation_guard
+
+    try:
+        state = mutation_guard.engage(
+            reason=payload.reason,
+            owner=payload.owner or current_user.username,
+            expires_in_minutes=payload.expires_in_minutes,
+        )
+    except GuardError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    logger.warning(f"Mutation guard engaged via API by {current_user.username}")
+    return state
+
+
+@router.post("/mutation-guard/release")
+async def release_mutation_guard(
+    payload: MutationGuardRelease,
+    current_user: Admin = Depends(get_current_user),
+):
+    """Resume automatic mutations after an explicit acknowledgement (admin only)"""
+    from app.mutation_guard import GuardError, mutation_guard
+
+    if payload.confirm != "release":
+        raise HTTPException(status_code=400, detail='Set "confirm" to "release" to resume automatic mutations')
+    try:
+        state = mutation_guard.release(released_by=current_user.username)
+    except GuardError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    logger.warning(f"Mutation guard released via API by {current_user.username}")
+    return state
 
 
 @router.get("/join-token")

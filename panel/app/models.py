@@ -122,3 +122,11 @@ class Settings(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    token_hash = Column(String(64), primary_key=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, default=datetime.utcnow)
+

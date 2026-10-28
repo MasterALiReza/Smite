@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
     app.state.adapter_manager = adapter_manager
 
     if not agent_auth.get_effective_token():
-        logger.warning("SECURITY WARNING: no agent API token yet (NODE_API_TOKEN empty and none provisioned by the panel). The agent API accepts unauthenticated requests until the panel provisions a token.")
+        logger.warning("Agent API is awaiting pinned-HTTPS enrollment; first token bootstrap requires a local one-time proof.")
     else:
         logger.info(f"Agent API authentication enforced (token source: {agent_auth.token_source()})")
 
@@ -154,7 +154,14 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     try:
-        uvicorn.run(app, host="0.0.0.0", port=settings.node_api_port)
+        agent_auth.ensure_management_tls_identity()
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=settings.node_api_port,
+            ssl_certfile=str(agent_auth.TLS_CERT_FILE),
+            ssl_keyfile=str(agent_auth.TLS_KEY_FILE),
+        )
     except Exception as e:
         logger.error(f"Failed to start server: {e}", exc_info=True)
         raise

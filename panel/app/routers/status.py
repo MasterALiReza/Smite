@@ -106,7 +106,14 @@ async def get_status(
         select(func.count(Node.id)).where(Node.status == "active")
     )
     active_nodes = active_nodes_result.scalar() or 0
-    
+
+    try:
+        from app.tunnel_reapply_manager import tunnel_reapply_manager
+
+        automation = tunnel_reapply_manager.runtime_status()
+    except Exception:
+        automation = None
+
     return {
         "system": {
             "cpu_percent": cpu_percent,
@@ -121,6 +128,7 @@ async def get_status(
         "nodes": {
             "total": total_nodes,
             "active": active_nodes,
-        }
+        },
+        "automation": automation,
     }
 

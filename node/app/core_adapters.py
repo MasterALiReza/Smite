@@ -16,10 +16,21 @@ import uuid
 import re
 import contextvars
 import json
+import random
 
 logger = logging.getLogger(__name__)
 
 _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+_PENDING_CORE_WORKERS: Set[asyncio.Task] = set()
+
+
+async def _run_core_worker(func, *args):
+    task = asyncio.create_task(asyncio.to_thread(func, *args))
+    _PENDING_CORE_WORKERS.add(task)
+    task.add_done_callback(_PENDING_CORE_WORKERS.discard)
+    # Cancelling the caller cannot stop its thread; keep it tracked until the thread exits.
+    return await asyncio.shield(task)
+
 
 # Idle time after which a UDP client session of a GOST tunnel is released
 UDP_SESSION_TTL = "120s"
@@ -923,28 +934,104 @@ class RatholeAdapter:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.processes = {}
         self.log_handles = {}
-    
-    async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
-        """Apply Rathole tunnel - supports both server and client modes"""
-        # Always remove any previous or orphan instance for this tunnel before applying
-        await self.remove(tunnel_id)
-        await asyncio.sleep(0.2)
-        
-        mode = spec.get('mode', 'client')
-        
+
+    @staticmethod
+    def _resolve_transport(spec: Dict[str, Any]) -> Tuple[str, bool, bool, bool]:
+        """Return (transport, use_websocket, use_noise, websocket_tls)."""
         transport = (spec.get('transport_type') or spec.get('transport') or 'tcp').lower()
-        tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
+        if transport in ('tls', 'https'):
+            transport = 'wss'
         if transport in ['ws', 'websocket', 'wss']:
             use_websocket = True
             use_noise = False
         elif transport == 'noise':
             use_websocket = False
             use_noise = True
-        else:
+        elif transport in ('tcp', 'raw', ''):
             use_websocket = False
             use_noise = False
-
+        else:
+            # Silent TCP fallback would serve an unencrypted tunnel while the
+            # caller believes another transport is active.
+            raise ValueError(
+                f"Rathole transport '{transport}' is not supported; allowed: tcp, noise, ws, wss"
+            )
         websocket_tls = (transport == 'wss') or bool(spec.get('websocket_tls', False) or spec.get('tls', False))
+        return transport, use_websocket, use_noise, websocket_tls
+
+    @staticmethod
+    def _effective_ports(spec: Dict[str, Any]) -> List[Any]:
+        ports = spec.get('ports') or []
+        if not ports:
+            proxy_port = spec.get('proxy_port') or spec.get('remote_port') or spec.get('listen_port')
+            if proxy_port:
+                ports = [proxy_port]
+        if not ports:
+            local_addr = spec.get('local_addr', '127.0.0.1:8080')
+            _, local_port, _ = parse_address_port(local_addr)
+            ports = [local_port or 8080]
+        return list(ports)
+
+    @staticmethod
+    def _validate_ports(ports: Iterable[Any]) -> List[int]:
+        cleaned: List[int] = []
+        for port in ports:
+            text = str(port).strip()
+            if not text.isdigit():
+                raise ValueError(f"Rathole service port '{port}' is not a valid port number")
+            number = int(text)
+            if not 1 <= number <= 65535:
+                raise ValueError(f"Rathole service port {number} is outside 1-65535")
+            cleaned.append(number)
+        return cleaned
+
+    async def preflight(self, tunnel_id: str, spec: Dict[str, Any]) -> None:
+        """Validate a Rathole spec before the running tunnel is stopped."""
+        mode = spec.get('mode', 'client')
+        transport, use_websocket, use_noise, websocket_tls = self._resolve_transport(spec)
+
+        token = sanitize_config_str((spec.get('token') or '').strip())
+        if not token:
+            raise ValueError(f"Rathole {mode} requires 'token' in spec")
+
+        if mode == 'server':
+            bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
+            _, bind_port, _ = parse_address_port(bind_addr)
+            if bind_port is not None and not 1 <= bind_port <= 65535:
+                raise ValueError(f"Rathole bind port {bind_port} is outside 1-65535")
+            ports = self._effective_ports(spec)
+            self._validate_ports(ports)
+            if websocket_tls and not use_noise:
+                pfx_path = self.config_dir / f"{tunnel_id}.pfx"
+                if not spec.get('tls_pkcs12_b64') and not pfx_path.exists():
+                    raise ValueError(
+                        f"Rathole server in WSS mode requires 'tls_pkcs12_b64' or {pfx_path}"
+                    )
+            return
+
+        remote_addr = (spec.get('remote_addr') or '').strip()
+        for prefix in ('wss://', 'ws://'):
+            if remote_addr.startswith(prefix):
+                remote_addr = remote_addr[len(prefix):]
+                break
+        host, port, _ = parse_address_port(remote_addr)
+        if not host or not port:
+            raise ValueError("Rathole client requires 'remote_addr' (host:port) in spec")
+        self._validate_ports(self._effective_ports(spec))
+
+    async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
+        """Apply Rathole tunnel - supports both server and client modes"""
+        # Validate the replacement config BEFORE stopping a healthy tunnel.
+        await self.preflight(tunnel_id, spec)
+
+        # Always remove any previous or orphan instance for this tunnel before applying
+        await self.remove(tunnel_id)
+        await asyncio.sleep(0.2)
+
+        mode = spec.get('mode', 'client')
+
+        transport, use_websocket, use_noise, websocket_tls = self._resolve_transport(spec)
+        tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
         
         if mode == 'server':
             bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
@@ -972,7 +1059,7 @@ class RatholeAdapter:
             for p in ports:
                 await free_port(p)
             
-            bind_addr_str = f"[{bind_host}]:{bind_port}" if (is_ipv6 and not bind_host.startswith("[")) else f"{bind_host}:{bind_port}"
+            bind_addr_str = format_address_port(bind_host, bind_port)
             config = f"""[server]
 bind_addr = "{bind_addr_str}"
 default_token = "{token}"
@@ -1131,11 +1218,13 @@ tls = {tls_val}
                         except Exception:
                             pass
 
+                    remote_host, _, _ = parse_address_port(remote_addr)
                     sni = sanitize_config_str(
                         spec.get('custom_sni')
                         or spec.get('stealth_domain')
                         or spec.get('hostname')
-                        or (remote_addr.split(':')[0].strip('[]') if ':' in remote_addr else remote_addr)
+                        or remote_host
+                        or remote_addr
                     )
 
                     config += f"""
@@ -1151,7 +1240,7 @@ tls = {tls_val}
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                local_addr = f"{target_host}:{port_num}"
+                local_addr = format_address_port(str(target_host), port_num)
                 
                 if tunnel_type == 'tcp+udp':
                     config += f"""
@@ -1310,6 +1399,329 @@ nodelay = true
         }
 
 
+# Backhaul v0.7.2 parses `ports` itself (internal/server/transport/*.go):
+#  - "443", "443-600", "4000=5000", "443=1.1.1.1:5201", "443-600=1.1.1.1:5201"
+#  - "127.0.0.2:443=1.1.1.1:5201" (single local port only; local ranges need a bare port)
+# and its client resolves targets with strings.Split(addr, ":")[1], so an IPv6
+# target host can never be dialed. Unsupported spellings must be rejected before
+# the running tunnel is stopped instead of being silently rewritten.
+BACKHAUL_DEFAULT_TARGET_HOST = "127.0.0.1"
+BACKHAUL_MAX_RANGE_PORTS = 500
+
+
+def _backhaul_port_number(value: Any, field: str = "port") -> int:
+    text = str(value).strip()
+    if not text.isdigit():
+        raise ValueError(f"Backhaul {field} '{text}' is not a valid port number")
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"Backhaul {field} {port} is outside 1-65535")
+    return port
+
+
+def _backhaul_parse_range(text: str) -> Optional[Tuple[int, int]]:
+    match = re.fullmatch(r"\s*(\d{1,5})\s*-\s*(\d{1,5})\s*", str(text))
+    if not match:
+        return None
+    start = _backhaul_port_number(match.group(1), "range start")
+    end = _backhaul_port_number(match.group(2), "range end")
+    if end < start:
+        raise ValueError(f"Backhaul port range '{text}' is reversed")
+    return start, end
+
+
+def _backhaul_validate_target_host(host: str) -> str:
+    clean = str(host or "").strip()
+    if not clean:
+        raise ValueError("Backhaul target host is empty")
+    if clean.startswith("[") and clean.endswith("]"):
+        clean = clean[1:-1]
+    try:
+        import ipaddress
+        ipaddress.IPv6Address(clean)
+    except (ValueError, ipaddress.AddressValueError):
+        pass
+    else:
+        raise ValueError(
+            "Backhaul v0.7.2 cannot dial IPv6 target hosts; use an IPv4/hostname "
+            "target or another tunnel core"
+        )
+    if ":" in clean:
+        raise ValueError(f"Backhaul target host '{host}' must not include a port")
+    return clean
+
+
+def _backhaul_normalize_edge_ip(value: Any) -> str:
+    """`edge_ip` is concatenated as `edge_ip:port` by upstream, so IPv6 must be bracketed."""
+    import ipaddress
+
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Backhaul edge_ip is empty")
+    candidate = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+    try:
+        ipaddress.IPv6Address(candidate)
+    except (ValueError, ipaddress.AddressValueError):
+        if ":" in candidate:
+            raise ValueError(
+                f"Backhaul edge_ip '{text}' must be a host without a port"
+            ) from None
+        return candidate
+    return f"[{candidate}]"
+
+
+def _backhaul_split_host_port(text: str, field: str, *, allow_ipv6: bool) -> Tuple[str, int]:
+    clean = str(text or "").strip()
+    host, port, is_ipv6 = parse_address_port(clean)
+    bracketed = clean.startswith("[")
+    if not host or port is None:
+        raise ValueError(f"Backhaul {field} '{clean}' must be host:port")
+    if is_ipv6 and not bracketed:
+        raise ValueError(
+            f"Backhaul {field} '{clean}' must bracket an IPv6 address, e.g. [::1]:443"
+        )
+    if is_ipv6 and not allow_ipv6:
+        raise ValueError(
+            f"Backhaul v0.7.2 cannot forward to IPv6 target '{clean}'; "
+            "use an IPv4/hostname target or another tunnel core"
+        )
+    return (host, _backhaul_port_number(port, field))
+
+
+def _backhaul_expand_range(start: int, end: int, target_host: str) -> List[str]:
+    """Expand a 1:1 range for targets Backhaul cannot express as a range."""
+    count = end - start + 1
+    if count > BACKHAUL_MAX_RANGE_PORTS:
+        raise ValueError(
+            f"Backhaul range {start}-{end} has {count} ports and cannot be expanded "
+            f"to target host {target_host} (limit {BACKHAUL_MAX_RANGE_PORTS}); "
+            "use the default 127.0.0.1 target or split the range"
+        )
+    host = _backhaul_validate_target_host(target_host)
+    return [f"{port}={format_address_port(host, port)}" for port in range(start, end + 1)]
+
+
+def _normalize_backhaul_ports(ports: Any, target_host: Optional[str]) -> List[str]:
+    """Translate a Smite ports list into the exact syntax Backhaul v0.7.2 parses.
+
+    Range-to-range mappings (the old "A-B=host:A-B" shorthand) are expanded
+    into supported 1:1 mappings so the target host is never dropped; other
+    target ranges and IPv6 targets are rejected explicitly.
+    """
+    if isinstance(ports, str):
+        entries: List[Any] = [entries for entries in re.split(r"[\r\n,]+", ports) if entries.strip()]
+    elif isinstance(ports, (list, tuple, set)):
+        entries = list(ports)
+    else:
+        raise ValueError("Backhaul 'ports' must be a list or comma-separated string")
+
+    target = str(target_host or BACKHAUL_DEFAULT_TARGET_HOST).strip() or BACKHAUL_DEFAULT_TARGET_HOST
+    if target != BACKHAUL_DEFAULT_TARGET_HOST:
+        _backhaul_validate_target_host(target)
+
+    normalized: List[str] = []
+    for entry in entries:
+        if entry is None or entry == "":
+            continue
+        if isinstance(entry, dict):
+            local = entry.get("local") or entry.get("listen_port") or entry.get("public_port")
+            remote_host = entry.get("target_host") or target
+            remote_port = entry.get("target_port") or entry.get("remote_port") or local
+            if not local:
+                raise ValueError("Backhaul port mapping is missing its local port")
+            local_range = _backhaul_parse_range(str(local))
+            remote_host = _backhaul_validate_target_host(remote_host)
+            if local_range:
+                start, end = local_range
+                remote_port_num = _backhaul_port_number(remote_port, "target port")
+                normalized.append(
+                    f"{start}-{end}={format_address_port(remote_host, remote_port_num)}"
+                )
+            else:
+                local_port = _backhaul_port_number(local, "local port")
+                remote_port_num = _backhaul_port_number(remote_port, "target port")
+                normalized.append(
+                    f"{local_port}={format_address_port(remote_host, remote_port_num)}"
+                )
+            continue
+
+        if isinstance(entry, (int, float)):
+            entry = str(int(entry))
+        if not isinstance(entry, str):
+            raise ValueError(f"Unsupported Backhaul port entry: {entry!r}")
+
+        text = entry.strip()
+        if not text:
+            continue
+
+        if "=" in text:
+            parts = [part.strip() for part in text.split("=")]
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Backhaul port mapping '{text}' is invalid: exactly one '=' is allowed"
+                )
+            left, right = parts
+            left_range = _backhaul_parse_range(left)
+            if left_range:
+                start, end = left_range
+                right_range = _backhaul_parse_range(right)
+                if right_range:
+                    if right_range != left_range:
+                        raise ValueError(
+                            f"Backhaul port mapping '{text}' is unsupported: a local range "
+                            "can only target a single port"
+                        )
+                    # Legacy 1:1 range spelling: preserve the host by expanding it.
+                    normalized.extend(_backhaul_expand_range(start, end, target))
+                    continue
+                if ":" in right:
+                    host_part, _, port_part = right.rpartition(":")
+                    host_range = _backhaul_parse_range(port_part)
+                    if host_range:
+                        if host_range != left_range:
+                            raise ValueError(
+                                f"Backhaul port mapping '{text}' is unsupported: the target "
+                                f"range {port_part} must match the local range {start}-{end}"
+                            )
+                        # Legacy 1:1 spelling with an explicit host: keep the host.
+                        normalized.extend(
+                            _backhaul_expand_range(start, end, host_part.strip())
+                        )
+                        continue
+                    remote_host, remote_port = _backhaul_split_host_port(
+                        right, "target", allow_ipv6=False
+                    )
+                    right_repr = format_address_port(remote_host, remote_port)
+                else:
+                    right_repr = str(_backhaul_port_number(right, "target port"))
+                normalized.append(f"{start}-{end}={right_repr}")
+                continue
+
+            if ":" in left:
+                local_host, local_port = _backhaul_split_host_port(
+                    left, "local bind", allow_ipv6=True
+                )
+                left_repr = format_address_port(local_host, local_port)
+            else:
+                left_repr = str(_backhaul_port_number(left, "local port"))
+
+            if ":" in right:
+                host_part, _, port_part = right.rpartition(":")
+                if _backhaul_parse_range(port_part):
+                    raise ValueError(
+                        f"Backhaul port mapping '{text}' is unsupported: a single local "
+                        "port cannot target a port range"
+                    )
+                remote_host, remote_port = _backhaul_split_host_port(
+                    right, "target", allow_ipv6=False
+                )
+                right_repr = format_address_port(remote_host, remote_port)
+            else:
+                right_repr = str(_backhaul_port_number(right, "target port"))
+            normalized.append(f"{left_repr}={right_repr}")
+            continue
+
+        port_range = _backhaul_parse_range(text)
+        if port_range:
+            start, end = port_range
+            if target == BACKHAUL_DEFAULT_TARGET_HOST:
+                normalized.append(f"{start}-{end}")
+            else:
+                normalized.extend(_backhaul_expand_range(start, end, target))
+            continue
+
+        if ":" in text:
+            raise ValueError(
+                f"Backhaul port mapping '{text}' is unsupported: range-to-port must use "
+                "'A-B=host:PORT' (the 'A-B:PORT' spelling is not parsed by v0.7.2)"
+            )
+        port = _backhaul_port_number(text, "port")
+        if target == BACKHAUL_DEFAULT_TARGET_HOST:
+            normalized.append(f"{port}={target}:{port}")
+        else:
+            normalized.append(f"{port}={format_address_port(target, port)}")
+    return normalized
+
+
+def _backhaul_local_ports(entries: Iterable[str]) -> Set[int]:
+    """Local (listen) ports of already-normalized Backhaul mappings."""
+    ports: Set[int] = set()
+    for entry in entries:
+        left = str(entry).split("=", 1)[0].strip()
+        port_range = _backhaul_parse_range(left)
+        if port_range:
+            ports.update(range(port_range[0], port_range[1] + 1))
+            continue
+        if left.isdigit():
+            ports.add(_backhaul_port_number(left, "local port"))
+            continue
+        _, port, _ = parse_address_port(left)
+        if port:
+            ports.add(port)
+    return ports
+
+
+def _backhaul_effective_transport(spec: Dict[str, Any], default: str) -> Tuple[str, bool]:
+    """Resolve the carrier exactly like the adapter does, rejecting unknown values."""
+    raw_transport = str(spec.get("transport") or spec.get("type") or default).strip().lower()
+    raw_transport = {
+        "websocket": "ws", "https": "wss", "tls": "wss", "mux": "tcpmux",
+    }.get(raw_transport, raw_transport)
+    if raw_transport == "tcp+udp":
+        raw_transport = "tcp"
+    is_pure_udp = raw_transport == "udp"
+    is_udp_over_tcp = (
+        spec.get("accept_udp") is True
+        or (spec.get("type") in ("udp", "tcp+udp"))
+        or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
+        or is_pure_udp
+    )
+    if is_pure_udp:
+        transport = "tcp"
+    elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
+        transport = raw_transport
+    else:
+        raise ValueError(
+            f"Backhaul transport '{raw_transport}' is not supported; "
+            "allowed: tcp, tcpmux, ws, wsmux, wss, wssmux"
+        )
+
+    explicit_udp = (
+        spec.get("type") in ("udp", "tcp+udp")
+        or spec.get("tunnel_type") in ("udp", "tcp+udp")
+        or is_pure_udp
+    )
+    # Upstream implements accept_udp only for transport="tcp"; a ws/wss carrier
+    # requested for a UDP payload must not be silently replaced with TCP unless
+    # the payload really is UDP.
+    if is_udp_over_tcp and transport != "tcp":
+        if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
+            is_udp_over_tcp = False
+        else:
+            transport = "tcp"
+    return transport, is_udp_over_tcp
+
+
+def _backhaul_effective_server_ports(spec: Dict[str, Any]) -> Any:
+    """Ports list including the legacy single-port fallbacks, before normalization."""
+    ports = spec.get("ports")
+    if ports and not (isinstance(ports, list) and len(ports) == 0):
+        return ports
+
+    listen_port = spec.get("public_port") or spec.get("listen_port")
+    target_addr = spec.get("target_addr")
+    target_host = str(spec.get("target_host") or BACKHAUL_DEFAULT_TARGET_HOST).strip() or BACKHAUL_DEFAULT_TARGET_HOST
+    if not target_addr:
+        target_port = spec.get("target_port") or listen_port
+        if target_port:
+            target_addr = format_address_port(target_host, target_port)
+    if listen_port and target_addr:
+        return [f"{listen_port}={target_addr}"]
+    if listen_port:
+        return [str(listen_port)]
+    return []
+
+
 class BackhaulAdapter:
     """Backhaul reverse tunnel adapter"""
     name = "backhaul"
@@ -1372,7 +1784,52 @@ class BackhaulAdapter:
             Path("backhaul"),
         ]
 
+    async def preflight(self, tunnel_id: str, spec: Dict[str, Any]) -> None:
+        """Validate a Backhaul spec before the running tunnel is stopped."""
+        self._resolve_binary_path()
+        mode = spec.get("mode", "client")
+        if mode == "server":
+            _backhaul_effective_transport(spec, "tcpmux")
+            bind_addr = spec.get("bind_addr")
+            if bind_addr:
+                _backhaul_split_host_port(str(bind_addr), "bind_addr", allow_ipv6=True)
+            else:
+                control_port = spec.get("control_port") or spec.get("listen_port") or 3080
+                _backhaul_port_number(control_port, "control_port")
+            ports = _backhaul_effective_server_ports(spec)
+            logger.info(
+                f"Backhaul {mode} tunnel {tunnel_id}: received ports from spec: {ports} (type: {type(ports)})"
+            )
+            _normalize_backhaul_ports(ports, spec.get("target_host"))
+            if bool(spec.get("tls_cert_pem")) != bool(spec.get("tls_key_pem")):
+                raise ValueError(
+                    "Backhaul server requires both 'tls_cert_pem' and 'tls_key_pem', or neither"
+                )
+            return
+
+        _backhaul_effective_transport(spec, "tcp")
+        remote_addr = spec.get("remote_addr") or spec.get("control_addr") or spec.get("bind_addr")
+        if not remote_addr:
+            raise ValueError("Backhaul client requires 'remote_addr' in spec")
+        remote_addr = str(remote_addr).strip()
+        if remote_addr.startswith("ws://"):
+            remote_addr = remote_addr[5:]
+        elif remote_addr.startswith("wss://"):
+            remote_addr = remote_addr[6:]
+        elif "://" in remote_addr:
+            remote_addr = remote_addr.split("://", 1)[1]
+        if "/" in remote_addr:
+            remote_addr = remote_addr.split("/", 1)[0]
+        _backhaul_split_host_port(remote_addr, "remote_addr", allow_ipv6=True)
+        client_options = dict(spec.get("client_options") or {})
+        edge_ip = client_options.get("edge_ip") or spec.get("edge_ip")
+        if edge_ip not in (None, ""):
+            _backhaul_normalize_edge_ip(edge_ip)
+
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
+        # Validate the replacement config BEFORE stopping a healthy tunnel.
+        await self.preflight(tunnel_id, spec)
+
         # Always remove any previous or orphan instance for this tunnel before applying
         await self.remove(tunnel_id)
         await asyncio.sleep(0.2)
@@ -1380,117 +1837,33 @@ class BackhaulAdapter:
         mode = spec.get('mode', 'client')
 
         if mode == 'server':
-            raw_transport = (spec.get("transport") or spec.get("type") or "tcpmux").lower()
-            is_pure_udp = raw_transport == "udp"
-            is_udp_over_tcp = (
-                spec.get("accept_udp") is True
-                or (spec.get("type") in ("udp", "tcp+udp"))
-                or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
-                or is_pure_udp
-            )
-            if is_pure_udp:
-                transport = "tcp"
-            elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
-                transport = raw_transport
-            else:
-                transport = "tcpmux"
-
-            explicit_udp = (
-                spec.get("type") in ("udp", "tcp+udp")
-                or spec.get("tunnel_type") in ("udp", "tcp+udp")
-                or is_pure_udp
-            )
-            if is_udp_over_tcp and transport != "tcp":
-                if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
-                    is_udp_over_tcp = False
-                else:
-                    transport = "tcp"
+            transport, is_udp_over_tcp = _backhaul_effective_transport(spec, "tcpmux")
 
             server_options = dict(spec.get("server_options") or {})
             bind_addr = spec.get("bind_addr")
             if not bind_addr:
-                control_port = spec.get("control_port") or spec.get("listen_port") or 3080
-                bind_ip = spec.get("bind_ip", "0.0.0.0")
+                control_port = _backhaul_port_number(
+                    spec.get("control_port") or spec.get("listen_port") or 3080,
+                    "control_port",
+                )
+                bind_ip = str(spec.get("bind_ip", "0.0.0.0")).strip() or "0.0.0.0"
                 bind_addr = format_address_port(bind_ip, control_port)
             else:
-                bind_h, bind_p, _ = parse_address_port(bind_addr)
-                if bind_h and bind_p:
-                    bind_addr = format_address_port(bind_h, bind_p)
+                bind_host, bind_port = _backhaul_split_host_port(
+                    str(bind_addr), "bind_addr", allow_ipv6=True
+                )
+                bind_addr = format_address_port(bind_host, bind_port)
 
-            ports = spec.get("ports")
+            ports = _backhaul_effective_server_ports(spec)
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: received ports from spec: {ports} (type: {type(ports)})")
-
-            if not ports or (isinstance(ports, list) and len(ports) == 0):
-                listen_port = spec.get("public_port") or spec.get("listen_port")
-                target_addr = spec.get("target_addr")
-                if not target_addr:
-                    target_host = spec.get("target_host", "127.0.0.1")
-                    target_port = spec.get("target_port") or listen_port
-                    if target_port:
-                        target_addr = f"{target_host}:{target_port}"
-                if listen_port and target_addr:
-                    ports = [f"{listen_port}={target_addr}"]
-                elif listen_port:
-                    ports = [str(listen_port)]
-                else:
-                    ports = []
-
-            target_host = spec.get("target_host", "127.0.0.1")
-            if isinstance(ports, list):
-                processed_ports = []
-                for p in ports:
-                    if not p:
-                        continue
-                    if isinstance(p, str):
-                        p_clean = p.strip()
-                        if '=' in p_clean:
-                            m_rng = re.fullmatch(r"(\d+)-(\d+)=[^:=]+:(\d+)-(\d+)", p_clean)
-                            if m_rng and m_rng.group(1) == m_rng.group(3) and m_rng.group(2) == m_rng.group(4):
-                                # Backhaul cannot parse "A-B=host:A-B"; use native "A-B"
-                                processed_ports.append(f"{m_rng.group(1)}-{m_rng.group(2)}")
-                            else:
-                                processed_ports.append(p_clean)
-                        elif p_clean.isdigit():
-                            processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
-                        elif '-' in p_clean:
-                            # Port range: Backhaul Go binary forwards range directly without host prefix
-                            processed_ports.append(p_clean)
-                        else:
-                            processed_ports.append(p_clean)
-                    elif isinstance(p, (int, float)):
-                        port_int = int(p)
-                        processed_ports.append(f"{port_int}={target_host}:{port_int}")
-                    elif isinstance(p, dict):
-                        local = p.get("local") or p.get("listen_port") or p.get("public_port")
-                        tgt_host = p.get("target_host") or target_host
-                        tgt_port = p.get("target_port") or p.get("remote_port") or local
-                        if local:
-                            processed_ports.append(f"{local}={tgt_host}:{tgt_port}")
-                    else:
-                        processed_ports.append(str(p).strip())
-                ports = processed_ports
-            else:
-                ports = [str(ports).strip()] if ports else []
+            ports = _normalize_backhaul_ports(ports, spec.get("target_host"))
 
             # Batch port freeing on server node
             ports_to_free: Set[int] = set()
             _, bind_port_num, _ = parse_address_port(bind_addr)
             if bind_port_num:
                 ports_to_free.add(bind_port_num)
-
-            for p_entry in ports:
-                p_str = str(p_entry).strip()
-                lp = p_str.split("=")[0].strip() if "=" in p_str else p_str
-                if lp.isdigit():
-                    ports_to_free.add(int(lp))
-                elif "-" in lp:
-                    parts = lp.split("-")
-                    if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
-                        s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
-                        if s_p <= e_p:
-                            check_count = min(e_p - s_p + 1, 500)
-                            for port_num in range(s_p, s_p + check_count):
-                                ports_to_free.add(port_num)
+            ports_to_free.update(_backhaul_local_ports(ports))
 
             if ports_to_free:
                 await free_ports(ports_to_free)
@@ -1565,8 +1938,8 @@ class BackhaulAdapter:
             if spec.get("tls_cert_pem") and spec.get("tls_key_pem"):
                 cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
                 key_path = self.config_dir / f"{tunnel_id}_key.pem"
-                await asyncio.to_thread(cert_path.write_text, spec["tls_cert_pem"], "utf-8")
-                await asyncio.to_thread(key_path.write_text, spec["tls_key_pem"], "utf-8")
+                await _run_core_worker(cert_path.write_text, spec["tls_cert_pem"], "utf-8")
+                await _run_core_worker(key_path.write_text, spec["tls_key_pem"], "utf-8")
                 try:
                     os.chmod(key_path, 0o600)
                 except Exception:
@@ -1576,7 +1949,7 @@ class BackhaulAdapter:
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
             rendered_cfg = self._render_toml({"server": server_config})
-            await asyncio.to_thread(config_path.write_text, rendered_cfg, "utf-8")
+            await _run_core_worker(config_path.write_text, rendered_cfg, "utf-8")
             try:
                 os.chmod(config_path, 0o600)
             except Exception:
@@ -1608,6 +1981,7 @@ class BackhaulAdapter:
             if not remote_addr:
                 raise ValueError("Backhaul client requires 'remote_addr' in spec")
 
+            remote_addr = str(remote_addr).strip()
             if remote_addr.startswith('ws://'):
                 remote_addr = remote_addr[5:]
             elif remote_addr.startswith('wss://'):
@@ -1616,32 +1990,12 @@ class BackhaulAdapter:
                 remote_addr = remote_addr.split('://', 1)[1]
             if '/' in remote_addr:
                 remote_addr = remote_addr.split('/', 1)[0]
-
-            raw_transport = (spec.get("transport") or spec.get("type") or "tcp").lower()
-            is_pure_udp = raw_transport == "udp"
-            is_udp_over_tcp = (
-                spec.get("accept_udp") is True
-                or (spec.get("type") in ("udp", "tcp+udp"))
-                or (spec.get("tunnel_type") in ("udp", "tcp+udp"))
-                or is_pure_udp
+            remote_host, remote_port = _backhaul_split_host_port(
+                remote_addr, "remote_addr", allow_ipv6=True
             )
-            if is_pure_udp:
-                transport = "tcp"
-            elif raw_transport in {"tcp", "ws", "wss", "wsmux", "wssmux", "tcpmux"}:
-                transport = raw_transport
-            else:
-                transport = "tcpmux"
+            remote_addr = format_address_port(remote_host, remote_port)
 
-            explicit_udp = (
-                spec.get("type") in ("udp", "tcp+udp")
-                or spec.get("tunnel_type") in ("udp", "tcp+udp")
-                or is_pure_udp
-            )
-            if is_udp_over_tcp and transport != "tcp":
-                if transport in {"ws", "wss", "wsmux", "wssmux"} and not explicit_udp:
-                    is_udp_over_tcp = False
-                else:
-                    transport = "tcp"
+            transport, is_udp_over_tcp = _backhaul_effective_transport(spec, "tcp")
 
             client_options = dict(spec.get("client_options") or {})
 
@@ -1656,7 +2010,7 @@ class BackhaulAdapter:
                 if sni_domain and r_host and r_port and sni_domain != r_host:
                     if not (client_options.get("edge_ip") or spec.get("edge_ip")):
                         client_options["edge_ip"] = r_host
-                    remote_addr = f"{sni_domain}:{r_port}"
+                    remote_addr = format_address_port(sni_domain, r_port)
 
             config_dict: Dict[str, Any] = {
                 "remote_addr": remote_addr,
@@ -1683,6 +2037,8 @@ class BackhaulAdapter:
                         value = value.lower() in ("true", "1", "yes")
                     else:
                         value = bool(value)
+                elif key == "edge_ip":
+                    value = _backhaul_normalize_edge_ip(value)
                 config_dict[key] = value
 
             # accept_udp / insecure / heartbeat / channel_size are not part of
@@ -1715,7 +2071,7 @@ class BackhaulAdapter:
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
             rendered_cfg = self._render_toml({"client": config_dict})
-            await asyncio.to_thread(config_path.write_text, rendered_cfg, "utf-8")
+            await _run_core_worker(config_path.write_text, rendered_cfg, "utf-8")
             try:
                 os.chmod(config_path, 0o600)
             except Exception:
@@ -1916,9 +2272,42 @@ class ChiselAdapter:
         raise FileNotFoundError(
             "Chisel binary not found. Expected at CHISEL_BINARY, '/usr/local/bin/chisel', or in PATH."
         )
-    
+
+    async def preflight(self, tunnel_id: str, spec: Dict[str, Any]) -> None:
+        """Reject an unusable Chisel client spec before stopping the running tunnel."""
+        mode = spec.get('mode', 'client')
+        if mode != 'client':
+            return
+        transport = (spec.get('transport_type') or spec.get('transport') or 'ws').lower()
+        use_tls = (transport in ['wss', 'https', 'tls']) or bool(spec.get('websocket_tls', False) or spec.get('tls', False))
+        tunnel_proto = (spec.get('type') or spec.get('tunnel_type') or 'tcp').lower()
+        server_url = spec.get('server_url') or spec.get('remote_addr') or spec.get('server_addr')
+        if not server_url:
+            raise ValueError("Chisel client requires 'server_url' or 'remote_addr' in spec")
+        ports = spec.get('ports') or []
+        local_port = spec.get('local_port') or spec.get('port')
+        if not ports and not local_port and tunnel_proto != 'socks5':
+            raise ValueError("Chisel client requires at least one port mapping")
+
+        if use_tls:
+            tls_ca_pem = spec.get('tls_ca_cert_pem') or spec.get('tls_ca')
+            explicit_skip_verify = spec.get('tls_skip_verify')
+            if explicit_skip_verify is None:
+                tls_skip_verify = not bool(tls_ca_pem)
+            else:
+                tls_skip_verify = bool(explicit_skip_verify)
+            # Fail closed BEFORE the healthy tunnel is stopped.
+            if tls_skip_verify and not tls_ca_pem and not spec.get('fingerprint'):
+                raise ValueError(
+                    "Chisel TLS requires a CA certificate or SSH fingerprint; "
+                    "refusing to connect without server authentication"
+                )
+
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply Chisel tunnel - supports both server and client modes with TLS, UDP, Camouflage and Persistent Keys"""
+        # Validate the replacement config BEFORE stopping a healthy tunnel.
+        await self.preflight(tunnel_id, spec)
+
         mode = spec.get('mode', 'client')
         binary_path = self._resolve_binary_path()
         transport = (spec.get('transport_type') or spec.get('transport') or 'ws').lower()
@@ -1929,17 +2318,6 @@ class ChiselAdapter:
             is_reverse = True
         else:
             is_reverse = bool(is_reverse)
-
-        # Early validation BEFORE removing running process
-        if mode == 'client':
-            server_url = spec.get('server_url') or spec.get('remote_addr') or spec.get('server_addr')
-            if not server_url:
-                raise ValueError("Chisel client requires 'server_url' or 'remote_addr' in spec")
-            ports = spec.get('ports') or []
-            local_port = spec.get('local_port') or spec.get('port')
-            remote_port = spec.get('remote_port')
-            if not ports and not local_port and tunnel_proto != 'socks5':
-                raise ValueError("Chisel client requires at least one port mapping")
 
         # Always remove any previous or orphan instance for this tunnel before applying
         await self.remove(tunnel_id)
@@ -2148,10 +2526,11 @@ class ChiselAdapter:
                 entries = []
                 # In reverse mode: R:<remote_p>:<target_host>:<local_p>
                 # In direct mode:  <local_p>:<target_host>:<remote_p>
+                target_repr = format_address_port(str(target_host))
                 if is_rev:
-                    prefix = f"R:{remote_p}:{target_host}:{local_p}"
+                    prefix = f"R:{remote_p}:{target_repr}:{local_p}"
                 else:
-                    prefix = f"{local_p}:{target_host}:{remote_p}"
+                    prefix = f"{local_p}:{target_repr}:{remote_p}"
                 
                 if proto == 'udp':
                     entries.append(f"{prefix}/udp")
@@ -2210,11 +2589,22 @@ class ChiselAdapter:
             
             # Anti-DPI & TLS options
             if use_tls:
-                tls_skip_verify = spec.get('tls_skip_verify', True)
+                tls_ca_pem = spec.get('tls_ca_cert_pem') or spec.get('tls_ca')
+                explicit_skip_verify = spec.get('tls_skip_verify')
+                if explicit_skip_verify is None:
+                    # Fail closed: only skip verification when the operator
+                    # explicitly asked for it; a supplied CA means verify.
+                    tls_skip_verify = not bool(tls_ca_pem)
+                else:
+                    tls_skip_verify = bool(explicit_skip_verify)
+                if tls_skip_verify and not tls_ca_pem and not fingerprint:
+                    raise ValueError(
+                        "Chisel TLS requires a CA certificate or SSH fingerprint; "
+                        "refusing to connect without server authentication"
+                    )
                 if tls_skip_verify:
                     cmd.append("--tls-skip-verify")
                 
-                tls_ca_pem = spec.get('tls_ca_cert_pem') or spec.get('tls_ca')
                 if tls_ca_pem:
                     ca_path = self.config_dir / f"{tunnel_id}_ca.pem"
                     with open(ca_path, "w") as cf:
@@ -2440,9 +2830,45 @@ class FrpAdapter:
         raise FileNotFoundError(
             "frps binary not found. Expected at FRPS_BINARY, '/usr/local/bin/frps', or in PATH."
         )
+
+    async def preflight(self, tunnel_id: str, spec: Dict[str, Any]) -> None:
+        """Validate an FRP spec (binary, port, TLS material) before stopping the tunnel."""
+        mode = spec.get('mode', 'client')
+        is_provider = bool(spec.get('is_provider'))
+        if bool(spec.get('tls_cert_pem')) != bool(spec.get('tls_key_pem')):
+            raise ValueError(
+                "FRP requires both 'tls_cert_pem' and 'tls_key_pem', or neither"
+            )
+
+        if mode == 'server':
+            self._resolve_server_binary_path()
+            if is_provider:
+                self._resolve_binary_path()
+            bind_port = spec.get('bind_port', 7000)
+            try:
+                bind_port = int(bind_port)
+            except (ValueError, TypeError):
+                raise ValueError(f"FRP bind_port '{bind_port}' is not a valid port number") from None
+            if not 1 <= bind_port <= 65535:
+                raise ValueError(f"FRP bind_port {bind_port} is outside 1-65535")
+            return
+
+        self._resolve_binary_path()
+        server_addr = str(spec.get('server_addr') or '').strip()
+        if not server_addr:
+            raise ValueError("FRP client requires 'server_addr' in spec")
+        server_port = spec.get('server_port', 7000)
+        try:
+            server_port = int(server_port)
+        except (ValueError, TypeError):
+            raise ValueError(f"FRP server_port '{server_port}' is not a valid port number") from None
+        if not 1 <= server_port <= 65535:
+            raise ValueError(f"FRP server_port {server_port} is outside 1-65535")
     
     async def apply(self, tunnel_id: str, spec: Dict[str, Any]):
         """Apply FRP tunnel - supports both server and client modes"""
+        # Validate the replacement config BEFORE stopping a healthy tunnel.
+        await self.preflight(tunnel_id, spec)
         logger.info(f"FRP tunnel {tunnel_id} pre-cleaning any existing processes")
         await self.remove(tunnel_id)
         await asyncio.sleep(0.3)
@@ -2478,7 +2904,7 @@ class FrpAdapter:
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
             if transport_proto in ['websocket', 'ws']:
                 transport_proto = 'websocket'
-            elif transport_proto == 'wss':
+            elif transport_proto in ['wss', 'https', 'tls']:
                 transport_proto = 'wss'
             elif transport_proto == 'quic':
                 transport_proto = 'quic'
@@ -2744,7 +3170,7 @@ loginFailExit: false
             transport_proto = (spec.get('transport_type') or spec.get('transport') or spec.get('protocol') or 'tcp').lower()
             if transport_proto in ['websocket', 'ws']:
                 transport_proto = 'websocket'
-            elif transport_proto == 'wss':
+            elif transport_proto in ['wss', 'https', 'tls']:
                 transport_proto = 'wss'
             elif transport_proto == 'quic':
                 transport_proto = 'quic'
@@ -2861,13 +3287,40 @@ transport:
   tcpMuxKeepaliveInterval: 25
   poolCount: 5
 """
-            if tls_enable and transport_proto != 'quic':
+            tls_ca_path = None
+            tls_ca_pem = spec.get('tls_ca_cert_pem') or spec.get('tls_ca')
+            if tls_enable and tls_ca_pem:
+                ca_path = self.config_dir / f"frpc_{tunnel_id}_ca.pem"
+                with open(ca_path, "w") as cf:
+                    cf.write(tls_ca_pem)
+                try:
+                    os.chmod(ca_path, 0o600)
+                except Exception:
+                    pass
+                tls_ca_path = str(ca_path)
+
+            if transport_proto == 'quic':
+                # QUIC always negotiates TLS from transport.tls; only serverName/trustedCaFile apply.
+                if clean_sni or tls_ca_path:
+                    config_content += "  tls:\n"
+                    if clean_sni:
+                        config_content += f'    serverName: "{clean_sni}"\n'
+                    if tls_ca_path:
+                        config_content += f'    trustedCaFile: "{tls_ca_path}"\n'
+            elif tls_enable:
                 config_content += """  tls:
     enable: true
     disableCustomTLSFirstByte: true
 """
                 if clean_sni:
                     config_content += f"""    serverName: "{clean_sni}"\n"""
+                if tls_ca_path:
+                    config_content += f"""    trustedCaFile: "{tls_ca_path}"\n"""
+            else:
+                # FRP >= 0.50 enables TLS by default; opt out explicitly to keep plain transport plain.
+                config_content += """  tls:
+    enable: false
+"""
 
             if clean_token:
                 config_content += f"""auth:
@@ -3246,7 +3699,11 @@ class GostAdapter:
             tunnel_proto = "tcp"
 
         is_udp_mode = tunnel_proto in ["udp", "tcp+udp"]
-        mux_type = spec.get("mux_type") or "yamux"
+        # The pinned GOST x revisions only implement xtaci/smux; normalize the
+        # legacy "yamux" label so no unsupported claim reaches the config.
+        mux_type = str(spec.get("mux_type") or "smux").strip().lower()
+        if mux_type in ("yamux", "smux"):
+            mux_type = "smux"
         is_reverse_mode = bool(is_reverse)
         is_gaming_mode = bool(spec.get("gaming_mode"))
         # Avoid Nested Double-SMUX in reverse mode: the relay handler/dialer already
@@ -3461,6 +3918,7 @@ class GostAdapter:
             grpc_with_tls = gost_type == "grpc" and (
                 security_type in ["tls", "utls"]
                 or bool(spec.get("tls_cert"))
+                or bool(spec.get("tls_cert_pem"))
                 or bool(spec.get("custom_sni"))
             )
             requires_tls = (
@@ -3473,10 +3931,13 @@ class GostAdapter:
                 cert_path = self.config_dir / f"cert_{tunnel_id}.pem"
                 key_path = self.config_dir / f"key_{tunnel_id}.pem"
                 
-                # Check if custom cert/key provided in spec
-                if spec.get("tls_cert") and spec.get("tls_key"):
-                    cert_path.write_text(spec["tls_cert"].strip())
-                    key_path.write_text(spec["tls_key"].strip())
+                # Panel-distributed cert wins; legacy tls_cert/tls_key fields
+                # remain supported for older panels.
+                cert_pem = spec.get("tls_cert_pem") or spec.get("tls_cert")
+                key_pem = spec.get("tls_key_pem") or spec.get("tls_key")
+                if cert_pem and key_pem:
+                    cert_path.write_text(str(cert_pem).strip())
+                    key_path.write_text(str(key_pem).strip())
                 elif not cert_path.exists() or not key_path.exists():
                     sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "www.cloudflare.com"
                     try:
@@ -3488,11 +3949,15 @@ class GostAdapter:
                     except Exception as e:
                         logger.error(f"Failed to generate self-signed cert for SNI {sni_domain}: {e}")
                 
-                if cert_path.exists() and key_path.exists():
-                    listener["tls"] = {
-                        "certFile": str(cert_path),
-                        "keyFile": str(key_path)
-                    }
+                if not (cert_path.exists() and key_path.exists()):
+                    raise RuntimeError(
+                        f"GOST TLS listener for tunnel {tunnel_id} has no certificate; "
+                        "refusing to start without TLS trust material"
+                    )
+                listener["tls"] = {
+                    "certFile": str(cert_path),
+                    "keyFile": str(key_path)
+                }
             elif gost_type == "grpc" and not grpc_with_tls:
                 if "metadata" not in listener:
                     listener["metadata"] = {}
@@ -3608,24 +4073,53 @@ class GostAdapter:
             dialer_tls = {}
             # custom_sni takes priority over stealth_domain
             sni_candidate = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni")
-            if sni_candidate:
-                dialer_tls["serverName"] = str(sni_candidate).strip()
-                
-            if security_type == "utls":
-                # Dynamic uTLS fingerprint support
-                utls_client = spec.get("utls_client") or spec.get("utls_fingerprint") or "chrome"
-                if utls_client in ["random", "randomized"]:
-                    import secrets
-                    utls_client = secrets.choice(["chrome", "firefox", "ios", "android", "edge", "safari"])
-                dialer_tls["utls"] = {"client": utls_client}
-                if not dialer_tls.get("serverName"):
-                    dialer_tls["serverName"] = "www.google.com"  # fallback spoofed SNI for uTLS
-                # When using uTLS/TLS often we don't have valid cert for our own server IP
+            tls_ca_pem = spec.get("tls_ca_cert_pem") or spec.get("tls_ca")
+            # Only these carriers authenticate the tunnel server itself. UDP/KCP/SSH
+            # have no TLS listener, so a tunnel CA would be attached to a transport
+            # that never performs the handshake; their TLS dialer (if any) passes
+            # through to the target service instead.
+            server_terminates_tls = (
+                gost_type in ["wss", "mwss", "tls", "mtls", "quic"]
+                or (gost_type in ["ws", "mws"] and security_type in ["tls", "utls"])
+                or (
+                    gost_type == "grpc"
+                    and (security_type in ["tls", "utls"] or bool(sni_candidate or tls_ca_pem))
+                )
+            )
+            if server_terminates_tls:
+                if security_type == "utls":
+                    # The pinned core has no uTLS dialer; never pretend otherwise.
+                    logger.warning(
+                        f"GOST tunnel {tunnel_id}: uTLS is unsupported by the installed core; "
+                        "falling back to standard TLS"
+                    )
+                if tls_ca_pem:
+                    ca_path = self.config_dir / f"gost_{tunnel_id}_ca.pem"
+                    with open(ca_path, "w") as cf:
+                        cf.write(tls_ca_pem)
+                    try:
+                        os.chmod(ca_path, 0o600)
+                    except Exception:
+                        pass
+                    dialer_tls["caFile"] = str(ca_path)
+                    dialer_tls["secure"] = True
+                    dialer_tls["serverName"] = str(sni_candidate).strip() if sni_candidate else server_ip
+                else:
+                    # Legacy peers did not distribute a CA; keep the tunnel
+                    # working but surface that the listener is unauthenticated.
+                    dialer_tls["secure"] = False
+                    if sni_candidate:
+                        dialer_tls["serverName"] = str(sni_candidate).strip()
+                    elif server_ip:
+                        dialer_tls["serverName"] = server_ip
+            elif security_type in ["tls", "utls"]:
+                # Pass-through TLS: the peer is the target service, not the
+                # tunnel server. Preserve the historical behaviour exactly.
                 dialer_tls["secure"] = False
-            elif security_type == "tls":
-                if not dialer_tls.get("serverName"):
+                if sni_candidate:
+                    dialer_tls["serverName"] = str(sni_candidate).strip()
+                else:
                     dialer_tls["serverName"] = "www.google.com"
-                dialer_tls["secure"] = False
 
             # Configure gRPC authority (grpc.host) matching custom_host or fallback to serverName
             if gost_type == "grpc":
@@ -3716,6 +4210,7 @@ class GostAdapter:
             grpc_with_tls = gost_type == "grpc" and (
                 security_type in ["tls", "utls"]
                 or bool(spec.get("tls_cert"))
+                or bool(spec.get("tls_cert_pem"))
                 or bool(spec.get("custom_sni"))
             )
             requires_tls = (
@@ -4192,6 +4687,70 @@ class GostAdapter:
         }
 
 
+CORE_SPEC_TRANSPORTS = {
+    "gost": {"tcp", "ws", "wss", "mws", "mwss", "quic", "grpc", "kcp", "ssh"},
+    "rathole": {"tcp", "noise", "ws", "wss"},
+    "backhaul": {"tcp", "tcpmux", "ws", "wsmux", "wss", "wssmux"},
+    "chisel": {"ws", "wss"},
+    "frp": {"tcp", "kcp", "quic", "websocket", "wss"},
+}
+
+# Values that used to be accepted (or silently coerced) and must keep working
+# for tunnels that are already stored on this node during a rolling upgrade.
+CORE_SPEC_TRANSPORT_ALIASES = {
+    "gost": {"websocket": "ws", "https": "wss", "tls": "wss", "mux": "mws", "http2": "grpc"},
+    "rathole": {"websocket": "ws", "https": "wss", "tls": "wss"},
+    # "udp" here is the legacy payload-as-transport spelling, handled by the adapter.
+    "backhaul": {"websocket": "ws", "https": "wss", "tls": "wss", "mux": "tcpmux", "udp": "tcp", "tcp+udp": "tcp"},
+    "chisel": {"websocket": "ws", "https": "wss", "tls": "wss"},
+    "frp": {"ws": "websocket", "https": "wss", "tls": "wss"},
+}
+
+CORE_SPEC_TYPES = {
+    "gost": {"tcp", "udp", "tcp+udp", "grpc", "tcpmux", "ws"},
+    "rathole": {"tcp", "udp", "tcp+udp"},
+    "backhaul": {"tcp", "udp", "tcp+udp"},
+    "chisel": {"tcp", "udp", "tcp+udp", "all", "socks5"},
+    "frp": {"tcp", "udp", "tcp+udp", "http", "https"},
+}
+
+
+def validate_core_spec(core: str, spec: Dict[str, Any]) -> None:
+    """Reject a spec the core cannot honour before any running process is touched.
+
+    Only the carrier/type vocabulary is checked here; adapters still validate
+    ports, keys and targets. The goal is that an unknown value can no longer be
+    silently downgraded to plain TCP or another default.
+    """
+    core_key = (core or "").strip().lower()
+    if core_key not in CORE_SPEC_TRANSPORTS:
+        raise ValueError(f"Unknown tunnel core: {core}")
+    if not isinstance(spec, dict) or not spec:
+        raise ValueError(f"{core_key}: empty tunnel spec")
+
+    raw_transport = str(spec.get("transport") or spec.get("transport_type") or "").strip().lower()
+    if raw_transport:
+        normalized = CORE_SPEC_TRANSPORT_ALIASES.get(core_key, {}).get(raw_transport, raw_transport)
+        if normalized not in CORE_SPEC_TRANSPORTS[core_key]:
+            raise ValueError(
+                f"{core_key}: unsupported transport '{raw_transport}'. "
+                f"Allowed: {sorted(CORE_SPEC_TRANSPORTS[core_key])}"
+            )
+
+    raw_type = str(spec.get("tunnel_type") or spec.get("type") or "").strip().lower()
+    if raw_type and raw_type not in CORE_SPEC_TYPES[core_key]:
+        raise ValueError(
+            f"{core_key}: unsupported tunnel type '{raw_type}'. Allowed: {sorted(CORE_SPEC_TYPES[core_key])}"
+        )
+
+    if core_key == "backhaul" and raw_type in ("udp", "tcp+udp"):
+        normalized = CORE_SPEC_TRANSPORT_ALIASES["backhaul"].get(raw_transport, raw_transport)
+        if normalized in {"ws", "wsmux", "wss", "wssmux"}:
+            raise ValueError(
+                f"backhaul: UDP over {raw_transport} is not implemented by the core; use tcp or tcpmux"
+            )
+
+
 class AdapterManager:
     """Manager for core adapters"""
     
@@ -4215,6 +4774,8 @@ class AdapterManager:
         self.tunnel_configs: Dict[str, Dict[str, Any]] = {}
         self._tunnel_locks: Dict[str, asyncio.Lock] = {}
         self._io_lock = threading.Lock()
+        self._pending_workers = _PENDING_CORE_WORKERS
+        self._shutting_down = False
         # Reconciliation safety: an orphan is only purged after it was reported
         # missing by the panel in consecutive registrations (not on a single glitch).
         self._orphan_strikes: Dict[str, int] = {}
@@ -4456,6 +5017,10 @@ class AdapterManager:
                             start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
                             if 0 <= end_p - start_p <= 500:
                                 ports.update(range(start_p, end_p + 1))
+                    else:
+                        _, local_port, _ = parse_address_port(lhs)
+                        if local_port and 0 < local_port <= 65535:
+                            ports.add(local_port)
                 elif isinstance(p, str) and "-" in p:
                     parts = p.split("-", 1)
                     if parts[0].strip().isdigit() and parts[1].strip().isdigit():
@@ -4509,6 +5074,7 @@ class AdapterManager:
         logger.info("AdapterManager self-healing watchdog loop started (interval: 15s)")
         backoff_delay: Dict[str, int] = {}
         next_retry_at: Dict[str, float] = {}
+        restart_failures: Dict[str, int] = {}
         last_log_sweep: float = 0.0
         cycle = 0
         
@@ -4522,7 +5088,7 @@ class AdapterManager:
                 if now - last_log_sweep >= 300:
                     last_log_sweep = now
                     try:
-                        await asyncio.to_thread(self._rotate_oversized_logs)
+                        await _run_core_worker(self._rotate_oversized_logs)
                     except Exception as e_sweep:
                         logger.debug(f"Watchdog: Error during log sweep: {e_sweep}")
 
@@ -4589,9 +5155,11 @@ class AdapterManager:
                                 f"in its spec; attempting recovery without touching the other tunnel."
                             )
                         
-                        # 2. Proceed with safe recovery
+                        # 2. Proceed with safe recovery. The jitter prevents every
+                        # node from restarting the same tunnel in the same second.
                         cur_delay = backoff_delay.get(tunnel_id, 15)
                         logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering...")
+                        await asyncio.sleep(random.uniform(0.0, 2.0))
                         try:
                             async with self._get_tunnel_lock(tunnel_id):
                                 # The tunnel may have been removed (or re-applied with a new
@@ -4611,15 +5179,30 @@ class AdapterManager:
                                     self.active_tunnels[tunnel_id] = adapter
                             backoff_delay.pop(tunnel_id, None)
                             next_retry_at.pop(tunnel_id, None)
+                            restart_failures.pop(tunnel_id, None)
                             logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
                         except Exception as e:
-                            logger.error(f"Watchdog: failed to auto-recover tunnel {tunnel_id}: {e}")
+                            failures = restart_failures.get(tunnel_id, 0) + 1
+                            restart_failures[tunnel_id] = failures
+                            logger.error(
+                                f"Watchdog: failed to auto-recover tunnel {tunnel_id} "
+                                f"(attempt {failures}): {e}"
+                            )
                             next_delay = min(cur_delay * 2, 120)
+                            if failures >= 10:
+                                # Sustained restart budget: keep trying, but stop a tight loop.
+                                next_delay = 300
+                                logger.critical(
+                                    f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) failed recovery "
+                                    f"{failures} times in a row; backing off to {next_delay}s. "
+                                    "This needs operator attention."
+                                )
                             backoff_delay[tunnel_id] = next_delay
-                            next_retry_at[tunnel_id] = now + next_delay
+                            next_retry_at[tunnel_id] = now + next_delay * random.uniform(0.9, 1.1)
                     else:
                         backoff_delay.pop(tunnel_id, None)
                         next_retry_at.pop(tunnel_id, None)
+                        restart_failures.pop(tunnel_id, None)
             except asyncio.CancelledError:
                 logger.info("AdapterManager watchdog loop cancelled")
                 break
@@ -4677,7 +5260,7 @@ class AdapterManager:
                 to_kill.append(pid)
         if to_kill:
             logger.warning(f"Watchdog: killing stray core processes {sorted(to_kill)} (tunnels: {sorted({tagged[p] for p in to_kill})})")
-            await asyncio.to_thread(_kill_pids, to_kill)
+            await _run_core_worker(_kill_pids, to_kill)
             for pid in to_kill:
                 self._stray_strikes.pop(pid, None)
         return sorted(to_kill)
@@ -4888,7 +5471,7 @@ class AdapterManager:
         tagged = _find_tagged_core_processes(tunnel_id)
         if tagged:
             logger.warning(f"Killing {len(tagged)} orphan process(es) of tunnel {tunnel_id} found by tag: {sorted(tagged)}")
-            await asyncio.to_thread(_kill_pids, list(tagged))
+            await _run_core_worker(_kill_pids, list(tagged))
             result["killed_pids"].extend(sorted(tagged))
 
         # 5. Free the ports and verify they really are released
@@ -4964,38 +5547,32 @@ class AdapterManager:
         authoritative_ids: Optional[Iterable[str]] = None,
     ):
         """Apply tunnel using appropriate adapter - idempotent and zero-downtime if spec is unchanged"""
+        clean_spec = self._normalize_spec(spec)
+        adapter = self.get_adapter(tunnel_core)
+        if not adapter:
+            error_msg = f"Unknown tunnel core: {tunnel_core}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        # Reject an unrecognised carrier/type before any process or port is touched.
+        validate_core_spec(tunnel_core, clean_spec)
         if authoritative_ids is not None:
-            await self._purge_conflicting_orphans(tunnel_id, spec, authoritative_ids)
+            await self._purge_conflicting_orphans(tunnel_id, clean_spec, authoritative_ids)
         async with self._get_tunnel_lock(tunnel_id):
             import logging
             logger = logging.getLogger(__name__)
             logger.info(f"Applying tunnel {tunnel_id}: core={tunnel_core}")
-            
-            adapter = self.get_adapter(tunnel_core)
-            if not adapter:
-                error_msg = f"Unknown tunnel core: {tunnel_core}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
+
             # Check if tunnel switched core type (e.g. rathole -> backhaul)
             existing_config = self.tunnel_configs.get(tunnel_id, {})
+            previous_core = existing_config.get("core") or tunnel_core
+            previous_spec = self._normalize_spec(existing_config.get("spec")) if existing_config.get("spec") else None
             old_core = existing_config.get("core")
-            if old_core and old_core != tunnel_core:
-                logger.info(f"Tunnel {tunnel_id} switched core from {old_core} to {tunnel_core}. Purging old core instance first.")
-                old_adapter = self.get_adapter(old_core)
-                if old_adapter:
-                    try:
-                        await old_adapter.remove(tunnel_id, purge=True)
-                    except Exception as e:
-                        logger.warning(f"Error purging old {old_core} adapter for {tunnel_id}: {e}")
-                self.active_tunnels.pop(tunnel_id, None)
 
             # Check if already running with exact same configuration (Idempotent Apply).
             # Volatile bookkeeping keys (force_restart, latency_ms, _pending_reapply) are
             # ignored so that they can never cause an unnecessary tunnel restart.
             _set_port_owner(tunnel_id)
             force_restart = bool(spec.get("force_restart", False))
-            clean_spec = self._normalize_spec(spec)
             same_config = (
                 existing_config.get("core") == tunnel_core
                 and self._normalize_spec(existing_config.get("spec")) == clean_spec
@@ -5010,6 +5587,22 @@ class AdapterManager:
                     logger.info(f"Tunnel {tunnel_id} ({tunnel_core}) is already active and healthy with identical configuration. Skipping restart to keep traffic 100% uninterrupted.")
                     return
 
+            # Validate the replacement before the previous core/process is removed,
+            # so a rejected config never takes down a healthy tunnel.
+            preflight = getattr(adapter, "preflight", None)
+            if callable(preflight) and hasattr(type(adapter), "preflight"):
+                await preflight(tunnel_id, clean_spec)
+
+            if old_core and old_core != tunnel_core:
+                logger.info(f"Tunnel {tunnel_id} switched core from {old_core} to {tunnel_core}. Purging old core instance first.")
+                old_adapter = self.get_adapter(old_core)
+                if old_adapter:
+                    try:
+                        await old_adapter.remove(tunnel_id, purge=True)
+                    except Exception as e:
+                        logger.warning(f"Error purging old {old_core} adapter for {tunnel_id}: {e}")
+                self.active_tunnels.pop(tunnel_id, None)
+
             if tunnel_id in self.active_tunnels:
                 logger.info(f"Tunnel {tunnel_id} configuration changed, restart forced, or process inactive; applying new configuration")
                 old_adapter = self.active_tunnels[tunnel_id]
@@ -5021,7 +5614,37 @@ class AdapterManager:
 
             adapter_name = getattr(adapter, "name", tunnel_core)
             logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
-            await adapter.apply(tunnel_id, clean_spec)
+            try:
+                await adapter.apply(tunnel_id, clean_spec)
+            except Exception as apply_error:
+                # The previous configuration (if any) was the last known good state.
+                # Put it back so a rejected config never leaves the tunnel dead.
+                if previous_spec:
+                    logger.error(
+                        f"Applying new configuration for tunnel {tunnel_id} failed ({apply_error}); "
+                        "restoring the previous working configuration"
+                    )
+                    restore_adapter = self.get_adapter(previous_core) or adapter
+                    try:
+                        await restore_adapter.apply(tunnel_id, previous_spec)
+                        self.active_tunnels[tunnel_id] = restore_adapter
+                        self.tunnel_configs[tunnel_id] = {"core": previous_core, "spec": dict(previous_spec)}
+                        self.start_watchdog()
+                        self._save_tunnels()
+                        logger.warning(
+                            f"Previous configuration restored for tunnel {tunnel_id}; it keeps serving while the "
+                            "rejected configuration is corrected"
+                        )
+                    except Exception as restore_error:
+                        logger.critical(
+                            f"Tunnel {tunnel_id} is down: new configuration failed ({apply_error}) and "
+                            f"restoring the previous configuration also failed ({restore_error})"
+                        )
+                        self.active_tunnels.pop(tunnel_id, None)
+                        # Keep tunnel_configs so the watchdog keeps retrying the last known good spec.
+                else:
+                    logger.error(f"Tunnel {tunnel_id} could not be started: {apply_error}")
+                raise
             self.active_tunnels[tunnel_id] = adapter
 
             self.tunnel_configs[tunnel_id] = {
@@ -5302,6 +5925,7 @@ class AdapterManager:
 
     async def cleanup(self, kill_processes: bool = False):
         """Cleanup on agent shutdown. Preserves running background proxy processes for zero-downtime adoption on next startup."""
+        self._shutting_down = True
         self.stop_watchdog()
         if kill_processes:
             for tunnel_id, adapter in list(self.active_tunnels.items()):

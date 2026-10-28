@@ -23,7 +23,7 @@ from app.database import init_db
 from app.routers import nodes, tunnels, panel, status, logs, auth, core_health, ssl as ssl_router
 from app.routers import settings as settings_router
 from app.ssl_manager import ssl_auto_renew_worker
-from app.node_server import NodeServer
+from app.node_server import NodeServer, trust_material_generation_allowed
 from app.gost_forwarder import gost_forwarder
 from app.rathole_server import rathole_server_manager
 from app.backhaul_manager import backhaul_manager
@@ -42,42 +42,68 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _path_missing(path_value: str) -> bool:
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = Path(os.getcwd()) / path
+    try:
+        return not path.exists() or path.stat().st_size == 0
+    except OSError:
+        return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     await init_db()
-    
+
+    from app import config as app_config
+    app_config.ensure_secret_key_durability()
+    await auth.hydrate_revoked_tokens()
+
+    from app.mutation_guard import mutation_guard
+    guard_state = mutation_guard.startup_report()
+    mutations_blocked = bool(guard_state["engaged"])
+    app.state.mutations_blocked_at_startup = mutations_blocked
+
+    iran_ca_missing = _path_missing(settings.node_cert_path) or _path_missing(settings.node_key_path)
+    server_ca_missing = _path_missing(settings.node_server_cert_path) or _path_missing(settings.node_server_key_path)
+
+    allow_iran_ca = await trust_material_generation_allowed(iran_ca_missing)
     h2_server = NodeServer()
+    h2_server.allow_ca_generation = allow_iran_ca
     await h2_server.start()
     app.state.h2_server = h2_server
-    
-    try:
-        cert_path = Path(settings.node_cert_path)
-        if not cert_path.is_absolute():
-            cert_path = Path(os.getcwd()) / cert_path
-        
-        if not cert_path.exists() or cert_path.stat().st_size == 0:
-            logger.info("Generating CA certificate for Iran nodes on startup...")
-            h2_server.cert_path = str(cert_path)
-            h2_server.key_path = str(cert_path.parent / "ca.key")
-            await h2_server._generate_certs(common_name="Smite CA")
-            logger.info(f"CA certificate generated at {cert_path}")
-    except Exception as e:
-        logger.warning(f"Failed to generate CA certificate on startup: {e}")
-    
-    try:
-        server_cert_path = Path(settings.node_server_cert_path)
-        if not server_cert_path.is_absolute():
-            server_cert_path = Path(os.getcwd()) / server_cert_path
-        
-        if not server_cert_path.exists() or server_cert_path.stat().st_size == 0:
-            logger.info("Generating CA certificate for foreign servers on startup...")
-            h2_server.cert_path = str(server_cert_path)
-            h2_server.key_path = str(server_cert_path.parent / "ca-server.key")
-            await h2_server._generate_certs(common_name="Smite Server CA")
-            logger.info(f"Server CA certificate generated at {server_cert_path}")
-    except Exception as e:
-        logger.warning(f"Failed to generate server CA certificate on startup: {e}")
+
+    if allow_iran_ca and iran_ca_missing:
+        try:
+            cert_path = Path(settings.node_cert_path)
+            if not cert_path.is_absolute():
+                cert_path = Path(os.getcwd()) / cert_path
+
+            if not cert_path.exists() or cert_path.stat().st_size == 0:
+                logger.info("Generating CA certificate for Iran nodes on startup...")
+                h2_server.cert_path = str(cert_path)
+                h2_server.key_path = str(cert_path.parent / "ca.key")
+                await h2_server._generate_certs(common_name="Smite CA")
+                logger.info(f"CA certificate generated at {cert_path}")
+        except Exception as e:
+            logger.warning(f"Failed to generate CA certificate on startup: {e}")
+
+    if await trust_material_generation_allowed(server_ca_missing):
+        try:
+            server_cert_path = Path(settings.node_server_cert_path)
+            if not server_cert_path.is_absolute():
+                server_cert_path = Path(os.getcwd()) / server_cert_path
+
+            if not server_cert_path.exists() or server_cert_path.stat().st_size == 0:
+                logger.info("Generating CA certificate for foreign servers on startup...")
+                h2_server.cert_path = str(server_cert_path)
+                h2_server.key_path = str(server_cert_path.parent / "ca-server.key")
+                await h2_server._generate_certs(common_name="Smite Server CA")
+                logger.info(f"Server CA certificate generated at {server_cert_path}")
+        except Exception as e:
+            logger.warning(f"Failed to generate server CA certificate on startup: {e}")
     
     app.state.gost_forwarder = gost_forwarder
     
@@ -90,22 +116,29 @@ async def lifespan(app: FastAPI):
     await _load_and_start_frp_comm()
     await _load_and_start_telegram_bot()
     await _load_and_start_tunnel_reapply()
-    
-    await _restore_forwards()
-    
-    await _restore_rathole_servers()
-    await _restore_backhaul_servers()
-    await _restore_chisel_servers()
-    await _restore_frp_servers()
-    
-    restore_tunnels_task = asyncio.create_task(_restore_node_tunnels())
-    app.state.restore_tunnels_task = restore_tunnels_task
+
+    if mutations_blocked:
+        logger.critical(
+            "Mutation guard engaged at startup: skipping local forward/core restore and node tunnel sync. "
+            "Read-only monitoring keeps running; inspect the restored database and node inventory, then release "
+            "the guard and restart the panel to apply the stored configuration."
+        )
+    else:
+        await _restore_forwards()
+
+        await _restore_rathole_servers()
+        await _restore_backhaul_servers()
+        await _restore_chisel_servers()
+        await _restore_frp_servers()
+
+        restore_tunnels_task = asyncio.create_task(_restore_node_tunnels())
+        app.state.restore_tunnels_task = restore_tunnels_task
 
     # Automatically secure every node agent API with its own token
     from app.node_auth_manager import node_auth_manager
     await node_auth_manager.start()
     app.state.node_auth_manager = node_auth_manager
-    
+
     gost_forwarder.start_monitor()
     
     reset_task = asyncio.create_task(_auto_reset_scheduler(app))
@@ -147,6 +180,9 @@ async def lifespan(app: FastAPI):
         await app.state.frp_comm_manager.stop()
     
     await telegram_bot.stop()
+
+    from app.tunnel_reapply_manager import tunnel_reapply_manager
+    await tunnel_reapply_manager.stop()
     
     await gost_forwarder.cleanup_all()
 
@@ -584,6 +620,13 @@ async def _auto_reset_scheduler(app: FastAPI):
                         continue
                     
                     if now >= config.next_reset:
+                        from app.mutation_guard import mutation_guard
+                        if mutation_guard.is_engaged():
+                            logger.warning(
+                                "Mutation guard engaged: skipping auto-reset of %s (next_reset is not advanced)",
+                                config.core,
+                            )
+                            break
                         try:
                             logger.info(f"Auto-resetting {config.core} core (interval: {config.interval_minutes} minutes)")
                             

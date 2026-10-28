@@ -187,13 +187,15 @@ def test_spec_builder_backhaul_ws_drops_stale_accept_udp():
     assert not server_spec.get("accept_udp")
 
 
-def test_spec_builder_backhaul_range_with_equals_collapsed():
+def test_spec_builder_backhaul_range_mapping_preserved():
+    """Legacy "A-B=host:A-B" is forwarded intact; the node adapter expands it 1:1
+    so an explicit target host is never silently dropped."""
     tunnel = DummyTunnel(
         id="t-bh-rng", core="backhaul", type="tcp",
         spec={"ports": ["27000-27050=127.0.0.1:27000-27050"], "transport": "tcp", "token": "t"},
     )
     server_spec, _ = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
-    assert server_spec["ports"] == ["27000-27050"]
+    assert server_spec["ports"] == ["27000-27050=127.0.0.1:27000-27050"]
 
 
 def test_spec_builder_backhaul_port_ranges_and_control_collision():
@@ -296,7 +298,8 @@ def test_spec_builder_chisel_wss_mode():
     assert server_spec["websocket_tls"] is True
     assert client_spec["websocket_tls"] is True
     assert client_spec["server_url"].startswith("https://1.1.1.1:")
-    assert client_spec["tls_skip_verify"] is True
+    assert client_spec["tls_skip_verify"] is False
+    assert "BEGIN CERTIFICATE" in client_spec["tls_ca_cert_pem"]
     assert "BEGIN CERTIFICATE" in server_spec["tls_cert_pem"]
     assert "BEGIN " in server_spec["tls_key_pem"]
 
@@ -565,12 +568,13 @@ def test_spec_builder_frp_wss_mode():
     s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
     assert s["mode"] == "server"
     assert c["mode"] == "client"
-    assert s["transport_type"] == "websocket"
-    assert c["transport"] == "websocket"
+    assert s["transport_type"] == "wss"
+    assert c["transport"] == "wss"
     assert c["tls_enable"] is True
     assert c["custom_sni"] == "cdn.example.com"
     assert "tls_cert_pem" in s and "BEGIN CERTIFICATE" in s["tls_cert_pem"]
     assert "tls_key_pem" in s and ("BEGIN RSA PRIVATE KEY" in s["tls_key_pem"] or "BEGIN PRIVATE KEY" in s["tls_key_pem"])
+    assert c["tls_ca_cert_pem"] == s["tls_cert_pem"]
 
 
 def test_spec_builder_frp_quic_and_kcp():
@@ -706,8 +710,35 @@ def test_spec_builder_frp_udp_disables_health_check_and_compression():
     assert c["use_compression"] is False
     assert s["use_compression"] is False
 
+def test_spec_builder_gost_wss_distributes_cert_and_legacy_names():
+    tunnel = DummyTunnel(
+        id="t-gost-wss-cert",
+        core="gost",
+        type="tcp",
+        spec={"ports": [8443], "transport_type": "wss", "custom_sni": "cdn.example.com"}
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert "BEGIN CERTIFICATE" in s["tls_cert_pem"]
+    assert s["tls_cert"] == s["tls_cert_pem"]
+    assert s["tls_key"] == s["tls_key_pem"]
+    assert c["tls_ca_cert_pem"] == s["tls_cert_pem"]
+
+
+def test_spec_builder_gost_kcp_ignores_tunnel_tls():
+    """KCP has no listener-side TLS, so no tunnel certificate may be distributed for it."""
+    tunnel = DummyTunnel(
+        id="t-gost-kcp-tls",
+        core="gost",
+        type="tcp",
+        spec={"ports": [8080], "transport_type": "kcp", "security_type": "tls"}
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert "tls_cert_pem" not in s
+    assert "tls_ca_cert_pem" not in c
+
+
 def test_spec_builder_gost_udp_multiplexing_and_target_host():
-    """Verify GOST UDP tunnels automatically enable yamux multiplexing over streaming transports and propagate target_host"""
+    """Verify GOST UDP tunnels automatically enable smux multiplexing over streaming transports and propagate target_host"""
     tunnel_udp = DummyTunnel(
         id="t-gost-udp",
         core="gost",
@@ -724,8 +755,8 @@ def test_spec_builder_gost_udp_multiplexing_and_target_host():
     assert c["type"] == "udp"
     assert s["multiplex"] is True
     assert c["multiplex"] is True
-    assert s["mux_type"] == "yamux"
-    assert c["mux_type"] == "yamux"
+    assert s["mux_type"] == "smux"
+    assert c["mux_type"] == "smux"
     assert s["target_host"] == "127.0.0.1"
     assert c["target_host"] == "127.0.0.1"
 

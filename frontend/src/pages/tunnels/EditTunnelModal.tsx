@@ -129,7 +129,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           : !tunnel.spec?.force_direct),
     stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || '',
     transport_type: tunnel.transport_type || 'tcp',
-    security_type: tunnel.security_type || 'none',
+    security_type: tunnel.security_type === 'utls' ? 'tls' : (tunnel.security_type || 'none'),
     selector_strategy: tunnel.selector_strategy || 'fifo',
     utls_fingerprint: tunnel.utls_fingerprint || 'chrome',
     keepalive_interval: tunnel.keepalive_interval || 15,

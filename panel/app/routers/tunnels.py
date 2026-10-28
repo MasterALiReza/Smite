@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models import Tunnel, Node, Admin, TunnelCategory
 from app.node_client import NodeClient
 from app.routers.auth import get_current_user
+from app.tunnel_contract import CORE_TYPES, TunnelContractError, normalize_transport, validate_tunnel_request
 
 
 router = APIRouter()
@@ -28,6 +29,50 @@ def _spawn_background(coro) -> asyncio.Task:
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
+
+
+def _same_carrier(core: str, left: str | None, right: str | None) -> bool:
+    try:
+        return normalize_transport(core, left) == normalize_transport(core, right)
+    except TunnelContractError:
+        return False
+
+
+def _contract_check(
+    core: str,
+    tunnel_type: str | None,
+    transport: str | None,
+    spec: dict | None,
+    security_type: str | None,
+    *,
+    legacy_type: str | None = None,
+    legacy_pair: tuple[str | None, str | None] | None = None,
+) -> dict:
+    """Validate a create/update request against the core contract.
+
+    ``legacy_type`` is the type already stored on an existing row. When an edit
+    leaves that label untouched, the builders normalize it to TCP, so contract
+    validation runs against TCP instead of rejecting a label the UI no longer
+    offers. A newly supplied type is validated strictly.
+
+    ``legacy_pair`` is the stored carrier/security pair. An edit that keeps both
+    unchanged does not re-judge them (the builders already render their effective
+    semantics, e.g. FRP ``wss`` is TLS even if the stored label says ``none``);
+    a newly introduced pair is still rejected.
+    """
+    try:
+        return validate_tunnel_request(core, tunnel_type, transport, spec or {}, security_type)
+    except TunnelContractError:
+        if legacy_type and (tunnel_type or "").strip().lower() == legacy_type.strip().lower():
+            return validate_tunnel_request(core, "tcp", transport, spec or {}, security_type)
+        if legacy_pair is not None:
+            previous_transport, previous_security = legacy_pair
+            if (
+                _same_carrier(core, transport, previous_transport)
+                and (security_type or "").strip().lower() == (previous_security or "").strip().lower()
+            ):
+                return validate_tunnel_request(core, tunnel_type, transport, spec or {}, None)
+        raise
 
 
 def prepare_frp_spec_for_node(spec: dict, node: Node, request: Request) -> dict:
@@ -522,6 +567,24 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     
     logger.info(f"Creating tunnel: name={tunnel.name}, type={tunnel.type}, core={tunnel.core}, node_id={tunnel.node_id}")
     
+    raw_transport = (
+        tunnel.transport_type
+        or (tunnel.spec or {}).get("transport_type")
+        or (tunnel.spec or {}).get("transport")
+    )
+    try:
+        contract = _contract_check(
+            tunnel.core,
+            tunnel.type,
+            raw_transport,
+            tunnel.spec,
+            tunnel.security_type,
+        )
+    except TunnelContractError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    for warning in contract["warnings"]:
+        logger.warning(f"Tunnel contract ({tunnel.core}, create): {warning}")
+
     if tunnel.spec and tunnel.core == "backhaul":
         ports_received = tunnel.spec.get("ports", [])
         logger.info(f"Backhaul tunnel creation: received ports from frontend: {ports_received} (type: {type(ports_received)}, length: {len(ports_received) if isinstance(ports_received, list) else 'N/A'})")
@@ -1599,11 +1662,40 @@ async def update_tunnel(
     if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval != tunnel.keepalive_interval:
         spec_changed = True
     
+    if any(is_field_set(f) for f in ("spec", "type", "transport_type", "security_type", "mux_type")):
+        effective_type = tunnel_update.type if (is_field_set("type") and tunnel_update.type) else (tunnel.type or "tcp")
+        stored_spec = tunnel.spec or {}
+        stored_transport = tunnel.transport_type or stored_spec.get("transport_type") or stored_spec.get("transport")
+        effective_transport = tunnel.transport_type
+        if is_field_set("transport_type") and tunnel_update.transport_type:
+            effective_transport = tunnel_update.transport_type
+        validation_spec = tunnel_update.spec if tunnel_update.spec is not None else stored_spec
+        if not effective_transport:
+            effective_transport = validation_spec.get("transport_type") or validation_spec.get("transport")
+        effective_security = tunnel.security_type
+        if is_field_set("security_type") and tunnel_update.security_type:
+            effective_security = tunnel_update.security_type
+        legacy_type = tunnel.type if (effective_type or "").strip().lower() == (tunnel.type or "").strip().lower() else None
+        try:
+            contract = _contract_check(
+                tunnel.core,
+                effective_type,
+                effective_transport,
+                validation_spec,
+                effective_security,
+                legacy_type=legacy_type,
+                legacy_pair=(stored_transport, tunnel.security_type),
+            )
+        except TunnelContractError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        for warning in contract["warnings"]:
+            logger.warning(f"Tunnel contract {tunnel_id} ({tunnel.core}, update): {warning}")
+
     if tunnel_update.name is not None:
         tunnel.name = tunnel_update.name
     if is_field_set("type") and tunnel_update.type:
         new_type = tunnel_update.type.strip().lower()
-        if new_type in ["tcp", "udp", "tcp+udp"]:
+        if new_type in CORE_TYPES.get(tunnel.core, set()):
             tunnel.type = new_type
             if isinstance(tunnel.spec, dict):
                 tunnel.spec["type"] = new_type

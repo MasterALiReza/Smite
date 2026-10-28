@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     # when NODE_API_TOKEN is configured on the panel side). Leave empty for
     # backward compatibility with older panels.
     node_api_token: str = ""
+
+    # Optional manual recovery secret. Normal enrollment uses a generated,
+    # one-time proof that expires and is consumed after the first token install.
+    node_bootstrap_secret: str = ""
+    node_bootstrap_proof_ttl_seconds: int = 900
+
+    # "", "permissive" or "enforce". Empty means the durable enforcement flag
+    # written by the panel decides; "enforce" locks the API even without a token.
+    agent_auth_mode: str = ""
     
     panel_ca_path: str = "/etc/smite-node/ca.crt"
     panel_address: str = "panel.example.com:443"

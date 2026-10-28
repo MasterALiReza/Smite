@@ -8,8 +8,13 @@ import subprocess
 import argparse
 import shutil
 import json
+import hashlib
+import base64
+import re
+import tempfile
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 
@@ -223,6 +228,9 @@ def cmd_restart(args):
     """Restart node container(s)."""
     nodes = discover_nodes()
     targets = select_target_node(nodes, args.target, prompt_action="restart")
+    unfinished = [n["container_name"] for n in targets if (n["dir"] / UPDATE_JOURNAL).exists()]
+    if unfinished:
+        sys.exit(f"Unfinished update journal on {', '.join(unfinished)}; recover it before restarting")
     print("Note: a container restart interrupts the tunnels of the node for a few seconds.")
     print("      To apply new agent code without interruption use: smite-node reload")
     for n in targets:
@@ -322,16 +330,64 @@ def _fetch(url, timeout=20):
         return resp.read()
 
 
-def _download_node_code(repo, branch):
-    """Download and syntax-check every node file. All-or-nothing."""
+def _resolve_revision(repo, ref):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repo):
+        raise ValueError("Repository must be owner/name")
+    if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        return ref.lower()
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    revision = json.loads(_fetch(f"https://api.github.com/repos/{repo}/commits/{encoded_ref}")).get("sha")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Could not resolve an immutable commit")
+    return revision
+
+
+def _download_node_code(repo, revision):
     import ast
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("A full commit SHA is required for downloads")
     files = {}
     for rel in NODE_CODE_FILES:
-        url = f"https://raw.githubusercontent.com/{repo}/{branch}/node/{rel}"
-        content = _fetch(url)
+        content = _fetch(f"https://raw.githubusercontent.com/{repo}/{revision}/node/{rel}")
         ast.parse(content, filename=rel)
         files[rel] = content
     return files
+
+
+def _release_manifest(revision, files):
+    return {
+        "schema": 1,
+        "revision": revision,
+        "files": {rel: hashlib.sha256(content).hexdigest() for rel, content in sorted(files.items())},
+    }
+
+
+def _validate_runtime(n, files):
+    script = '''import base64, json, os, pathlib, subprocess, sys, tempfile
+files = json.load(sys.stdin)
+with tempfile.TemporaryDirectory(prefix="smite-preflight-") as directory:
+    root = pathlib.Path(directory)
+    for name, content in files.items():
+        path = root / name
+        if not path.resolve().is_relative_to(root.resolve()):
+            sys.exit(1)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(content, validate=True))
+    env = dict(os.environ, SMITE_RELOAD_VALIDATION="1", PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import main; "
+         "assert {'release_identity', 'drained_reexec'} <= set(main.agent.AGENT_CAPABILITIES)", directory],
+        cwd=directory, env=env, capture_output=True, timeout=60)
+    sys.exit(result.returncode)
+'''
+    payload = json.dumps({rel: base64.b64encode(content).decode("ascii") for rel, content in files.items()})
+    result = subprocess.run(
+        ["docker", "exec", "-i", n["container_name"], "python", "-c", script],
+        input=payload, capture_output=True, text=True, timeout=75,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Staged agent import failed in the installed runtime; active files were not changed")
 
 
 def _agent_status(port, timeout=2.5):
@@ -345,53 +401,112 @@ def _agent_status(port, timeout=2.5):
     return None
 
 
-def _wait_for_agent(port, previous_started_at=None, timeout=90):
+def _wait_for_agent(port, previous_started_at=None, timeout=90, expected_release=None):
     import time
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         st = _agent_status(port)
-        if st and (previous_started_at is None or st.get("agent_started_at") != previous_started_at):
-            return st
+        if st and st.get("status") == "ok" and st.get("agent_started_at"):
+            restarted = previous_started_at is None or st["agent_started_at"] != previous_started_at
+            release_matches = expected_release is None or st.get("release") == expected_release
+            if restarted and release_matches:
+                return st
         time.sleep(1.5)
     return None
 
 
-def _write_code_atomically(app_root, files):
-    """Back up current files then atomically replace them."""
-    import time
-    backup_dir = app_root / f".backup-{time.strftime('%Y%m%d-%H%M%S')}"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    for rel in files:
-        cur = app_root / rel
-        if cur.exists():
-            dest = backup_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cur, dest)
-    for rel, content in files.items():
-        target = app_root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if "/" not in rel and target.exists():
-            # main.py is a single-file bind mount: the container keeps seeing the
-            # old inode after a rename, so rewrite the existing file in place.
-            with open(target, "r+b") as f:
-                f.write(content)
-                f.truncate()
-                f.flush()
-                os.fsync(f.fileno())
-            continue
-        tmp = target.with_name(f".{target.name}.new")
-        tmp.write_bytes(content)
+UPDATE_JOURNAL = ".smite-update.json"
+RELEASE_MANIFEST = "app/.smite-release.json"
+
+
+def _code_path(root, rel):
+    if rel not in {*NODE_CODE_FILES, RELEASE_MANIFEST}:
+        raise ValueError(f"Unexpected agent file: {rel}")
+    target = root / rel
+    if target.is_symlink() or not target.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"Agent file escapes installation: {rel}")
+    return target
+
+
+def _write_file(target, content, in_place=False):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if in_place and target.exists():
+        # main.py is a single-file bind mount; replacing its inode is not visible inside Docker.
+        with target.open("r+b") as stream:
+            stream.write(content)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+        return
+    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp, target.stat().st_mode & 0o777 if target.exists() else 0o644)
         os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _write_code_with_backup(app_root, files):
+    for rel in files:
+        _code_path(app_root, rel)
+    journal = app_root / UPDATE_JOURNAL
+    with journal.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps({"phase": "preparing"}))
+        stream.flush()
+        os.fsync(stream.fileno())
+    backup_dir = Path(tempfile.mkdtemp(prefix=".backup-", dir=app_root))
+    previous = {}
+    try:
+        for rel in files:
+            current = _code_path(app_root, rel)
+            previous[rel] = None
+            if current.exists():
+                content = current.read_bytes()
+                previous[rel] = hashlib.sha256(content).hexdigest()
+                _write_file(backup_dir / rel, content)
+                shutil.copymode(current, backup_dir / rel)
+        _write_file(backup_dir / "rollback.json", json.dumps(previous, sort_keys=True).encode())
+        record = {"phase": "writing", "backup": backup_dir.name}
+        _write_file(journal, json.dumps(record).encode())
+    except Exception:
+        journal.unlink()
+        raise
+    try:
+        # Entry point last: a crash mid-write never pairs a new main.py with old modules.
+        order = sorted(files, key=lambda rel: (rel == "main.py", rel == RELEASE_MANIFEST))
+        for rel in order:
+            _write_file(_code_path(app_root, rel), files[rel], in_place=rel == "main.py")
+        record["phase"] = "awaiting_verification"
+        _write_file(journal, json.dumps(record).encode())
+    except BaseException:
+        _restore_backup(app_root, backup_dir)
+        raise
     return backup_dir
 
 
 def _restore_backup(app_root, backup_dir):
-    for src in backup_dir.rglob("*"):
-        if src.is_file():
-            rel = src.relative_to(backup_dir)
-            dest = app_root / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+    previous = json.loads((backup_dir / "rollback.json").read_text(encoding="utf-8"))
+    contents = {}
+    for rel, digest in previous.items():
+        _code_path(app_root, rel)
+        if digest is not None:
+            content = _code_path(backup_dir, rel).read_bytes()
+            if hashlib.sha256(content).hexdigest() != digest:
+                raise RuntimeError(f"Backup checksum mismatch: {rel}")
+            contents[rel] = content
+    for rel, digest in previous.items():
+        target = _code_path(app_root, rel)
+        if digest is None:
+            target.unlink(missing_ok=True)
+        else:
+            _write_file(target, contents[rel], in_place=rel == "main.py")
+            shutil.copymode(backup_dir / rel, target)
+    (app_root / UPDATE_JOURNAL).unlink(missing_ok=True)
 
 
 def _confirm(prompt, assume_yes):
@@ -403,155 +518,127 @@ def _confirm(prompt, assume_yes):
         return False
 
 
-def _container_running(n):
-    res = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", n["container_name"]],
-                         capture_output=True, text=True)
-    return res.returncode == 0 and res.stdout.strip() == "true"
-
-
-def _reload_is_safe(status, n):
-    """Whether SIGHUP re-exec is safe for the agent that is running right now.
-
-    The reload runs the code already in memory. Agents before "safe_reexec" re-exec
-    correctly only from the start.sh command line ("uvicorn main:app"); once reloaded
-    they run as "python -m uvicorn" and their next reload exec'd uvicorn/__main__.py
-    as a script, which crashed the agent and stopped the container with its tunnels.
-    """
+def _reload_is_safe(status):
     if not (status and status.get("hot_reload")):
         return False
-    if "safe_reexec" in (status.get("capabilities") or []):
-        return True
-    res = subprocess.run(["docker", "inspect", "-f", "{{.State.Pid}}", n["container_name"]],
-                         capture_output=True, text=True)
-    try:
-        with open(f"/proc/{int(res.stdout.strip())}/cmdline", "rb") as f:
-            args = [a.decode(errors="ignore") for a in f.read().split(b"\0") if a]
-    except Exception:
-        return False
-    return len(args) > 1 and os.path.basename(args[1]) == "uvicorn"
+    return {"safe_reexec", "drained_reexec"}.issubset(status.get("capabilities") or [])
 
 
-def _restart_and_wait(n, timeout=120):
+def _restart_and_wait(n, timeout=120, expected_release=None):
+    before = _agent_status(n["port"])
     res = subprocess.run(["docker", "restart", n["container_name"]], capture_output=True, text=True)
     if res.returncode != 0:
-        print(f"  ✗ docker restart failed: {res.stderr.strip()}")
+        print("Container restart failed")
         return None
-    return _wait_for_agent(n["port"], timeout=timeout)
+    return _wait_for_agent(n["port"], previous_started_at=(before or {}).get("agent_started_at"),
+                           timeout=timeout, expected_release=expected_release)
 
 
-def _hot_reload(n):
-    """Reload the agent in place (SIGHUP). Returns True when the new agent is up."""
+def _hot_reload(n, expected_release=None):
     before = _agent_status(n["port"])
-    started_at = (before or {}).get("agent_started_at")
+    if not before or not before.get("agent_started_at"):
+        return False
     res = subprocess.run(["docker", "kill", "--signal=HUP", n["container_name"]], capture_output=True, text=True)
     if res.returncode != 0:
-        print(f"  ⚠️ Could not signal container: {res.stderr.strip()}")
+        print("Could not signal the agent")
         return False
-    st = _wait_for_agent(n["port"], previous_started_at=started_at, timeout=90)
+    st = _wait_for_agent(n["port"], previous_started_at=before["agent_started_at"],
+                         timeout=90, expected_release=expected_release)
     return bool(st)
 
 
-def _self_update_cli(repo, branch):
+def _self_update_cli(content):
     try:
-        import ast
-        content = _fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/cli/smite-node.py")
-        ast.parse(content)
         target = Path("/usr/local/bin/smite-node")
         if target.exists():
-            tmp = target.with_name(".smite-node.new")
-            tmp.write_bytes(content)
-            os.chmod(tmp, 0o755)
-            os.replace(tmp, target)
-            print("✓ smite-node CLI updated")
-    except Exception as e:
-        print(f"⚠️ Could not update the CLI itself: {e}")
+            _write_file(target, content)
+            print("smite-node CLI updated to the same revision")
+    except Exception as error:
+        print(f"Node release verified, but the local CLI was not updated: {error}")
 
 
 def cmd_update(args):
-    """Update node agent code with zero tunnel downtime (in-place reload).
-
-    Default: sync all agent code files from GitHub, then hot-reload the agent. The
-    container and every tunnel process keep running. Nodes still running an old
-    agent (without hot reload) need ONE container restart; you are asked first.
-    --image additionally pulls the container image (core binaries) and recreates the
-    container, which always interrupts tunnels briefly.
-    """
-    nodes = discover_nodes()
-    targets = select_target_node(nodes, args.target, prompt_action="update")
+    """Update one agent without changing its image, cores, or host tuning."""
+    import ast
+    targets = select_target_node(discover_nodes(), args.target, prompt_action="update")
+    if len(targets) != 1:
+        sys.exit("Update one node at a time and verify its tunnels before selecting another")
+    if args.image:
+        sys.exit("Image/core upgrades require a separate coordinated rollout; agent update does not recreate images")
+    n = targets[0]
+    app_root = n["dir"]
+    if not (app_root / "app").is_dir():
+        sys.exit("Node code directory not found; nothing changed")
+    if (app_root / UPDATE_JOURNAL).exists():
+        sys.exit("An unfinished update exists; inspect the update journal and recovery backup before proceeding")
+    status = _agent_status(n["port"])
+    if not status or status.get("status") != "ok" or not status.get("agent_started_at"):
+        sys.exit("Cannot verify the running agent; nothing changed")
+    can_hot_reload = _reload_is_safe(status)
+    if not can_hot_reload:
+        if not getattr(args, "allow_restart", False):
+            sys.exit("Safe reload is unavailable. A planned interruption requires --allow-restart; nothing changed")
+        if not _confirm("Restart this node container and interrupt its tunnels?", args.yes):
+            sys.exit("Update cancelled; active files were not changed")
     repo = args.repo or DEFAULT_REPO
-    branch = args.branch or DEFAULT_BRANCH
-
-    print(f"Downloading node agent code from {repo}@{branch} ...")
+    ref = getattr(args, "revision", None) or args.branch or DEFAULT_BRANCH
+    backup_dir = None
     try:
-        files = _download_node_code(repo, branch)
-    except Exception as e:
-        print(f"✗ Download/validation failed, nothing was changed: {e}")
-        sys.exit(1)
-    print(f"✓ {len(files)} files downloaded and syntax-checked")
-    if not args.no_tune:
-        apply_low_latency_profile(verbose=True)
-
-    for n in targets:
-        print(f"\nUpdating {n['container_name']} in {n['dir']}...")
-        app_root = n["dir"]
-        if not (app_root / "app").exists():
-            print("  ✗ Node code directory not found, skipping")
-            continue
-
-        status = _agent_status(n["port"])
-        can_hot_reload = _reload_is_safe(status, n)
-
-        backup_dir = _write_code_atomically(app_root, files)
-        print(f"  ✓ Code updated (backup: {backup_dir})")
-
-        if args.image:
-            if not _confirm("  --image recreates the container: tunnels on this node drop for a few seconds. Continue?", args.yes):
-                print("  Skipped image update.")
-            else:
-                run_compose_for_node(n, ["pull"], capture_output=True)
-                run_compose_for_node(n, ["up", "-d", "--force-recreate"])
-                st = _wait_for_agent(n["port"], timeout=120)
-                print(f"  {'✓' if st else '⚠️'} Container recreated{'' if st else ' but agent is not answering yet'}")
-                continue
-
+        revision = _resolve_revision(repo, ref)
+        print(f"Preparing agent release {repo}@{revision}")
+        files = _download_node_code(repo, revision)
+        cli_content = _fetch(f"https://raw.githubusercontent.com/{repo}/{revision}/cli/smite-node.py")
+        ast.parse(cli_content, filename="smite-node.py")
+        _validate_runtime(n, files)
+        current = _agent_status(n["port"])
+        if not current or current.get("agent_started_at") != status["agent_started_at"]:
+            raise RuntimeError("Agent changed during preflight; nothing changed")
+        manifest = json.dumps(_release_manifest(revision, files), sort_keys=True).encode()
+        files[RELEASE_MANIFEST] = manifest
+        expected_release = {"revision": revision, "manifest_sha256": hashlib.sha256(manifest).hexdigest()}
+        backup_dir = _write_code_with_backup(app_root, files)
+        print(f"Code backup: {backup_dir}")
         if can_hot_reload:
-            print("  Reloading agent in place (tunnels keep running)...")
-            if _hot_reload(n):
-                print(f"  ✓ {n['container_name']} updated with zero tunnel downtime")
-                continue
-            if not _container_running(n):
-                # The agent is the container's PID 1: if it died during the reload the
-                # container (and its tunnels) stopped. Start it right away; the new code
-                # was import-checked, and start.sh restores every tunnel.
-                print("  ✗ Agent exited during reload; starting the container again...")
-                subprocess.run(["docker", "start", n["container_name"]], capture_output=True)
-                st = _wait_for_agent(n["port"], timeout=120)
-                if st:
-                    print(f"  ✓ {n['container_name']} is back on the new agent ({st.get('active_tunnels', 0)} tunnels restored)")
-                    continue
-            print("  ✗ Agent did not come back after reload. Rolling back code...")
-            _restore_backup(app_root, backup_dir)
-            st = _restart_and_wait(n)
-            print(f"  {'✓ Rolled back' if st else '⚠️ Rolled back but agent is not answering'}. Check logs: smite-node logs")
-            continue
-
-        if status and status.get("hot_reload"):
-            print("  This agent's in-place reload is not safe to use (it would stop the container).")
+            verified = _hot_reload(n, expected_release=expected_release)
         else:
-            print("  This node runs an older agent without in-place reload.")
-        print("  A ONE-TIME container restart is needed to load the new agent; tunnels on")
-        print("  this node are interrupted for a few seconds while they are restored.")
-        print("  All later updates are applied without any interruption.")
-        if not _confirm("  Restart this node's agent container now?", args.yes):
-            print("  Code is updated on disk; it becomes active on the next container restart.")
-            continue
-        st = _restart_and_wait(n)
-        if st:
-            print(f"  ✓ {n['container_name']} restarted with the new agent ({st.get('active_tunnels', 0)} tunnels active)")
-        else:
-            print("  ⚠️ Agent is not answering yet; check: smite-node logs")
+            verified = _restart_and_wait(n, expected_release=expected_release)
+        if not verified:
+            raise RuntimeError("New agent release was not verified; no automatic restart or further update will run")
+        after = _agent_status(n["port"])
+        if not after or after.get("release") != expected_release or set(after.get("tunnels", [])) != set(status.get("tunnels", [])):
+            raise RuntimeError("Agent release or tunnel inventory changed unexpectedly; stop the rollout")
+        (app_root / UPDATE_JOURNAL).unlink()
+        _self_update_cli(cli_content)
+    except Exception as error:
+        print(f"Update failed: {error}")
+        if backup_dir:
+            print(f"Backup retained at {backup_dir}; verify runtime before any recovery. No fallback restart was attempted.")
+        sys.exit(1)
+    print("Agent release and tunnel IDs verified; image, dependencies and host tuning unchanged.")
+    print("Verify existing streams, new connections and peer traffic before updating another node.")
 
-    _self_update_cli(repo, branch)
+
+def cmd_recover_update(args):
+    targets = select_target_node(discover_nodes(), args.target, prompt_action="recover code on")
+    if len(targets) != 1:
+        sys.exit("Recover one node at a time")
+    n = targets[0]
+    result = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", n["container_name"]],
+                            capture_output=True, text=True)
+    if result.returncode != 0 or result.stdout.strip() not in {"exited", "created"}:
+        sys.exit("Code recovery requires a confirmed stopped container; no service was stopped")
+    try:
+        record = json.loads((n["dir"] / UPDATE_JOURNAL).read_text(encoding="utf-8"))
+        name = record.get("backup", "")
+        if not re.fullmatch(r"[.]backup-[A-Za-z0-9_-]+", name):
+            raise ValueError("No complete recovery backup recorded; inspect manually")
+        backup = n["dir"] / name
+        if backup.is_symlink():
+            raise ValueError("Recovery backup must not be a symlink")
+        _restore_backup(n["dir"], backup)
+    except Exception as error:
+        sys.exit(f"Code recovery failed: {error}")
+    print("Previous code restored, including removal of newly added files. Container remains stopped.")
 
 
 def cmd_reload(args):
@@ -559,20 +646,15 @@ def cmd_reload(args):
     nodes = discover_nodes()
     targets = select_target_node(nodes, args.target, prompt_action="reload")
     for n in targets:
+        if (n["dir"] / UPDATE_JOURNAL).exists():
+            sys.exit(f"{n['container_name']}: an unfinished update journal exists; finish or recover it before reloading")
         st = _agent_status(n["port"])
-        if not _reload_is_safe(st, n):
-            print(f"✗ {n['container_name']}: in-place reload is not supported or not safe for the running agent "
-                  "(run `smite-node update`; it offers a one-time restart)")
-            continue
+        if not _reload_is_safe(st):
+            sys.exit(f"{n['container_name']}: running agent lacks safe drain/re-exec; plan an explicit upgrade interruption")
         print(f"Reloading {n['container_name']}...")
-        if _hot_reload(n):
-            print("✓ reloaded")
-        elif not _container_running(n):
-            print("✗ agent exited during reload; starting the container again...")
-            subprocess.run(["docker", "start", n["container_name"]], capture_output=True)
-            print("✓ container started" if _wait_for_agent(n["port"], timeout=120) else "⚠️ agent is not answering; check logs")
-        else:
-            print("⚠️ agent did not come back in time; check logs")
+        if not _hot_reload(n):
+            sys.exit("Agent reload was not verified; no fallback start/restart was attempted. Check logs before proceeding")
+        print("Agent reload verified; verify tunnel traffic separately")
 
 
 def cmd_reset_token(args):
@@ -581,7 +663,8 @@ def cmd_reset_token(args):
     targets = select_target_node(nodes, args.target, prompt_action="reset the agent token of")
     for n in targets:
         res = subprocess.run(
-            ["docker", "exec", n["container_name"], "rm", "-f", "/var/lib/smite-node/agent_token"],
+            ["docker", "exec", n["container_name"], "sh", "-c",
+             "rm -f /var/lib/smite-node/agent_token /var/lib/smite-node/agent_auth_enforce"],
             capture_output=True, text=True,
         )
         if res.returncode != 0:
@@ -590,7 +673,7 @@ def cmd_reset_token(args):
         st = _agent_status(n["port"])
         if st and st.get("hot_reload"):
             _hot_reload(n)
-        print(f"✓ {n['container_name']}: token removed; the panel will provision a new one within ~2 minutes")
+        print(f"✓ {n['container_name']}: token and enforce flag removed; the panel will provision a new one within ~2 minutes")
 
 
 def cmd_logs(args):
@@ -699,13 +782,19 @@ def main():
     restart_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
     
     # Update
-    update_p = subparsers.add_parser("update", help="Update node agent code (zero tunnel downtime)")
-    update_p.add_argument("target", nargs="?", default=None, help="Target node index or name (e.g. 1, 2, all)")
-    update_p.add_argument("--branch", default=None, help=f"Git branch to update from (default: {DEFAULT_BRANCH}, env SMITE_BRANCH)")
+    update_p = subparsers.add_parser("update", help="Update one node agent; retain image, cores and host tuning")
+    update_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
+    release_source = update_p.add_mutually_exclusive_group()
+    release_source.add_argument("--branch", default=None, help=f"Resolve a branch once to a commit (default: {DEFAULT_BRANCH})")
+    release_source.add_argument("--revision", default=None, help="Immutable release commit SHA")
     update_p.add_argument("--repo", default=None, help=f"GitHub repo owner/name (default: {DEFAULT_REPO}, env SMITE_REPO)")
-    update_p.add_argument("--image", action="store_true", help="Also pull the container image and recreate the container (interrupts tunnels)")
-    update_p.add_argument("-y", "--yes", action="store_true", help="Do not ask for confirmation")
-    update_p.add_argument("--no-tune", action="store_true", help="Do not (re)apply the low-latency kernel network profile")
+    update_p.add_argument("--image", action="store_true", help="Rejected: image/core upgrades must be performed separately")
+    update_p.add_argument("--allow-restart", action="store_true", help="Authorize a container restart only when safe reload is unavailable")
+    update_p.add_argument("-y", "--yes", action="store_true", help="Confirm an explicitly authorized restart")
+    update_p.add_argument("--no-tune", action="store_true", help="Host tuning is always excluded from agent updates")
+
+    recover_p = subparsers.add_parser("recover-update", help="Restore an interrupted code update on an already stopped container")
+    recover_p.add_argument("target", nargs="?", default=None, help="Target node index or name")
 
     # Tune
     subparsers.add_parser("tune", help="Apply the low-latency kernel network profile (BBR, fq, UDP buffers)")
@@ -746,6 +835,7 @@ def main():
         "status": cmd_status,
         "restart": cmd_restart,
         "update": cmd_update,
+        "recover-update": cmd_recover_update,
         "reload": cmd_reload,
         "reset-token": cmd_reset_token,
         "tune": cmd_tune,

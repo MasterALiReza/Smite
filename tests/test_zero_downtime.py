@@ -221,12 +221,83 @@ async def test_adapter_manager_tunnel_lock_serializes_concurrent_calls(monkeypat
     monkeypatch.setattr(manager, "get_adapter", lambda core: SlowAdapter())
     
     # Run two concurrent applies for the same tunnel
-    t1 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "slow", {"step": 1}))
-    t2 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "slow", {"step": 2}))
+    t1 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "gost", {"step": 1}))
+    t2 = asyncio.create_task(manager.apply_tunnel("tun-concurrent", "gost", {"step": 2}))
     await asyncio.gather(t1, t2)
     
     # The first must finish before the second starts
     assert order == ["start-1", "end-1", "start-2", "end-2"]
+
+
+@pytest.mark.asyncio
+async def test_apply_failure_restores_previous_configuration(monkeypatch, tmp_path):
+    """A rejected new spec must not leave the tunnel dead: the last good spec is restored."""
+    monkeypatch.setattr("node.app.core_adapters._get_pid_dir", lambda: tmp_path)
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+
+    applied = []
+
+    class FlakyAdapter:
+        name = "gost"
+
+        async def apply(self, tunnel_id, spec):
+            if spec.get("ports") == [8080, 8081]:
+                raise RuntimeError("rejected spec")
+            applied.append(dict(spec))
+
+        async def remove(self, tunnel_id):
+            pass
+
+        def status(self, tunnel_id):
+            return {"active": False, "process_running": False}
+
+    adapter = FlakyAdapter()
+    monkeypatch.setattr(manager, "get_adapter", lambda core: adapter)
+    monkeypatch.setattr(manager, "start_watchdog", lambda: None)
+
+    good_spec = {"transport": "tcp", "ports": [8080]}
+    await manager.apply_tunnel("tun-restore", "gost", good_spec)
+    assert manager.tunnel_configs["tun-restore"]["spec"] == good_spec
+
+    with pytest.raises(RuntimeError):
+        await manager.apply_tunnel("tun-restore", "gost", {"transport": "tcp", "ports": [8080, 8081]})
+
+    assert manager.tunnel_configs["tun-restore"]["spec"] == good_spec
+    assert manager.active_tunnels.get("tun-restore") is adapter
+    assert applied[-1] == good_spec
+
+
+@pytest.mark.asyncio
+async def test_unsupported_transport_is_rejected_before_apply(monkeypatch, tmp_path):
+    """Vocabulary errors must fail before any adapter process is touched."""
+    monkeypatch.setattr("node.app.core_adapters._get_pid_dir", lambda: tmp_path)
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+
+    applied = []
+
+    class RecordingAdapter:
+        name = "rathole"
+
+        async def apply(self, tunnel_id, spec):
+            applied.append(dict(spec))
+
+        async def remove(self, tunnel_id):
+            pass
+
+        def status(self, tunnel_id):
+            return {"active": False, "process_running": False}
+
+    monkeypatch.setattr(manager, "get_adapter", lambda core: RecordingAdapter())
+
+    with pytest.raises(ValueError):
+        await manager.apply_tunnel("tun-bad-transport", "rathole", {"transport": "quic", "ports": [8080]})
+
+    assert applied == []
+    assert "tun-bad-transport" not in manager.tunnel_configs
 
 
 @pytest.mark.asyncio

@@ -138,9 +138,12 @@ async def issue_ssl(
             auto_renew=payload.auto_renew
         )
         
+        message = f"SSL certificate successfully issued and installed for {clean_domain}!"
+        if cert_info.get("activation_message"):
+            message = f"{message} {cert_info['activation_message']}"
         return {
             "status": "success",
-            "message": f"SSL certificate successfully issued and installed for {clean_domain}!",
+            "message": message,
             "cert_info": cert_info
         }
     except ValueError as ve:
@@ -185,9 +188,12 @@ async def install_custom_ssl_endpoint(
             auto_renew=False
         )
         
+        message = f"Custom SSL certificate installed successfully for {clean_domain}!"
+        if cert_info.get("activation_message"):
+            message = f"{message} {cert_info['activation_message']}"
         return {
             "status": "success",
-            "message": f"Custom SSL certificate installed successfully for {clean_domain}!",
+            "message": message,
             "cert_info": cert_info
         }
     except ValueError as ve:
@@ -218,10 +224,16 @@ async def manual_renew_ssl(current_user: Admin = Depends(get_current_user)):
         )
 
     try:
-        cert_info = await renew_letsencrypt_cert()
+        cert_info = await renew_letsencrypt_cert(force=True)
+        if cert_info.get("renewed") is False:
+            message = "Certificate is not due for renewal; no changes were applied."
+        else:
+            message = "Certificate renewed successfully!"
+        if cert_info.get("activation_message"):
+            message = f"{message} {cert_info['activation_message']}"
         return {
             "status": "success",
-            "message": "Certificate renewed successfully!",
+            "message": message,
             "cert_info": cert_info
         }
     except Exception as e:

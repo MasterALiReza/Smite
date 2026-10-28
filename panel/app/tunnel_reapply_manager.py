@@ -2,6 +2,9 @@
 import copy
 import asyncio
 import logging
+import random
+import time
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -25,6 +28,56 @@ class TunnelReapplyManager:
         self.request: Optional[Request] = None
         # consecutive 'process dead' observations per tunnel (debounce for active tunnels)
         self._dead_strikes: dict = {}
+        # Observability + restart budget (memory only; never contains secrets)
+        self._retry_at: dict = {}
+        self._failures: dict = {}
+        self._alerted_at: dict = {}
+        self.last_success_at: Optional[str] = None
+        self.last_failure_at: Optional[str] = None
+        self.last_error: Optional[str] = None
+        self.restarts_total = 0
+
+    def runtime_status(self) -> dict:
+        now = time.time()
+        return {
+            "healer_running": bool(self.heal_task and not self.heal_task.done()),
+            "periodic_running": bool(self.task and not self.task.done()),
+            "last_success_at": self.last_success_at,
+            "last_failure_at": self.last_failure_at,
+            "restarts_total": self.restarts_total,
+            "pending_retries": sum(1 for t in self._retry_at.values() if t > now),
+            "last_error": self.last_error,
+        }
+
+    def _record_success(self, tunnel_id: str) -> None:
+        self.last_success_at = datetime.now(timezone.utc).isoformat()
+        self.restarts_total += 1
+        self._failures.pop(tunnel_id, None)
+        self._retry_at.pop(tunnel_id, None)
+        self._alerted_at.pop(tunnel_id, None)
+
+    def _record_failure(self, tunnel_id: str, tunnel_name: str, error: str) -> None:
+        now = time.time()
+        failures = self._failures.get(tunnel_id, 0) + 1
+        self._failures[tunnel_id] = failures
+        self.last_failure_at = datetime.now(timezone.utc).isoformat()
+        self.last_error = str(error)[:200]
+        # Exponential backoff (30s..15min) so a failing node is not hammered.
+        delay = min(30 * (2 ** min(failures - 1, 5)), 900)
+        self._retry_at[tunnel_id] = now + delay * random.uniform(0.9, 1.1)
+        if failures >= 3 and now - self._alerted_at.get(tunnel_id, 0.0) > 1800:
+            self._alerted_at[tunnel_id] = now
+            try:
+                from app.telegram_bot import telegram_bot
+
+                asyncio.create_task(
+                    telegram_bot.send_admin_alert(
+                        f"⚠️ Smite: reapply for tunnel '{tunnel_name}' failed "
+                        f"{failures} times in a row. Check panel/node logs."
+                    )
+                )
+            except Exception:
+                pass
     
     async def load_settings(self):
         """Load settings from database"""
@@ -41,20 +94,24 @@ class TunnelReapplyManager:
                 self.interval_unit = "minutes"
     
     async def start(self):
-        """Start auto reapply and autonomous self-healing tasks"""
-        await self.stop()
+        """Start the self-healing watchdog and sync the optional periodic sweep"""
+        await self._ensure_healer()
         await self.load_settings()
-        
-        # Self-healing watchdog runs 24/7 in the background
-        self.heal_task = asyncio.create_task(self._auto_heal_loop())
-        logger.info("Tunnel self-healing watchdog task started (45s interval)")
-        
-        if self.enabled:
-            self.task = asyncio.create_task(self._reapply_loop())
-            logger.info(f"Tunnel auto reapply task started: interval={self.interval} {self.interval_unit}")
-    
-    async def stop(self):
-        """Stop auto reapply and auto-healing tasks"""
+        await self._sync_periodic_task(restart=False)
+
+    async def apply_settings(self):
+        """Apply automation settings without touching the always-on watchdog"""
+        await self._ensure_healer()
+        await self.load_settings()
+        await self._sync_periodic_task(restart=True)
+
+    async def _ensure_healer(self):
+        """Start the watchdog if it is not already running"""
+        if self.heal_task is None or self.heal_task.done():
+            self.heal_task = asyncio.create_task(self._auto_heal_loop())
+            logger.info("Tunnel self-healing watchdog task started (45s interval)")
+
+    async def _cancel_periodic_task(self):
         if self.task:
             self.task.cancel()
             try:
@@ -62,7 +119,22 @@ class TunnelReapplyManager:
             except asyncio.CancelledError:
                 pass
             self.task = None
-            
+
+    async def _sync_periodic_task(self, restart: bool):
+        """Start/stop the periodic sweep; the watchdog is intentionally unaffected"""
+        if restart:
+            await self._cancel_periodic_task()
+        if not self.enabled:
+            await self._cancel_periodic_task()
+            return
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self._reapply_loop())
+            logger.info(f"Tunnel periodic health sweep started: interval={self.interval} {self.interval_unit}")
+
+    async def stop(self):
+        """Stop both background tasks (panel shutdown only)"""
+        await self._cancel_periodic_task()
+
         if self.heal_task:
             self.heal_task.cancel()
             try:
@@ -70,7 +142,7 @@ class TunnelReapplyManager:
             except asyncio.CancelledError:
                 pass
             self.heal_task = None
-            
+
         logger.info("Tunnel reapply and self-healing tasks stopped")
     
     async def _auto_heal_loop(self):
@@ -82,7 +154,11 @@ class TunnelReapplyManager:
         logger.info("Self-healing watchdog loop active")
         while True:
             try:
-                await asyncio.sleep(45)
+                await asyncio.sleep(45 + random.uniform(-5.0, 5.0))
+                from app.mutation_guard import mutation_guard
+                if mutation_guard.is_engaged():
+                    logger.debug("Mutation guard engaged: skipping self-healing pass")
+                    continue
                 async with AsyncSessionLocal() as session:
                     res = await session.execute(
                         select(Tunnel).where(
@@ -95,7 +171,13 @@ class TunnelReapplyManager:
                         
                     client = NodeClient()
                     for tunnel in tunnels:
+                        if self._retry_at.get(tunnel.id, 0.0) > time.time():
+                            continue
                         try:
+                            from app.mutation_guard import mutation_guard
+                            if mutation_guard.is_engaged():
+                                logger.info("Mutation guard engaged: aborting self-healing pass")
+                                break
                             # If tunnel is in error status, check if its nodes are reachable
                             if tunnel.status == "error":
                                 iran_id = tunnel.iran_node_id or tunnel.node_id
@@ -122,30 +204,18 @@ class TunnelReapplyManager:
                                     logger.info(f"Self-Healing: Nodes for tunnel '{tunnel.name}' ({tunnel.core}) are back online. Auto-reapplying...")
                                     applied_ok = await self._reapply_tunnel_safe(tunnel, session, client)
                                     if applied_ok:
+                                        self._record_success(tunnel.id)
                                         tunnel.status = "active"
                                         tunnel.error_message = None
                                         from sqlalchemy.orm.attributes import flag_modified
                                         flag_modified(tunnel, "spec")
                                         await session.commit()
                                         logger.info(f"Self-Healing: Successfully revived and restored tunnel '{tunnel.name}'")
-                            elif tunnel.status == "active" and tunnel.core in {"backhaul", "gost"}:
-                                # Crash recovery: node is up but the core process died
-                                node_ids = [i for i in (tunnel.iran_node_id or tunnel.node_id, tunnel.foreign_node_id) if i]
-                                process_dead = False
-                                for nid in node_ids:
-                                    try:
-                                        resp = await asyncio.wait_for(client.get_tunnel_status(nid, tunnel.id), timeout=3.5)
-                                    except Exception:
-                                        continue  # unreachable node: handled by node health, not here
-                                    data = (resp or {}).get("data") if isinstance(resp, dict) else None
-                                    if (
-                                        isinstance(resp, dict)
-                                        and resp.get("status") == "success"
-                                        and isinstance(data, dict)
-                                        and data.get("process_running") is False
-                                    ):
-                                        process_dead = True
-                                        break
+                                    else:
+                                        self._record_failure(tunnel.id, tunnel.name, "node did not confirm reapply")
+                            elif tunnel.status == "active":
+                                # Crash recovery: a node is up but the core process died
+                                process_dead = await self._tunnel_process_dead(client, tunnel)
                                 if not process_dead:
                                     self._dead_strikes.pop(tunnel.id, None)
                                 else:
@@ -155,7 +225,10 @@ class TunnelReapplyManager:
                                         self._dead_strikes.pop(tunnel.id, None)
                                         logger.warning(f"Self-Healing: {tunnel.core.capitalize()} process for tunnel '{tunnel.name}' is not running; re-applying")
                                         if await self._reapply_tunnel_safe(tunnel, session, client):
+                                            self._record_success(tunnel.id)
                                             logger.info(f"Self-Healing: {tunnel.core.capitalize()} tunnel '{tunnel.name}' restarted")
+                                        else:
+                                            self._record_failure(tunnel.id, tunnel.name, "node did not confirm restart")
                         except Exception as t_err:
                             logger.debug(f"Self-healing check error for tunnel {tunnel.id}: {t_err}")
             except asyncio.CancelledError:
@@ -163,67 +236,132 @@ class TunnelReapplyManager:
                 break
             except Exception as e:
                 logger.error(f"Unexpected error in self-healing watchdog loop: {e}", exc_info=True)
-    
+
+    def _tunnel_node_ids(self, tunnel: Tunnel) -> list:
+        node_ids = []
+        for nid in (tunnel.iran_node_id or tunnel.node_id, tunnel.foreign_node_id):
+            if nid and nid not in node_ids:
+                node_ids.append(nid)
+        return node_ids
+
+    async def _tunnel_process_dead(self, client: NodeClient, tunnel: Tunnel) -> bool:
+        """True only when a reachable node positively reports the tunnel process is dead"""
+        for nid in self._tunnel_node_ids(tunnel):
+            try:
+                resp = await asyncio.wait_for(client.get_tunnel_status(nid, tunnel.id), timeout=3.5)
+            except Exception:
+                continue  # unreachable node: node health owns that failure
+            data = resp.get("data") if isinstance(resp, dict) else None
+            if (
+                isinstance(resp, dict)
+                and resp.get("status") == "success"
+                and isinstance(data, dict)
+                and data.get("process_running") is False
+            ):
+                return True
+        return False
+
     async def _reapply_loop(self):
-        """Background task for automatic tunnel reapplication"""
+        """Background task for the optional periodic health sweep"""
         try:
             while True:
-                await self.load_settings()
-                
-                if not self.enabled:
-                    await asyncio.sleep(60)
-                    continue
-                
-                if self.interval_unit == "hours":
-                    sleep_seconds = self.interval * 3600
-                else:
-                    sleep_seconds = self.interval * 60
-                
-                await asyncio.sleep(sleep_seconds)
-                
-                if not self.enabled:
-                    continue
-                
                 try:
+                    await self.load_settings()
+
+                    from app.mutation_guard import mutation_guard
+                    if mutation_guard.is_engaged():
+                        logger.debug("Mutation guard engaged: skipping scheduled tunnel sweep")
+                        await asyncio.sleep(60)
+                        continue
+
+                    if not self.enabled:
+                        await asyncio.sleep(60)
+                        continue
+
+                    if self.interval_unit == "hours":
+                        sleep_seconds = self.interval * 3600
+                    else:
+                        sleep_seconds = self.interval * 60
+
+                    await asyncio.sleep(sleep_seconds)
+
+                    if not self.enabled:
+                        continue
+
                     await self._reapply_all_tunnels()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.error(f"Error in automatic tunnel reapply: {e}", exc_info=True)
+                    logger.error(f"Error in scheduled tunnel health sweep: {e}", exc_info=True)
+                    await asyncio.sleep(60)
         except asyncio.CancelledError:
-            logger.info("Tunnel reapply loop cancelled")
+            logger.info("Tunnel periodic health sweep cancelled")
             raise
-        except Exception as e:
-            logger.error(f"Tunnel reapply loop error: {e}", exc_info=True)
     
     async def _reapply_all_tunnels(self):
-        """Reapply all active tunnels according to schedule"""
+        """Periodic safety sweep: reapply only tunnels with positive fault evidence"""
+        from app.mutation_guard import mutation_guard
+
+        if mutation_guard.is_engaged():
+            logger.info("Mutation guard engaged: skipping scheduled tunnel health sweep")
+            return
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(Tunnel).where(Tunnel.status == "active"))
             tunnels = result.scalars().all()
             
             if not tunnels:
-                logger.debug("No active tunnels to reapply")
+                logger.debug("No active tunnels to check")
                 return
             
             client = NodeClient()
-            applied = 0
+            healthy = 0
+            reapplied = 0
             failed = 0
             
             for tunnel in tunnels:
                 try:
+                    if mutation_guard.is_engaged():
+                        logger.info("Mutation guard engaged: aborting scheduled health sweep")
+                        break
+                    needs_reapply = bool(tunnel.spec and tunnel.spec.get("_pending_reapply"))
+                    if not needs_reapply:
+                        if not await self._tunnel_process_dead(client, tunnel):
+                            healthy += 1
+                            continue
+                        # Confirm before restarting: a single probe can race a core restart
+                        await asyncio.sleep(2.0)
+                        if not await self._tunnel_process_dead(client, tunnel):
+                            healthy += 1
+                            continue
+                        logger.warning(
+                            f"Scheduled health sweep: process for tunnel '{tunnel.name}' ({tunnel.core}) "
+                            "is not running; re-applying"
+                        )
                     success = await self._reapply_tunnel_safe(tunnel, session, client)
                     if success:
-                        applied += 1
+                        self._record_success(tunnel.id)
+                        reapplied += 1
                     else:
+                        self._record_failure(tunnel.id, tunnel.name, "node did not confirm reapply")
                         failed += 1
                 except Exception as e:
-                    logger.error(f"Error reapplying tunnel {tunnel.id}: {e}", exc_info=True)
+                    logger.error(f"Error checking tunnel {tunnel.id} in scheduled sweep: {e}", exc_info=True)
+                    self._record_failure(tunnel.id, tunnel.name, str(e))
                     failed += 1
                 await asyncio.sleep(0.15)
             
-            logger.info(f"Auto reapply completed: {applied} applied, {failed} failed")
+            logger.info(
+                f"Scheduled tunnel health sweep completed: {reapplied} re-applied, "
+                f"{failed} failed, {healthy} healthy"
+            )
 
     async def _reapply_tunnel_safe(self, tunnel: Tunnel, session: AsyncSession, client: NodeClient) -> bool:
         """Safely re-apply a single tunnel to its node(s)"""
+        from app.mutation_guard import mutation_guard
+
+        if mutation_guard.is_engaged():
+            logger.info(f"Mutation guard engaged: not reapplying tunnel {tunnel.id}")
+            return False
         from app.routers.tunnels import prepare_frp_spec_for_node
         from app.models import Node
         from starlette.requests import Request as StarletteRequest

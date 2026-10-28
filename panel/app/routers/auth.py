@@ -1,4 +1,5 @@
 """Authentication endpoints and dependencies"""
+import logging
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -6,28 +7,46 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from pydantic import BaseModel
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
-from app.database import get_db
-from app.models import Admin
+from app.database import AsyncSessionLocal, get_db
+from app.models import Admin, RevokedToken
 from app.config import settings
 
 import hashlib
 import bcrypt
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET_KEY = settings.secret_key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = getattr(settings, "access_token_expire_minutes", 1440)
 
-# Token revocation store (SHA-256 hash -> expiration timestamp)
+
+def _secret_key() -> str:
+    """Resolved on every call so a key loaded at startup is honored."""
+    return settings.secret_key
+
+
+# Token revocation (SHA-256 hash -> expiration timestamp). The panel runs a
+# single uvicorn process, so after hydration the in-memory map is complete for
+# this process; SQLite keeps revocations effective across restarts.
 _revoked_token_hashes: dict[str, float] = {}
+_session_factory = AsyncSessionLocal
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _prune_revoked_tokens() -> None:
@@ -38,24 +57,85 @@ def _prune_revoked_tokens() -> None:
         _revoked_token_hashes.pop(h, None)
 
 
-def revoke_token(token: str, exp: Optional[float] = None) -> None:
+async def _persist_revocation(token_digest: str, expiry: float) -> None:
+    if _session_factory is None:
+        return
+    try:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        async with _session_factory() as session:
+            await session.execute(
+                delete(RevokedToken).where(RevokedToken.expires_at < _utcnow_naive())
+            )
+            await session.execute(
+                sqlite_insert(RevokedToken)
+                .values(
+                    token_hash=token_digest,
+                    expires_at=datetime.fromtimestamp(expiry, timezone.utc).replace(tzinfo=None),
+                    revoked_at=_utcnow_naive(),
+                )
+                .on_conflict_do_nothing(index_elements=["token_hash"])
+            )
+            await session.commit()
+    except Exception as exc:
+        logger.warning("Could not persist token revocation in SQLite: %s", exc)
+
+
+async def revoke_token(token: str, exp: Optional[float] = None) -> None:
     """Add a JWT to the revocation blocklist until its expiration."""
     _prune_revoked_tokens()
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_digest = _token_hash(token)
     expiry = exp if exp is not None else (time.time() + (ACCESS_TOKEN_EXPIRE_MINUTES * 60))
-    _revoked_token_hashes[token_hash] = expiry
+    _revoked_token_hashes[token_digest] = expiry
+    await _persist_revocation(token_digest, expiry)
 
 
-def is_token_revoked(token: str) -> bool:
+async def is_token_revoked(token: str) -> bool:
     """Check if token is in the revocation blocklist."""
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    exp = _revoked_token_hashes.get(token_hash)
+    if len(_revoked_token_hashes) > 512:
+        _prune_revoked_tokens()
+    token_digest = _token_hash(token)
+    exp = _revoked_token_hashes.get(token_digest)
     if exp is None:
         return False
     if exp < time.time():
-        _revoked_token_hashes.pop(token_hash, None)
+        _revoked_token_hashes.pop(token_digest, None)
         return False
     return True
+
+
+async def hydrate_revoked_tokens() -> int:
+    """Load unexpired revocations after a restart and drop expired rows."""
+    if _session_factory is None:
+        return 0
+    try:
+        async with _session_factory() as session:
+            await session.execute(
+                delete(RevokedToken).where(RevokedToken.expires_at < _utcnow_naive())
+            )
+            result = await session.execute(
+                select(RevokedToken.token_hash, RevokedToken.expires_at)
+            )
+            now = time.time()
+            loaded = 0
+            for token_digest, expires_at in result.all():
+                if expires_at is None:
+                    continue
+                expires_ts = (
+                    expires_at.replace(tzinfo=timezone.utc).timestamp()
+                    if expires_at.tzinfo is None
+                    else expires_at.timestamp()
+                )
+                if expires_ts > now:
+                    _revoked_token_hashes[token_digest] = expires_ts
+                    loaded += 1
+            await session.commit()
+        if loaded:
+            logger.info("Loaded %s unexpired revoked token(s) from the database", loaded)
+        return loaded
+    except Exception as exc:
+        logger.warning("Could not hydrate revoked tokens from SQLite: %s", exc)
+        return 0
 
 # Simple in-memory rate limiter for login attempts (per client IP)
 LOGIN_MAX_ATTEMPTS = 10
@@ -170,7 +250,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, _secret_key(), algorithm=ALGORITHM)
     return encoded_jwt
 
 
@@ -187,13 +267,13 @@ async def get_current_user(
     
     try:
         token = credentials.credentials
-        if is_token_revoked(token):
+        if await is_token_revoked(token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has been revoked",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _secret_key(), algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -222,9 +302,9 @@ async def get_current_user_optional(
         return None
     try:
         token = credentials.credentials
-        if is_token_revoked(token):
+        if await is_token_revoked(token):
             return None
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _secret_key(), algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             return None
@@ -299,9 +379,9 @@ async def logout(
     if credentials and credentials.credentials:
         try:
             token = credentials.credentials
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
+            payload = jwt.decode(token, _secret_key(), algorithms=[ALGORITHM], options={"verify_exp": False})
             exp = float(payload.get("exp", time.time() + (ACCESS_TOKEN_EXPIRE_MINUTES * 60)))
-            revoke_token(token, exp)
+            await revoke_token(token, exp)
         except Exception:
-            revoke_token(credentials.credentials)
+            await revoke_token(credentials.credentials)
     return {"message": "Logged out successfully"}

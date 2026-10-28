@@ -154,10 +154,14 @@ interface Translations {
     minutes: string
     hours: string
     backupDescription: string
+    backupPassphrase?: string
+    backupPassphraseDescription?: string
+    backupPassphrasePlaceholder?: string
     saveSettings: string
     saving: string
     loadingSettings: string
     settingsSaved: string
+    noChanges?: string
       failedToLoad: string
       failedToSave: string
       enterAdminId: string
@@ -373,15 +377,19 @@ const translations: Record<Language, Translations> = {
       intervalUnit: 'Interval Unit',
       minutes: 'Minutes',
       hours: 'Hours',
-      backupDescription: 'Panel will automatically send backup files to all admin users at the specified interval.',
-      tunnelAutoReapply: 'Tunnel Auto Reapply',
-      enableTunnelAutoReapply: 'Enable Automatic Tunnel Reapply',
-      tunnelAutoReapplyDescription: 'Automatically reapply all tunnels at specified intervals',
-      tunnelReapplyInterval: 'Reapply Interval',
+      backupDescription: 'Backups are sent only to private admin chats. Set a passphrase below for an encrypted full backup; otherwise a sanitized export without secrets is sent.',
+      backupPassphrase: 'Backup Encryption Passphrase',
+      backupPassphraseDescription: 'Optional, at least 12 characters. When set, the archive is encrypted and includes full configuration (secrets included). Leave empty for a sanitized export without secrets.',
+      backupPassphrasePlaceholder: 'At least 12 characters (optional)',
+      tunnelAutoReapply: 'Periodic Tunnel Health Sweep',
+      enableTunnelAutoReapply: 'Enable Periodic Tunnel Health Sweep',
+      tunnelAutoReapplyDescription: 'Checks active tunnels at the configured interval and re-applies only tunnels whose core process has stopped. Self-healing always runs every 45 seconds.',
+      tunnelReapplyInterval: 'Check Interval',
       saveSettings: 'Save Settings',
       saving: 'Saving...',
       loadingSettings: 'Loading settings...',
       settingsSaved: 'Settings saved successfully',
+      noChanges: 'No changes to save.',
       failedToLoad: 'Failed to load settings',
       failedToSave: 'Failed to save settings',
       enterAdminId: 'Enter admin user ID:',
@@ -425,9 +433,9 @@ const translations: Record<Language, Translations> = {
       renewing: 'Renewing...',
       renewSuccess: 'Certificate renewed successfully!',
       removeSsl: 'Remove SSL',
-      removeSslConfirm: 'Are you sure you want to disable SSL and revert the panel to HTTP?',
+      removeSslConfirm: 'Are you sure you want to disable SSL? The panel/nginx stack must be restarted to serve HTTP only; node tunnels are not affected.',
       removingSsl: 'Removing SSL...',
-      sslRemovedSuccess: 'SSL disabled. Panel reverted to HTTP.',
+      sslRemovedSuccess: 'SSL disabled. Restart the panel/nginx stack to serve HTTP only.',
       days: 'days',
       fingerprint: 'Fingerprint (SHA-256)',
       tabAll: 'All Settings',
@@ -591,15 +599,19 @@ const translations: Record<Language, Translations> = {
       intervalUnit: 'واحد فاصله',
       minutes: 'دقیقه',
       hours: 'ساعت',
-      backupDescription: 'پنل به طور خودکار فایل‌های پشتیبان را در فاصله مشخص شده به همه کاربران ادمین ارسال می‌کند.',
-      tunnelAutoReapply: 'اعمال مجدد خودکار تونل',
-      enableTunnelAutoReapply: 'فعال کردن اعمال مجدد خودکار تونل',
-      tunnelAutoReapplyDescription: 'به صورت خودکار همه تونل‌ها را در فواصل زمانی مشخص اعمال مجدد کنید',
-      tunnelReapplyInterval: 'فاصله اعمال مجدد',
+      backupDescription: 'فایل‌های پشتیبان فقط به چت خصوصی ادمین‌ها ارسال می‌شوند. برای پشتیبان کامل رمزگذاری‌شده، عبارت عبور تعیین کنید؛ در غیر این صورت خروجی پاک‌سازی‌شده بدون اسرار ارسال می‌شود.',
+      backupPassphrase: 'عبارت عبور رمزنگاری پشتیبان',
+      backupPassphraseDescription: 'اختیاری، حداقل ۱۲ کاراکتر. در صورت تنظیم، آرشیو رمزگذاری می‌شود و شامل تنظیمات کامل (همراه با اسرار) است. برای خروجی پاک‌سازی‌شده بدون اسرار خالی بگذارید.',
+      backupPassphrasePlaceholder: 'حداقل ۱۲ کاراکتر (اختیاری)',
+      tunnelAutoReapply: 'بازبینی دوره‌ای سلامت تونل‌ها',
+      enableTunnelAutoReapply: 'فعال کردن بازبینی دوره‌ای سلامت تونل‌ها',
+      tunnelAutoReapplyDescription: 'تونل‌های فعال را در فواصل تعیین‌شده بررسی می‌کند و فقط تونل‌هایی را که پروسه هسته‌شان متوقف شده دوباره اعمال می‌کند. خودترمیمی همیشه هر ۴۵ ثانیه اجرا می‌شود.',
+      tunnelReapplyInterval: 'فاصله بررسی',
       saveSettings: 'ذخیره تنظیمات',
       saving: 'در حال ذخیره...',
       loadingSettings: 'در حال بارگذاری تنظیمات...',
       settingsSaved: 'تنظیمات با موفقیت ذخیره شد',
+      noChanges: 'تغییری برای ذخیره وجود ندارد.',
       failedToLoad: 'بارگذاری تنظیمات ناموفق بود',
       failedToSave: 'ذخیره تنظیمات ناموفق بود',
       enterAdminId: 'شناسه کاربری ادمین را وارد کنید:',
@@ -642,10 +654,10 @@ const translations: Record<Language, Translations> = {
       renewNow: 'تمدید دستی',
       renewing: 'در حال تمدید...',
       renewSuccess: 'گواهی با موفقیت تمدید شد!',
-      removeSsl: 'حذف SSL (برگشت به HTTP)',
-      removeSslConfirm: 'آیا از حذف SSL و برگشت وب‌پنل به HTTP اطمینان دارید؟ (اتصال نودها به هیچ وجه تغییر نمی‌کند)',
+      removeSsl: 'حذف SSL',
+      removeSslConfirm: 'آیا از غیرفعال‌سازی SSL اطمینان دارید؟ برای سرو شدن پنل فقط روی HTTP باید پنل و nginx ری‌استارت شوند؛ اتصال نودها تغییری نمی‌کند.',
       removingSsl: 'در حال غیرفعال‌سازی...',
-      sslRemovedSuccess: 'گواهی SSL غیرفعال شد و پنل به حالت HTTP برگشت.',
+      sslRemovedSuccess: 'گواهی SSL غیرفعال شد. برای سرو شدن پنل فقط روی HTTP، پنل و nginx را ری‌استارت کنید.',
       days: 'روز',
       fingerprint: 'اثر انگشت (SHA-256)',
       tabAll: 'همه تنظیمات',

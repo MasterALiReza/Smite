@@ -4,10 +4,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+import hashlib
 import httpx
 import logging
 import re
+import ssl
 import time
 import asyncio
 
@@ -61,11 +63,99 @@ def _node_request_trust(request: Request, node: Optional[Node]) -> Tuple[bool, b
     return authenticated, legacy_open
 
 
+def _api_address(scheme: str, host: str, port: int) -> str:
+    formatted = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"{scheme}://{formatted}:{port}"
+
+
+def _agent_transport_values(transport: Optional["NodeAgentTransport"], host: str, port: int, trusted: bool) -> Dict[str, Any]:
+    if transport is None:
+        return {}
+    if transport.scheme.lower() != "https":
+        raise HTTPException(status_code=400, detail="Agent transport scheme must be https")
+    try:
+        der = ssl.PEM_cert_to_DER_cert(transport.certificate)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Agent transport certificate is invalid")
+    fingerprint = hashlib.sha256(der).hexdigest()
+    if not hmac_compare(fingerprint, transport.fingerprint.lower()):
+        raise HTTPException(status_code=400, detail="Agent transport certificate fingerprint does not match")
+
+    address = _api_address("https", host, port)
+    if trusted:
+        return {
+            "api_address": address,
+            "agent_tls_certificate": transport.certificate,
+            "agent_tls_fingerprint": fingerprint,
+            "agent_transport_mode": "pinned_https",
+        }
+
+    proof = (transport.bootstrap_proof or "").strip()
+    expires_at = transport.bootstrap_expires_at
+    now = int(time.time())
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", proof):
+        raise HTTPException(status_code=400, detail="A valid one-time bootstrap proof is required")
+    if not isinstance(expires_at, int) or expires_at <= now or expires_at > now + 3600:
+        raise HTTPException(status_code=400, detail="Bootstrap proof expiry is invalid")
+    return {
+        "agent_pending_api_address": address,
+        "agent_pending_tls_certificate": transport.certificate,
+        "agent_pending_tls_fingerprint": fingerprint,
+        "agent_bootstrap_proof": proof,
+        "agent_bootstrap_expires_at": expires_at,
+        "agent_transport_mode": "pending_pinned_https",
+    }
+
+
+def hmac_compare(left: str, right: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(left.encode("ascii"), right.encode("ascii"))
+
+
+async def _probe_agent_status(host: str, port: int, transport: Optional["NodeAgentTransport"]) -> str:
+    """Panel-to-node reachability probe, pinned HTTPS when the node advertises it."""
+    last_error: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            if transport is not None:
+                context = ssl.create_default_context(cadata=transport.certificate)
+                # The pinned certificate is the trust anchor here; hostname matching
+                # is enforced on real management traffic, not on this probe.
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_REQUIRED
+                url = _api_address("https", host, port) + "/api/agent/status"
+                async with httpx.AsyncClient(timeout=2.0, verify=context) as client:
+                    resp = await client.get(url)
+            else:
+                url = _api_address("http", host, port) + "/api/agent/status"
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get(url)
+            if resp.status_code in (200, 401):
+                return "connected"
+        except Exception as error:
+            last_error = error
+        if attempt < 2:
+            await asyncio.sleep(1.0)
+    if last_error:
+        logger.info(f"Agent reachability probe to {_api_address('https' if transport else 'http', host, port)} failed: {last_error}")
+    return "disconnected"
+
+
+class NodeAgentTransport(BaseModel):
+    scheme: str
+    certificate: str = Field(min_length=64, max_length=16384)
+    fingerprint: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    bootstrap_proof: Optional[str] = Field(default=None, max_length=128)
+    bootstrap_expires_at: Optional[int] = None
+
+
 class NodeCreate(BaseModel):
     name: str
     ip_address: str
     api_port: int = 8888
     metadata: dict = {}
+    agent_transport: Optional[NodeAgentTransport] = None
 
 
 class NodeUpdate(BaseModel):
@@ -80,6 +170,7 @@ class NodeAutoRegister(BaseModel):
     role: str = "foreign"
     registration_token: str
     metadata: dict = {}
+    agent_transport: Optional[NodeAgentTransport] = None
 
 
 class NodeResponse(BaseModel):
@@ -125,8 +216,20 @@ async def get_country_info(ip: str) -> tuple:
 
 async def enrich_node_response_metadata(db: AsyncSession, node_id: str, metadata: dict) -> dict:
     """Enrich node response metadata with authoritative active tunnels and pending removals"""
+    from app.mutation_guard import mutation_guard
+
     enriched = metadata.copy() if metadata else {}
-    
+
+    # While the guard is engaged the panel's tunnel list may come from a stale
+    # restore. Withholding both fields leaves the node's current tunnels untouched
+    # (both are inert when absent) and keeps pending removals queued.
+    if mutation_guard.is_engaged():
+        logger.info(
+            "Mutation guard engaged: withholding authoritative tunnel list and pending removals for node %s",
+            node_id,
+        )
+        return enriched
+
     # 1. Authoritative active tunnels
     try:
         # Every tunnel that still exists in the database is authoritative, whatever
@@ -176,22 +279,6 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         raise HTTPException(status_code=401, detail="Invalid registration token")
         
     incoming_role = payload.role if payload.role in ["iran", "foreign"] else "foreign"
-    
-    # Reverse probe verification with retry (gives starting containers time to accept traffic)
-    import asyncio
-    client_conn_status = "disconnected"
-    for probe_attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(f"http://{payload.ip_address}:{payload.api_port}/api/agent/status")
-                if resp.status_code in (200, 401):
-                    client_conn_status = "connected"
-                    break
-        except Exception as e:
-            if probe_attempt < 2:
-                await asyncio.sleep(1.0)
-            else:
-                logger.info(f"Probe to http://{payload.ip_address}:{payload.api_port} attempt {probe_attempt+1} failed: {e}")
 
     fingerprint_data = f"{payload.ip_address}:{payload.api_port}".encode()
     fingerprint = hashlib.sha256(fingerprint_data).hexdigest()[:16]
@@ -208,12 +295,44 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
 
     result = await db.execute(select(Node).where(Node.fingerprint == fingerprint))
     existing = result.scalar_one_or_none()
+    existing_meta = dict(existing.node_metadata or {}) if existing else {}
+    pinned_existing = existing_meta.get("agent_transport_mode") == "pinned_https"
 
+    incoming_fingerprint = None
+    if payload.agent_transport is not None:
+        try:
+            incoming_fingerprint = hashlib.sha256(
+                ssl.PEM_cert_to_DER_cert(payload.agent_transport.certificate)
+            ).hexdigest()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Agent transport certificate is invalid")
+    # A paired node re-registers with the same identity but no proof; that is a
+    # heartbeat, not a new enrollment, so its live transport is left untouched.
+    same_pinned_identity = bool(
+        pinned_existing
+        and incoming_fingerprint
+        and payload.agent_transport.scheme.lower() == "https"
+        and hmac_compare(incoming_fingerprint, str(existing_meta.get("agent_tls_fingerprint") or "").lower())
+    )
+    transport_values = (
+        {}
+        if same_pinned_identity
+        else _agent_transport_values(
+            payload.agent_transport,
+            payload.ip_address,
+            payload.api_port,
+            trusted=False,
+        )
+    )
     metadata = _strip_reserved_metadata(payload.metadata)
-    metadata["api_address"] = f"http://{payload.ip_address}:{payload.api_port}"
+    metadata["api_address"] = _api_address("http", payload.ip_address, payload.api_port)
     metadata["ip_address"] = payload.ip_address
     metadata["api_port"] = payload.api_port
     metadata["role"] = incoming_role
+    metadata.update(transport_values)
+
+    # Reverse probe verification with retry (gives starting containers time to accept traffic)
+    client_conn_status = await _probe_agent_status(payload.ip_address, payload.api_port, payload.agent_transport)
     metadata["connection_status"] = client_conn_status
 
     # GeoIP resolution & Intelligent Naming
@@ -266,6 +385,10 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
         merged_meta = dict(existing.node_metadata or {})
+        if merged_meta.get("agent_transport_mode") == "pinned_https":
+            # A paired node's live transport is only changed by an authenticated
+            # admin action; an enrollment payload can never downgrade it to HTTP.
+            metadata.pop("api_address", None)
         merged_meta.update(metadata)
         existing.node_metadata = merged_meta
         from sqlalchemy.orm.attributes import flag_modified
@@ -273,6 +396,8 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         await db.commit()
         await db.refresh(existing)
         invalidate_node_status_cache(existing.id)
+        from app.node_auth_manager import node_auth_manager
+        node_auth_manager.schedule_soon(existing.id, existing.node_metadata)
         resp_meta = public_node_metadata(await enrich_node_response_metadata(db, existing.id, existing.node_metadata))
         return NodeResponse(
             id=existing.id,
@@ -294,6 +419,8 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
         await db.commit()
         await db.refresh(db_node)
         invalidate_node_status_cache(db_node.id)
+        from app.node_auth_manager import node_auth_manager
+        node_auth_manager.schedule_soon(db_node.id, db_node.node_metadata)
         resp_meta = public_node_metadata(await enrich_node_response_metadata(db, db_node.id, db_node.node_metadata))
         return NodeResponse(
             id=db_node.id,
@@ -354,17 +481,26 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
     # for this node, a registration must carry it. Otherwise anybody knowing the
     # node's IP:port could impersonate it and receive the FRP comm credentials and
     # its pending tunnel removals.
+    request_authenticated = current_user is not None
     if existing and current_user is None:
         authenticated, legacy_open = _node_request_trust(request, existing)
+        request_authenticated = authenticated
         if not authenticated and not legacy_open:
             client_host = request.client.host if request.client else "unknown"
             logger.warning(f"Rejected unauthenticated registration for node {existing.id} from {client_host}")
             raise HTTPException(status_code=401, detail="Invalid or missing node token")
-    
+
+    transport_values = _agent_transport_values(
+        node.agent_transport,
+        node.ip_address,
+        node.api_port,
+        trusted=request_authenticated,
+    )
     metadata = _strip_reserved_metadata(node.metadata)
-    metadata["api_address"] = f"http://{node.ip_address}:{node.api_port}"
+    metadata["api_address"] = _api_address("http", node.ip_address, node.api_port)
     metadata["ip_address"] = node.ip_address
     metadata["api_port"] = node.api_port
+    metadata.update(transport_values)
     
     incoming_role = node.metadata.get("role", "iran") if node.metadata else "iran"
     if incoming_role not in ["iran", "foreign"]:
@@ -386,16 +522,22 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
         
         existing.last_seen = datetime.utcnow()
         existing.status = "active"
-        if current_user is not None:
+        if request_authenticated:
             merged_meta = dict(existing.node_metadata or {})
+            if merged_meta.get("agent_transport_mode") == "pinned_https" and node.agent_transport is None:
+                metadata.pop("api_address", None)
             merged_meta.update(metadata)
             merged_meta["role"] = existing_role
             existing.node_metadata = merged_meta
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(existing, "node_metadata")
+        elif transport_values:
+            merged_meta = dict(existing.node_metadata or {})
+            merged_meta.update(transport_values)
+            existing.node_metadata = merged_meta
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(existing, "node_metadata")
         else:
-            # Unauthenticated re-registration (legacy node): keep existing
-            # metadata to prevent node-hijack via fingerprint overwrite.
             logger.debug(f"Unauthenticated re-registration for node {existing.id}, metadata update skipped (hijack protection)")
         await db.commit()
         await db.refresh(existing)

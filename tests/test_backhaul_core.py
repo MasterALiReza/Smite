@@ -421,3 +421,38 @@ async def test_backhaul_adapter_defaults_high_throughput_buffers(tmp_path, monke
         assert "mux_recievebuffer = 16777216" in cli_txt
         assert "mux_streambuffer = 4194304" in cli_txt
 
+
+
+def test_backhaul_range_mapping_keeps_explicit_target_host():
+    """A-B=host:A-B expands 1:1 onto that host instead of collapsing to a native range."""
+    from node.app.core_adapters import _normalize_backhaul_ports
+
+    normalized = _normalize_backhaul_ports(
+        ["27000-27002=10.0.0.5:27000-27002", "8080"], "127.0.0.1"
+    )
+    assert normalized == [
+        "27000=10.0.0.5:27000",
+        "27001=10.0.0.5:27001",
+        "27002=10.0.0.5:27002",
+        "8080=127.0.0.1:8080",
+    ]
+
+
+def test_backhaul_range_mapping_rejects_mismatched_or_ipv6_targets():
+    from node.app.core_adapters import _normalize_backhaul_ports
+
+    with pytest.raises(ValueError):
+        _normalize_backhaul_ports(["27000-27002=10.0.0.5:28000-28002"], "127.0.0.1")
+    with pytest.raises(ValueError):
+        _normalize_backhaul_ports(["27000-27002=[::1]:27000-27002"], "127.0.0.1")
+
+
+def test_backhaul_native_range_and_single_mapping_normalization():
+    from node.app.core_adapters import _normalize_backhaul_ports
+
+    # Default target host keeps the native range spelling Backhaul parses itself.
+    assert _normalize_backhaul_ports(["27000-27050"], "127.0.0.1") == ["27000-27050"]
+    # A non-default host cannot be expressed natively, so the range is expanded.
+    expanded = _normalize_backhaul_ports(["27000-27001"], "10.0.0.5")
+    assert expanded == ["27000=10.0.0.5:27000", "27001=10.0.0.5:27001"]
+    assert _normalize_backhaul_ports([8080], None) == ["8080=127.0.0.1:8080"]

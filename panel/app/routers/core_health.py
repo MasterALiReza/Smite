@@ -235,7 +235,14 @@ async def manual_reset_core(core: str, request: Request, db: AsyncSession = Depe
     """Manually reset a core (restart servers and clients)"""
     if core not in CORES:
         raise HTTPException(status_code=400, detail=f"Invalid core: {core}")
-    
+
+    from app.mutation_guard import mutation_guard
+    if mutation_guard.is_engaged():
+        raise HTTPException(
+            status_code=409,
+            detail="Mutation guard is engaged; release it before resetting cores",
+        )
+
     now_ts = time.time()
     last_ts = _LAST_MANUAL_RESET.get(core, 0.0)
     if (now_ts - last_ts) < RESET_COOLDOWN_SECONDS:
@@ -279,6 +286,11 @@ async def manual_reset_core(core: str, request: Request, db: AsyncSession = Depe
 
 async def _reset_core(core: str, app_or_request, db: AsyncSession):
     """Internal function to reset a core - handles both foreign and iran nodes"""
+    from app.mutation_guard import mutation_guard
+
+    if mutation_guard.is_engaged():
+        logger.warning(f"Mutation guard engaged: refusing to reset core {core}")
+        return
     if hasattr(app_or_request, 'app'):
         app = app_or_request.app
     else:

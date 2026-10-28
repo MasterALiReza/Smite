@@ -26,7 +26,7 @@ export const CORE_CONFIGS: Record<string, CoreThemeConfig> = {
   gost: {
     coreId: 'gost',
     title: 'GOST v3.0 Core Settings',
-    subtitle: 'Next-Gen Anti-DPI & High-Performance Routing Core',
+    subtitle: 'Multi-Transport Routing Core (GOST v3)',
     badgeText: 'GOST v3.0 Core',
     iconName: 'Zap',
     colorScheme: 'indigo',
@@ -51,8 +51,8 @@ export const CORE_CONFIGS: Record<string, CoreThemeConfig> = {
       { value: 'wss', label: 'WebSocket Secure (WSS)' },
       { value: 'mws', label: 'Multiplex WS (MWS)' },
       { value: 'mwss', label: 'Multiplex WSS' },
-      { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
-      { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
+      { value: 'quic', label: 'QUIC (UDP + TLS 1.3, 0-RTT)' },
+      { value: 'grpc', label: 'gRPC (Multiplexed HTTP/2)' },
       { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
       { value: 'ssh', label: 'SSH (Encrypted Subsystem)' },
     ],
@@ -88,8 +88,8 @@ export const CORE_CONFIGS: Record<string, CoreThemeConfig> = {
   backhaul: {
     coreId: 'backhaul',
     title: 'Backhaul Multiplexing Settings',
-    subtitle: 'High-Performance Reverse Tunnel with Yamux & WebSockets',
-    badgeText: 'Backhaul v0.6+ Core',
+    subtitle: 'Reverse Tunnel with smux Multiplexing & WebSockets',
+    badgeText: 'Backhaul v0.7.2 Core',
     iconName: 'RadioTower',
     colorScheme: 'emerald',
     bgGradientClass:
@@ -108,11 +108,11 @@ export const CORE_CONFIGS: Record<string, CoreThemeConfig> = {
     ],
     transportOptions: [
       { value: 'tcp', label: 'TCP' },
-      { value: 'tcpmux', label: 'TCP Mux (Yamux)' },
+      { value: 'tcpmux', label: 'TCPMux (smux)' },
       { value: 'ws', label: 'WebSocket (WS)' },
-      { value: 'wsmux', label: 'WebSocket Mux' },
-      { value: 'wss', label: 'WSS (Secure WebSocket)' },
-      { value: 'wssmux', label: 'WSS Mux' },
+      { value: 'wsmux', label: 'WebSocket Mux (smux)' },
+      { value: 'wss', label: 'WSS (TLS; certificate not verified)' },
+      { value: 'wssmux', label: 'WSS Mux (TLS; certificate not verified)' },
     ],
   },
   chisel: {
@@ -166,7 +166,7 @@ export const CORE_CONFIGS: Record<string, CoreThemeConfig> = {
     transportOptions: [
       { value: 'tcp', label: 'TCP (with TLS & Zero-Byte Signature)' },
       { value: 'kcp', label: 'KCP (Fast UDP - Resilient to Packet Loss)' },
-      { value: 'quic', label: 'QUIC (HTTP/3 UDP + TLS 1.3 Multiplex)' },
+      { value: 'quic', label: 'QUIC (UDP + TLS 1.3 Multiplex)' },
       { value: 'websocket', label: 'WebSocket (Plain WS)' },
       { value: 'wss', label: 'WSS (Secure WebSocket - CDN Capable)' },
     ],

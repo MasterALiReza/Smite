@@ -76,16 +76,18 @@ export function BackhaulForm({
             value={state.transport}
             onChange={(val) => onChange({ transport: val as BackhaulTransport })}
             options={[
-              { value: 'tcpmux', label: 'TCPMux (SMUX - Recommended)' },
+              { value: 'tcpmux', label: 'TCPMux (smux - Recommended)' },
               { value: 'tcp', label: 'TCP (Direct Stream)' },
               { value: 'ws', label: 'WebSocket (WS)' },
-              { value: 'wsmux', label: 'WS Mux' },
-              { value: 'wss', label: 'WSS (TLS Secure)' },
-              { value: 'wssmux', label: 'WSS Mux (TLS)' },
+              { value: 'wsmux', label: 'WS Mux (smux)' },
+              { value: 'wss', label: 'WSS (TLS; certificate not verified)' },
+              { value: 'wssmux', label: 'WSS Mux (TLS; certificate not verified)' },
             ]}
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-            Underlying connection protocol between nodes.
+            Underlying connection protocol between nodes. WSS/WSSMux in Backhaul v0.7.2
+            does not verify the server certificate; use it for encapsulation, not for
+            authenticated TLS.
           </p>
         </div>
 
@@ -491,7 +493,7 @@ export function BackhaulAdvancedDrawer({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <div>
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Yamux Protocol Version
+                  smux Protocol Version
                 </label>
                 <CustomSelect
                   value={state.server.mux_version || '2'}

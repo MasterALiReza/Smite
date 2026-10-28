@@ -9,6 +9,47 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+async def registered_node_count() -> int:
+    """Registered node count; assumes nodes exist when the database cannot be read."""
+    try:
+        from sqlalchemy import func, select
+        from app.database import AsyncSessionLocal
+        from app.models import Node
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(func.count()).select_from(Node))
+            return int(result.scalar() or 0)
+    except Exception as e:
+        logger.warning(f"Could not count registered nodes: {e}")
+        return 1
+
+
+async def trust_material_generation_allowed(missing: bool) -> bool:
+    """Never mint new CA material on a live fleet or under the mutation guard.
+
+    Agents pin the CA they were enrolled with. Regenerating it because the certs
+    volume was not mounted (a common compose mistake) silently breaks every
+    node's HTTPS/H2 trust. A fresh install has zero nodes, so it still works.
+    """
+    if not missing:
+        return False
+    from app.mutation_guard import mutation_guard
+
+    if mutation_guard.is_engaged():
+        logger.critical("Mutation guard is engaged; refusing to generate CA trust material")
+        return False
+    node_count = await registered_node_count()
+    if node_count > 0:
+        logger.critical(
+            "Refusing to generate CA trust material while %d node(s) are registered. "
+            "If certs/ is missing, restore ca.crt/ca.key (and ca-server.*) from backup; "
+            "a new CA would break node trust.",
+            node_count,
+        )
+        return False
+    return True
+
+
 class NodeServer:
     """Node server for secure panel-node communication"""
     
@@ -18,6 +59,7 @@ class NodeServer:
         self.key_path = settings.node_key_path
         self.server: Optional[asyncio.Server] = None
         self.clients = {}
+        self.allow_ca_generation = False
     
     async def start(self):
         """Start Node server"""
@@ -25,7 +67,15 @@ class NodeServer:
         key_path = Path(self.key_path)
         
         if not cert_path.exists() or not key_path.exists():
-            await self._generate_certs()
+            if self.allow_ca_generation:
+                await self._generate_certs()
+            else:
+                logger.critical(
+                    "Node server trust material is missing at %s / %s and CA generation is disabled; "
+                    "restore the existing certificates instead of minting new ones",
+                    cert_path,
+                    key_path,
+                )
         
         logger.info(f"Node server starting on port {self.port}")
     

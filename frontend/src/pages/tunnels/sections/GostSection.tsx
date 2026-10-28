@@ -8,7 +8,6 @@ import {
   EyeOff,
   Shield,
   Gauge,
-  Fingerprint,
   Scale,
   ArrowLeftRight,
   Radio,
@@ -50,10 +49,7 @@ export const GostSection: React.FC<GostSectionProps> = ({
 
   const getSecurityOptions = () => {
     if (formData.transport_type === 'wss' || formData.transport_type === 'mwss') {
-      return [
-        { value: 'tls', label: 'TLS (Standard Encryption)' },
-        { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
-      ]
+      return [{ value: 'tls', label: 'TLS (Standard Encryption)' }]
     }
     if (formData.transport_type === 'quic') {
       return [{ value: 'tls', label: 'TLS 1.3 (Enforced by QUIC)' }]
@@ -64,7 +60,6 @@ export const GostSection: React.FC<GostSectionProps> = ({
     return [
       { value: 'none', label: 'None (Plaintext / Low Overhead)' },
       { value: 'tls', label: 'TLS (Standard Encryption)' },
-      { value: 'utls', label: 'uTLS (Browser Spoofing Anti-DPI)' },
     ]
   }
 
@@ -150,8 +145,8 @@ export const GostSection: React.FC<GostSectionProps> = ({
               { value: 'wss', label: 'WebSocket Secure (WSS)' },
               { value: 'mws', label: 'Multiplex WS (MWS)' },
               { value: 'mwss', label: 'Multiplex WSS' },
-              { value: 'quic', label: 'QUIC (HTTP/3 UDP, 0-RTT)' },
-              { value: 'grpc', label: 'gRPC (Multiplexed Stealth)' },
+              { value: 'quic', label: 'QUIC (UDP + TLS 1.3, 0-RTT)' },
+              { value: 'grpc', label: 'gRPC (Multiplexed HTTP/2)' },
               { value: 'kcp', label: 'KCP (Anti-Packet-Loss ARQ)' },
               { value: 'ssh', label: 'SSH (Encrypted Subsystem)' },
             ]}
@@ -166,11 +161,11 @@ export const GostSection: React.FC<GostSectionProps> = ({
             {formData.transport_type === 'ws' &&
               'Standard WebSocket. Compatible with CDN proxies.'}
             {formData.transport_type === 'wss' &&
-              'Secure WebSocket with TLS/uTLS encryption.'}
+              'WebSocket over TLS (certificate validation is configurable).'}
             {formData.transport_type === 'mws' &&
-              'Multiplexed WebSocket. Bundles multiple TCP streams.'}
+              'WebSocket with smux multiplexing. Bundles multiple TCP streams.'}
             {formData.transport_type === 'mwss' &&
-              'Multiplexed Secure WebSocket with TLS/uTLS.'}
+              'WebSocket over TLS with smux multiplexing.'}
             {formData.transport_type === 'tcp' && 'Direct raw TCP socket tunnel.'}
             {formData.transport_type === 'ssh' &&
               'Native SSH subsystem encrypted protocol.'}
@@ -202,47 +197,9 @@ export const GostSection: React.FC<GostSectionProps> = ({
               'No TLS wrapper. Lowest CPU overhead.'}
             {!isSecurityLocked && formData.security_type === 'tls' &&
               'Standard TLS 1.3 handshake encryption.'}
-            {!isSecurityLocked && formData.security_type === 'utls' &&
-              'Camouflages ClientHello to impersonate real browsers.'}
           </p>
         </div>
       </div>
-
-      {/* 5. uTLS Fingerprint Card (Conditional) */}
-      {formData.security_type === 'utls' && (
-        <div className="p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/50 space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
-              <Fingerprint size={15} className="text-indigo-600 dark:text-indigo-400" />
-              uTLS Client Fingerprint
-            </label>
-            <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-indigo-200/60 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300">
-              Anti-DPI Spoofing
-            </span>
-          </div>
-          <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80 leading-tight">
-            Replicates exact TLS cipher suites, extensions, and curves of legitimate web browsers:
-          </p>
-          <CustomSelect
-            value={formData.utls_fingerprint || 'chrome'}
-            onChange={(val) => onChange({ utls_fingerprint: val })}
-            options={[
-              {
-                value: 'chrome',
-                label: 'Google Chrome (Recommended - Highest Compatibility)',
-              },
-              { value: 'firefox', label: 'Mozilla Firefox' },
-              { value: 'ios', label: 'Apple iOS Safari' },
-              { value: 'android', label: 'Android Chrome' },
-              { value: 'edge', label: 'Microsoft Edge' },
-              {
-                value: 'randomized',
-                label: 'Randomized (Rotates browser signature per connection)',
-              },
-            ]}
-          />
-        </div>
-      )}
 
       {/* 6. Failover IPs & Selector Strategy */}
       <div className="p-3.5 rounded-xl bg-gray-50/80 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 space-y-3">

@@ -17,10 +17,12 @@ import re
 import sys
 import shutil
 import socket
+import hashlib
 import logging
 import asyncio
 import ipaddress
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
@@ -274,6 +276,8 @@ def parse_certificate_pem(cert_pem: str) -> Dict[str, Any]:
         
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         days_remaining = (not_after - now).days
+        not_yet_valid = now < not_before
+        expired = now > not_after
         
         # SANs
         sans: List[str] = []
@@ -287,7 +291,9 @@ def parse_certificate_pem(cert_pem: str) -> Dict[str, Any]:
         fp = cert.fingerprint(hashes.SHA256()).hex().upper()
         formatted_fp = ":".join(fp[i:i+2] for i in range(0, len(fp), 2))
         
-        if days_remaining <= 0:
+        if not_yet_valid:
+            status = "not_yet_valid"
+        elif expired:
             status = "expired"
         elif days_remaining <= 15:
             status = "expiring_soon"
@@ -301,6 +307,9 @@ def parse_certificate_pem(cert_pem: str) -> Dict[str, Any]:
             "not_valid_before": not_before.isoformat() + "Z",
             "not_valid_after": not_after.isoformat() + "Z",
             "days_remaining": max(0, days_remaining),
+            "not_yet_valid": not_yet_valid,
+            "expired": expired,
+            "within_validity": not (not_yet_valid or expired),
             "san": sans,
             "fingerprint": formatted_fp,
             "status": status
@@ -350,6 +359,65 @@ def validate_cert_and_key(cert_pem: str, key_pem: str) -> bool:
         raise ValueError(f"SSL key pair validation failed: {e}")
 
 
+def _certificate_dns_names(cert: x509.Certificate) -> List[str]:
+    """Extract DNS SANs (falling back to subject CN only when no SANs exist)"""
+    names: List[str] = []
+    try:
+        san_ext = cert.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+        names.extend(
+            str(name.value).lower().rstrip(".")
+            for name in san_ext.value
+            if isinstance(name, x509.DNSName)
+        )
+    except x509.ExtensionNotFound:
+        pass
+    if not names:
+        names.extend(
+            attr.value.lower().rstrip(".")
+            for attr in cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+            if attr.value
+        )
+    return names
+
+
+def certificate_covers_domain(cert_pem: str, domain: str) -> bool:
+    """Return True when the certificate SANs (or CN fallback) cover the domain, including wildcards"""
+    clean = sanitize_domain(domain)
+    if not clean:
+        return False
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem.strip().encode("utf-8"), default_backend())
+    except Exception as e:
+        logger.warning(f"Could not inspect certificate SANs: {e}")
+        return False
+
+    for name in _certificate_dns_names(cert):
+        if name == clean:
+            return True
+        if name.startswith("*.") and clean.count(".") == name.count("."):
+            if clean.endswith(name[1:]):
+                return True
+    return False
+
+
+def _validate_certificate_for_domain(cert_pem: str, key_pem: str, domain: str) -> Dict[str, Any]:
+    """Validate key pair, validity window and domain coverage before installation"""
+    validate_cert_and_key(cert_pem, key_pem)
+    parsed = parse_certificate_pem(cert_pem)
+    if not parsed.get("valid"):
+        raise ValueError(f"Invalid certificate: {parsed.get('error')}")
+    if parsed.get("not_yet_valid"):
+        raise ValueError(f"Certificate is not valid yet (valid from {parsed.get('not_valid_before')}).")
+    if parsed.get("expired"):
+        raise ValueError(f"Certificate expired on {parsed.get('not_valid_after')}.")
+    if not certificate_covers_domain(cert_pem, domain):
+        sans = ", ".join(parsed.get("san") or []) or "none"
+        raise ValueError(
+            f"Certificate does not cover domain '{domain}'. Certificate DNS names: {sans}."
+        )
+    return parsed
+
+
 def get_active_certificate_info() -> Dict[str, Any]:
     """Inspect active server certificate file on disk"""
     cert_path, _ = get_cert_paths()
@@ -396,48 +464,56 @@ def reload_nginx_service():
     return False
 
 
-def _update_env_ssl(enabled: bool, domain: str):
-    """Safely update .env file with HTTPS_ENABLED and PANEL_DOMAIN"""
+def _update_env_ssl(enabled: bool, domain: str) -> bool:
+    """Best-effort .env update; returns False for read-only mounts so callers can report a restart requirement"""
     candidate_paths = [
+        Path("/app/config/.env"),
         Path(".env"),
         Path("/opt/smite/.env"),
         _get_base_dir() / ".env"
     ]
     for env_path in candidate_paths:
+        if not env_path.exists():
+            continue
         try:
-            if env_path.exists():
-                lines = env_path.read_text(encoding="utf-8").splitlines()
-                updated_lines = []
-                found_https = False
-                found_domain = False
-                found_ssl_domain = False
-                
-                for line in lines:
-                    stripped = line.strip()
-                    if stripped.startswith("HTTPS_ENABLED="):
-                        updated_lines.append(f"HTTPS_ENABLED={'true' if enabled else 'false'}")
-                        found_https = True
-                    elif stripped.startswith("PANEL_DOMAIN="):
-                        updated_lines.append(f"PANEL_DOMAIN={domain}")
-                        found_domain = True
-                    elif stripped.startswith("SMITE_SSL_DOMAIN="):
-                        updated_lines.append(f"SMITE_SSL_DOMAIN={domain}")
-                        found_ssl_domain = True
-                    else:
-                        updated_lines.append(line)
-                        
-                if not found_https:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+            updated_lines = []
+            found_https = False
+            found_domain = False
+            found_ssl_domain = False
+
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("HTTPS_ENABLED="):
                     updated_lines.append(f"HTTPS_ENABLED={'true' if enabled else 'false'}")
-                if not found_domain and domain:
+                    found_https = True
+                elif stripped.startswith("PANEL_DOMAIN="):
                     updated_lines.append(f"PANEL_DOMAIN={domain}")
-                if not found_ssl_domain and domain:
+                    found_domain = True
+                elif stripped.startswith("SMITE_SSL_DOMAIN="):
                     updated_lines.append(f"SMITE_SSL_DOMAIN={domain}")
-                    
-                env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-                logger.info(f"Updated SSL settings in {env_path}")
-                break
+                    found_ssl_domain = True
+                else:
+                    updated_lines.append(line)
+
+            if not found_https:
+                updated_lines.append(f"HTTPS_ENABLED={'true' if enabled else 'false'}")
+            if not found_domain and domain:
+                updated_lines.append(f"PANEL_DOMAIN={domain}")
+            if not found_ssl_domain and domain:
+                updated_lines.append(f"SMITE_SSL_DOMAIN={domain}")
+
+            env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            logger.info(f"Updated SSL settings in {env_path}")
+            return True
         except Exception as e:
-            logger.warning(f"Could not update {env_path}: {e}")
+            logger.warning(
+                f"Could not update {env_path} (read-only mount or permissions): {e}. "
+                "Update HTTPS_ENABLED/SMITE_SSL_DOMAIN manually and restart the stack."
+            )
+            return False
+    logger.warning("No writable .env file found; SSL environment changes could not be persisted.")
+    return False
 
 
 async def save_ssl_db_settings(
@@ -472,7 +548,7 @@ async def save_ssl_db_settings(
     
     settings.https_enabled = enabled
     settings.panel_domain = domain
-    _update_env_ssl(enabled, domain)
+    return _update_env_ssl(enabled, domain)
 
 
 async def get_ssl_db_settings() -> Dict[str, Any]:
@@ -497,42 +573,219 @@ def archive_existing_certs():
     cert_path, key_path = get_cert_paths()
     if cert_path.exists() or key_path.exists():
         archive_dir = cert_path.parent / "archive" / datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        if cert_path.exists():
-            shutil.copy2(cert_path, archive_dir / "server.crt")
-        if key_path.exists():
-            shutil.copy2(key_path, archive_dir / "server.key")
-        logger.info(f"Archived previous certificates to {archive_dir}")
+        try:
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            if cert_path.exists():
+                shutil.copy2(cert_path, archive_dir / "server.crt")
+            if key_path.exists():
+                shutil.copy2(key_path, archive_dir / "server.key")
+            logger.info(f"Archived previous certificates to {archive_dir}")
+        except Exception as e:
+            logger.warning(f"Could not archive previous certificates: {e}")
+
+
+def _fsync_directory(path: Path):
+    """Best-effort directory fsync so renames survive a crash (unsupported on Windows)"""
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        dir_fd = os.open(str(path), flags)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
+
+
+def _atomic_write_bytes(path: Path, data: bytes, mode: Optional[int] = None):
+    """Write to a sibling temp file, fsync, then atomically replace the target"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
+        _fsync_directory(path.parent)
+    finally:
+        if os.path.exists(tmp_name):
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _read_certificate_pair() -> tuple[Optional[bytes], Optional[bytes]]:
+    cert_path, key_path = get_cert_paths()
+    cert_bytes = cert_path.read_bytes() if cert_path.exists() else None
+    key_bytes = key_path.read_bytes() if key_path.exists() else None
+    return cert_bytes, key_bytes
+
+
+def _restore_certificate_pair(cert_bytes: Optional[bytes], key_bytes: Optional[bytes]):
+    """Restore a previously captured certificate pair (removing files that did not exist)"""
+    cert_path, key_path = get_cert_paths()
+    try:
+        if cert_bytes is None:
+            if cert_path.exists():
+                cert_path.unlink()
+        else:
+            _atomic_write_bytes(cert_path, cert_bytes, 0o644)
+        if key_bytes is None:
+            if key_path.exists():
+                key_path.unlink()
+        else:
+            _atomic_write_bytes(key_path, key_bytes, 0o600)
+        logger.warning("Restored the previous certificate pair after a failed update")
+    except Exception as e:
+        logger.error(f"Failed to restore previous certificate pair: {e}", exc_info=True)
+
+
+def _install_certificate_pair(cert_pem: str, key_pem: str) -> tuple[Path, Path, Optional[bytes], Optional[bytes]]:
+    """Atomically install cert/key with rollback to the previous pair on any write failure"""
+    cert_path, key_path = get_cert_paths()
+    cert_bytes = (cert_pem.strip() + "\n").encode("utf-8")
+    key_bytes = (key_pem.strip() + "\n").encode("utf-8")
+    old_cert, old_key = _read_certificate_pair()
+    archive_existing_certs()
+    try:
+        _atomic_write_bytes(cert_path, cert_bytes, 0o644)
+        _atomic_write_bytes(key_path, key_bytes, 0o600)
+    except Exception as e:
+        _restore_certificate_pair(old_cert, old_key)
+        raise RuntimeError(f"Failed to write certificate files; previous pair restored: {e}")
+    return cert_path, key_path, old_cert, old_key
+
+
+def _nginx_config_test() -> tuple[Optional[bool], str]:
+    """Run nginx -t via docker or host, returning (result, output) with None when untestable"""
+    attempts = []
+    if shutil.which("docker"):
+        attempts.append(["docker", "exec", "smite-nginx", "nginx", "-t"])
+    if shutil.which("nginx"):
+        attempts.append(["nginx", "-t"])
+    for cmd in attempts:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        except Exception as e:
+            logger.debug(f"Nginx config test could not run ({' '.join(cmd)}): {e}")
+            continue
+        output = (res.stderr or res.stdout or "").strip()
+        if res.returncode == 0:
+            return True, output
+        logger.warning(f"Nginx config test failed ({' '.join(cmd)}): {output}")
+        return False, output
+    return None, "Nginx tooling is not reachable from the panel runtime."
+
+
+def test_nginx_config() -> Optional[bool]:
+    """True when nginx accepts its config, False when it rejects it, None when untestable"""
+    return _nginx_config_test()[0]
+
+
+def _nginx_certificate_paths() -> Optional[List[str]]:
+    """Return ssl_certificate paths from the running nginx config, or None when unavailable"""
+    attempts = []
+    if shutil.which("docker"):
+        attempts.append(["docker", "exec", "smite-nginx", "nginx", "-T"])
+    if shutil.which("nginx"):
+        attempts.append(["nginx", "-T"])
+    for cmd in attempts:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+        except Exception:
+            continue
+        if res.returncode != 0:
+            continue
+        paths: List[str] = []
+        for line in res.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("ssl_certificate "):
+                value = stripped[len("ssl_certificate "):].strip().rstrip(";").strip()
+                if value and value not in paths:
+                    paths.append(value)
+        return paths
+    return None
+
+
+def _active_nginx_serves_certificate(cert_path: Path) -> Optional[bool]:
+    """True when a configured nginx certificate matches the installed file content,
+    False when nginx uses different certificates, None when it cannot be verified"""
+    paths = _nginx_certificate_paths()
+    if paths is None:
+        return None
+    try:
+        target_hash = hashlib.sha256(cert_path.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    for active in paths:
+        candidate = Path(active)
+        try:
+            if candidate.exists() and hashlib.sha256(candidate.read_bytes()).hexdigest() == target_hash:
+                return True
+        except OSError:
+            pass
+        if shutil.which("docker") and active.startswith("/"):
+            try:
+                res = subprocess.run(
+                    ["docker", "exec", "smite-nginx", "sha256sum", active],
+                    capture_output=True, text=True, timeout=8, check=False
+                )
+                if res.returncode == 0 and res.stdout.split() and res.stdout.split()[0].lower() == target_hash:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _activate_certificate_change(
+    cert_path: Path,
+    cert_backup: Optional[bytes],
+    key_backup: Optional[bytes]
+) -> Dict[str, str]:
+    """Verify nginx accepts the new pair and report whether a reload or a full restart is required"""
+    test_ok, detail = _nginx_config_test()
+    if test_ok is False:
+        if _active_nginx_serves_certificate(cert_path) is not False:
+            _restore_certificate_pair(cert_backup, key_backup)
+            raise RuntimeError(
+                "Nginx rejected its configuration after the certificate update; "
+                f"the previous certificate pair was restored. Nginx output: {detail or 'configuration test failed'}"
+            )
+        return {
+            "activation": "restart_required",
+            "activation_message": "Certificate files were updated, but nginx reported a configuration problem unrelated to this certificate path. Restart the panel/nginx stack and inspect 'nginx -t'."
+        }
+
+    serves = _active_nginx_serves_certificate(cert_path)
+    if serves is True and reload_nginx_service():
+        return {
+            "activation": "reloaded",
+            "activation_message": "Certificate files updated and nginx reloaded successfully."
+        }
+    if serves is False:
+        return {
+            "activation": "restart_required",
+            "activation_message": "Certificate files updated, but nginx is serving a different certificate path. A full panel/nginx restart is required to activate this certificate (for custom certificates, ensure nginx is configured to use the custom pair)."
+        }
+    return {
+        "activation": "restart_required",
+        "activation_message": "Certificate files updated. Nginx reload could not be verified from the panel runtime; restart the panel/nginx stack to activate the new certificate."
+    }
 
 
 def install_custom_ssl(domain: str, cert_pem: str, key_pem: str) -> Dict[str, Any]:
-    """Install custom certificate and private key safely"""
+    """Validate, atomically install and verify a custom certificate pair"""
     clean_domain = validate_domain_name(domain)
-    # 1. Validate key pair & x509 certificate (including size limits)
-    validate_cert_and_key(cert_pem, key_pem)
-    parsed = parse_certificate_pem(cert_pem)
-    if not parsed.get("valid"):
-        raise ValueError(f"Invalid certificate: {parsed.get('error')}")
+    parsed = _validate_certificate_for_domain(cert_pem, key_pem, clean_domain)
 
-    # 2. Archive previous certs
-    archive_existing_certs()
-
-    # 3. Write new certs
-    cert_path, key_path = get_cert_paths()
-    cert_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    cert_path.write_text(cert_pem.strip() + "\n", encoding="utf-8")
-    key_path.write_text(key_pem.strip() + "\n", encoding="utf-8")
-    
-    try:
-        os.chmod(str(key_path), 0o600)
-    except Exception:
-        pass
-
-    # 4. Attempt nginx reload
-    reload_nginx_service()
-    
-    return parsed
+    cert_path, _key_path, old_cert, old_key = _install_certificate_pair(cert_pem, key_pem)
+    result = dict(parsed)
+    result.update(_activate_certificate_change(cert_path, old_cert, old_key))
+    return result
 
 
 async def issue_letsencrypt_cert(domain: str, email: Optional[str] = None) -> Dict[str, Any]:
@@ -556,6 +809,7 @@ async def issue_letsencrypt_cert(domain: str, email: Optional[str] = None) -> Di
         "certonly",
         "--non-interactive",
         "--agree-tos",
+        "--cert-name", clean_domain,
         "-d", clean_domain
     ]
 
@@ -564,17 +818,24 @@ async def issue_letsencrypt_cert(domain: str, email: Optional[str] = None) -> Di
     else:
         cmd.append("--register-unsafely-without-email")
 
-    # Check candidate webroot directories (Nginx active on host or container)
+    # Webroot /var/www/certbot is shared with nginx and the ACME fallback route.
     candidate_webroots = [
-        Path("/var/www/html"),
         Path("/var/www/certbot"),
+        Path("/var/www/html"),
         Path("/var/www"),
     ]
     webroot_path = None
     for cand in candidate_webroots:
-        if cand.exists() and cand.is_dir():
+        if not cand.is_dir():
+            continue
+        try:
+            fd, probe = tempfile.mkstemp(prefix=".smite-acme-", dir=str(cand))
+            os.close(fd)
+            os.unlink(probe)
             webroot_path = cand
             break
+        except OSError as e:
+            logger.debug(f"Webroot {cand} is not writable: {e}")
 
     if webroot_path:
         cmd.extend(["--webroot", "-w", str(webroot_path)])
@@ -606,60 +867,84 @@ async def issue_letsencrypt_cert(domain: str, email: Optional[str] = None) -> Di
     if not fullchain.exists() or not privkey.exists():
         raise RuntimeError(f"Certbot completed but certificate files not found in {live_dir}")
 
-    # Archive existing certs and copy new ones
-    archive_existing_certs()
-    cert_path, key_path = get_cert_paths()
-    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cert_pem = fullchain.read_text(encoding="utf-8")
+    key_pem = privkey.read_text(encoding="utf-8")
+    parsed = _validate_certificate_for_domain(cert_pem, key_pem, clean_domain)
 
-    shutil.copy2(fullchain, cert_path)
-    shutil.copy2(privkey, key_path)
-    try:
-        os.chmod(str(key_path), 0o600)
-    except Exception:
-        pass
-
-    # Reload Nginx
-    reload_nginx_service()
-
-    cert_info = get_active_certificate_info()
+    cert_path, _key_path, old_cert, old_key = _install_certificate_pair(cert_pem, key_pem)
+    cert_info = dict(parsed)
+    cert_info.update(_activate_certificate_change(cert_path, old_cert, old_key))
     return cert_info
 
 
-async def renew_letsencrypt_cert() -> Dict[str, Any]:
-    """Force renew active Let's Encrypt certificate"""
+async def renew_letsencrypt_cert(force: bool = True) -> Dict[str, Any]:
+    """Renew the active Let's Encrypt certificate (forced for manual renewals, due-only for auto-renew)"""
     certbot_bin = shutil.which("certbot")
     if not certbot_bin:
         raise RuntimeError("Certbot binary is not installed.")
 
-    cmd = [certbot_bin, "renew", "--non-interactive"]
+    cfg = await get_ssl_db_settings()
+    domain = cfg.get("domain") or ""
+    if not domain:
+        raise RuntimeError("No active SSL domain is configured for renewal.")
+    clean_domain = validate_domain_name(domain)
+
+    cmd = [certbot_bin, "renew", "--non-interactive", "--cert-name", clean_domain]
+    if force:
+        cmd.append("--force-renewal")
+
     loop = asyncio.get_running_loop()
 
     def _run():
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=180)
 
-    proc = await loop.run_in_executor(None, _run)
+    try:
+        proc = await loop.run_in_executor(None, _run)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Certbot renewal timed out after 180 seconds.")
     if proc.returncode != 0:
         err_msg = proc.stderr.strip() or proc.stdout.strip()
         raise RuntimeError(f"Certbot renewal failed: {err_msg}")
 
-    # Check active settings to re-copy if live directory updated
-    cfg = await get_ssl_db_settings()
-    domain = cfg.get("domain")
-    if domain:
-        live_dir = Path(f"/etc/letsencrypt/live/{domain}")
-        fullchain = live_dir / "fullchain.pem"
-        privkey = live_dir / "privkey.pem"
-        if fullchain.exists() and privkey.exists():
-            cert_path, key_path = get_cert_paths()
-            shutil.copy2(fullchain, cert_path)
-            shutil.copy2(privkey, key_path)
+    live_dir = Path(f"/etc/letsencrypt/live/{clean_domain}")
+    fullchain = live_dir / "fullchain.pem"
+    privkey = live_dir / "privkey.pem"
+    if not fullchain.exists() or not privkey.exists():
+        raise RuntimeError(f"Certbot completed but certificate files not found in {live_dir}")
 
-    reload_nginx_service()
-    
-    cert_info = get_active_certificate_info()
+    new_cert_pem = fullchain.read_text(encoding="utf-8")
+    new_key_pem = privkey.read_text(encoding="utf-8")
+    parsed = _validate_certificate_for_domain(new_cert_pem, new_key_pem, clean_domain)
+
+    cert_path, key_path = get_cert_paths()
+    try:
+        current_cert = cert_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        current_cert = None
+    try:
+        current_key = key_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        current_key = None
+
+    renewed = not (
+        current_cert == new_cert_pem.strip()
+        and current_key == new_key_pem.strip()
+    )
+
+    cert_info = dict(parsed)
+    if renewed:
+        cert_path, _key_path, old_cert, old_key = _install_certificate_pair(new_cert_pem, new_key_pem)
+        cert_info.update(_activate_certificate_change(cert_path, old_cert, old_key))
+    else:
+        cert_info.update({
+            "activation": "none",
+            "activation_message": "Certificate is not due for renewal; no changes were applied."
+        })
+    cert_info["renewed"] = renewed
+
     await save_ssl_db_settings(
         enabled=True,
-        domain=domain or "",
+        domain=clean_domain,
         email=cfg.get("email"),
         mode="letsencrypt",
         auto_renew=cfg.get("auto_renew", True)
@@ -668,11 +953,11 @@ async def renew_letsencrypt_cert() -> Dict[str, Any]:
 
 
 async def remove_ssl_cert() -> Dict[str, Any]:
-    """Safely disable SSL, archive certificates, and revert to HTTP"""
+    """Disable SSL, archive and remove the active pair, and report the required restart"""
     archive_existing_certs()
     cert_path, key_path = get_cert_paths()
     
-    # Remove active cert files so uvicorn / web falls back cleanly
+    # Remove active cert files; the running panel/nginx keep their already-loaded copy
     try:
         if cert_path.exists():
             cert_path.unlink()
@@ -681,16 +966,28 @@ async def remove_ssl_cert() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Error removing certificate files: {e}")
 
-    await save_ssl_db_settings(
+    env_updated = await save_ssl_db_settings(
         enabled=False,
         domain="",
         email="",
         mode="letsencrypt",
         auto_renew=False
     )
-    
-    reload_nginx_service()
-    return {"status": "success", "message": "SSL disabled and reverted to HTTP."}
+
+    message = (
+        "SSL disabled in the panel and certificate files removed. "
+        "The running panel and nginx keep serving the previously loaded certificate until the stack is restarted; "
+        "restarting nginx with SMITE_SSL_DOMAIN unset/empty (or removing /etc/letsencrypt/live entries) is required to serve HTTP only. "
+        "Active node tunnels are unaffected."
+    )
+    if env_updated is False:
+        message += " The .env file is read-only in this deployment; update HTTPS_ENABLED/SMITE_SSL_DOMAIN manually before restarting."
+    return {
+        "status": "success",
+        "activation": "restart_required",
+        "activation_message": message,
+        "message": message
+    }
 
 
 async def _check_and_renew_active_cert():
@@ -713,8 +1010,14 @@ async def _check_and_renew_active_cert():
     if days <= 30:
         logger.info(f"SSL certificate for {domain} has {days} days remaining. Triggering auto-renewal...")
         try:
-            new_info = await renew_letsencrypt_cert()
+            new_info = await renew_letsencrypt_cert(force=False)
+            if not new_info.get("renewed", False):
+                logger.info(f"SSL certificate for {domain} is not due for renewal; no files changed.")
+                return
             new_days = new_info.get("days_remaining", 0)
+            activation_note = ""
+            if new_info.get("activation") == "restart_required":
+                activation_note = f"\n\n⚠️ {new_info.get('activation_message', 'A restart is required to activate the new certificate.')}"
             logger.info(f"SSL auto-renewal successful for {domain}. New expiration: {new_days} days.")
             
             # Notify Telegram admins
@@ -725,7 +1028,8 @@ async def _check_and_renew_active_cert():
                         f"🛡️ [Smite Panel] SSL Certificate Auto-Renewed!\n\n"
                         f"• Domain: {domain}\n"
                         f"• Days Remaining: {new_days} days\n"
-                        f"• Status: Active & Secured"
+                        f"• Activation: {new_info.get('activation', 'unknown')}"
+                        f"{activation_note}"
                     )
             except Exception as te:
                 logger.debug(f"Could not dispatch telegram alert: {te}")
@@ -756,7 +1060,11 @@ async def ssl_auto_renew_worker(app):
     # Initial startup check after 15 seconds to catch pending renewals on boot
     try:
         await asyncio.sleep(15)
-        await _check_and_renew_active_cert()
+        from app.mutation_guard import mutation_guard
+        if mutation_guard.is_engaged():
+            logger.warning("Mutation guard engaged: skipping initial SSL auto-renewal check")
+        else:
+            await _check_and_renew_active_cert()
     except asyncio.CancelledError:
         logger.info("SSL Auto-Renewal background worker cancelled during initial delay")
         return
@@ -768,7 +1076,12 @@ async def ssl_auto_renew_worker(app):
             # Sleep 12 hours in 60s increments to allow graceful shutdown
             for _ in range(720):
                 await asyncio.sleep(60)
-            
+
+            from app.mutation_guard import mutation_guard
+            if mutation_guard.is_engaged():
+                logger.warning("Mutation guard engaged: skipping SSL auto-renewal pass")
+                continue
+
             await _check_and_renew_active_cert()
         except asyncio.CancelledError:
             logger.info("SSL Auto-Renewal background worker cancelled")

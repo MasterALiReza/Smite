@@ -11,27 +11,62 @@ import time
 from datetime import datetime
 
 from .. import agent_auth
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 SAFE_TUNNEL_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
 # Bumped whenever the agent gains capabilities the panel/CLI need to detect.
-AGENT_API_VERSION = 4
+AGENT_API_VERSION = 6
 # Feature flags the panel checks before sending options an older agent would
 # silently ignore (options that must be identical on both ends of a tunnel).
 AGENT_CAPABILITIES = [
     "hot_reload",
     "token_bootstrap",
+    "bootstrap_proof_v1",
+    "pinned_https",
     "apply_authoritative_ids",
     "remove_report",
     "frp_tcp_mux_option",
     "udp_low_latency",
     # hot reload re-execs from sys.orig_argv, so repeated reloads are safe
     "safe_reexec",
+    "drained_reexec",
+    "release_identity",
+    # durable lockout of the agent API even if the token file disappears
+    "auth_enforce",
 ]
 # Changes on every (re)start of the agent process; lets the CLI confirm a hot reload.
 AGENT_STARTED_AT = time.time()
+
+
+def _read_agent_release(root=None):
+    import hashlib
+    import json
+    from pathlib import Path
+
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    try:
+        content = (root / "app/.smite-release.json").read_bytes()
+        manifest = json.loads(content)
+        if manifest.get("schema") != 1 or not re.fullmatch(r"[0-9a-f]{40}", manifest.get("revision", "")):
+            return None
+        sources = {"main.py"} | {p.relative_to(root).as_posix() for p in (root / "app").rglob("*.py")}
+        if set(manifest["files"]) != sources:
+            return None
+        for name, digest in manifest["files"].items():
+            path = root / name
+            if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+                return None
+            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                return None
+        return {"revision": manifest["revision"], "manifest_sha256": hashlib.sha256(content).hexdigest()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+AGENT_RELEASE = _read_agent_release()
 
 
 def validate_tunnel_id(v: str) -> str:
@@ -46,15 +81,19 @@ def verify_node_token(request: Request):
 
     Enforced when a token is configured on the node: either NODE_API_TOKEN in .env
     or the per-node token provisioned by the panel (/api/agent/auth/bootstrap).
+    After the panel has verified provisioning it sets a durable enforcement flag;
+    from then on a missing token keeps the API closed instead of falling open.
     Read-only GET /status from the node itself (Docker healthcheck, smite-node CLI)
     is allowed without a token.
     """
     expected = agent_auth.get_effective_token()
-    if not expected:
+    is_status = request.method == "GET" and request.url.path.rstrip("/").endswith("/api/agent/status")
+    if is_status and agent_auth.is_loopback(request.client.host if request.client else None):
         return
-    if request.method == "GET" and request.url.path.rstrip("/").endswith("/api/agent/status"):
-        if agent_auth.is_loopback(request.client.host if request.client else None):
+    if not expected:
+        if not agent_auth.is_enforced():
             return
+        raise HTTPException(status_code=401, detail="Agent token not provisioned; run `smite-node reset-token` locally to re-pair")
     provided = request.headers.get("X-Node-Token", "")
     if not agent_auth.tokens_match(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid node token")
@@ -72,13 +111,7 @@ class TokenBootstrap(BaseModel):
 
 @auth_router.post("/auth/bootstrap")
 async def bootstrap_token(data: TokenBootstrap, request: Request):
-    """Provision or rotate the per-node agent token.
-
-    - No token configured yet: the token is accepted and enforced from now on.
-    - Token already configured: the request must carry the current token in
-      X-Node-Token (idempotent re-provisioning / rotation by the owning panel).
-    - NODE_API_TOKEN set in .env: the static token always wins (409).
-    """
+    """Provision or rotate the per-node agent token."""
     new_token = (data.token or "").strip()
     if not agent_auth.is_valid_token_format(new_token):
         raise HTTPException(status_code=400, detail="Invalid token format")
@@ -95,16 +128,57 @@ async def bootstrap_token(data: TokenBootstrap, request: Request):
         if not agent_auth.tokens_match(provided, current):
             raise HTTPException(status_code=401, detail="Node token already provisioned")
         if agent_auth.tokens_match(new_token, current):
-            return {"status": "success", "mode": "panel", "enforced": True, "changed": False}
+            return {"status": "success", "mode": "panel", "enforced": True, "changed": False, "auth_mode": agent_auth.auth_mode()}
+        try:
+            agent_auth.set_file_token(new_token)
+        except Exception as error:
+            logger.error(f"Failed to rotate agent token: {error}")
+            raise HTTPException(status_code=500, detail="Failed to persist token")
+    else:
+        if agent_auth.is_enforced():
+            raise HTTPException(
+                status_code=409,
+                detail="Agent auth is enforced and no token is configured; unlock locally with `smite-node reset-token`",
+            )
+        proof = request.headers.get("X-Bootstrap-Proof", "") or request.headers.get("X-Bootstrap-Secret", "")
+        try:
+            agent_auth.provision_file_token(new_token, proof)
+        except agent_auth.BootstrapProofError as error:
+            raise HTTPException(status_code=403, detail=str(error))
+        except Exception as error:
+            logger.error(f"Failed to persist agent token: {error}")
+            raise HTTPException(status_code=500, detail="Failed to persist token")
 
-    try:
-        agent_auth.set_file_token(new_token)
-    except Exception as e:
-        logger.error(f"Failed to persist agent token: {e}")
-        raise HTTPException(status_code=500, detail="Failed to persist token")
     client_host = request.client.host if request.client else "unknown"
     logger.warning(f"Agent API token {'rotated' if current else 'provisioned'} by {client_host}; unauthenticated agent API access is now disabled")
-    return {"status": "success", "mode": "panel", "enforced": True, "changed": True}
+    return {"status": "success", "mode": "panel", "enforced": True, "changed": True, "auth_mode": agent_auth.auth_mode()}
+
+
+@auth_router.post("/auth/enforce")
+async def enforce_agent_auth(request: Request):
+    """Persist the panel's enforcement decision (requires the current token).
+
+    This is deliberately separate from bootstrap: the panel first proves it can
+    authenticate with the provisioned token, then locks the node so a lost token
+    file cannot reopen the API.
+    """
+    expected = agent_auth.get_effective_token()
+    if not expected:
+        raise HTTPException(status_code=409, detail="No agent token configured; refusing to enforce")
+    provided = request.headers.get("X-Node-Token", "")
+    if not agent_auth.tokens_match(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid node token")
+    try:
+        agent_auth.set_enforced()
+    except Exception as e:
+        logger.error(f"Failed to persist agent auth enforcement flag: {e}")
+        raise HTTPException(status_code=500, detail="Failed to persist enforcement flag")
+    return {
+        "status": "success",
+        "mode": agent_auth.token_source(),
+        "enforced": True,
+        "auth_mode": agent_auth.auth_mode(),
+    }
 
 
 
@@ -341,9 +415,12 @@ async def get_status(request: Request):
         "api_version": AGENT_API_VERSION,
         "capabilities": AGENT_CAPABILITIES,
         "agent_started_at": AGENT_STARTED_AT,
+        "release": AGENT_RELEASE,
         "hot_reload": True,
         "token_enforced": bool(agent_auth.get_effective_token()),
         "token_source": agent_auth.token_source(),
+        "auth_mode": agent_auth.auth_mode(),
+        "auth_enforced": agent_auth.is_enforced(),
     }
 
 

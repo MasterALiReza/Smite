@@ -718,25 +718,79 @@ def cmd_status(args):
         print(f"API: Not accessible ({e})")
 
 
+PANEL_SERVICE = "smite-panel"
+
+
+def _panel_container_id():
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.Id}} {{.State.Running}}", PANEL_SERVICE],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.split()
+    if len(parts) != 2 or parts[1] != "true":
+        return None
+    return parts[0]
+
+
+def _panel_health_ok(timeout=2.0):
+    url = f"{get_panel_url()}/api/panel/health"
+    try:
+        if HAS_REQUESTS:
+            return requests.get(url, timeout=timeout).status_code == 200
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _wait_for_new_panel(previous_id, timeout=180):
+    """Wait until a different panel container is running and its API answers."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = _panel_container_id()
+        if current and current != previous_id and _panel_health_ok():
+            return current
+        time.sleep(3)
+    return None
+
+
 def cmd_update(args):
-    """Update panel (pull images and recreate)"""
-    print("Updating panel...")
+    """Update only the panel service: pinned pull, recreate, verify health."""
+    print("Updating panel (the panel API restarts; tunnels are not touched)...")
     compose_file = get_compose_file()
     project_root = compose_file.parent
-    
+
     if (project_root / ".git").exists():
-        print("Pulling latest changes from git...")
-        subprocess.run(["git", "pull"], cwd=project_root, check=False)
+        print("Pulling latest changes from git (fast-forward only)...")
+        pull = subprocess.run(["git", "pull", "--ff-only"], cwd=project_root, capture_output=True, text=True)
+        if pull.returncode != 0:
+            print("Update aborted: git pull failed and no service was changed.")
+            print((pull.stderr or pull.stdout or "").strip()[:2000])
+            sys.exit(1)
+        revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_root, capture_output=True, text=True)
+        if revision.returncode == 0:
+            print(f"Panel code revision: {revision.stdout.strip()}")
         if (project_root / "docker-compose.yml").exists():
             print("docker-compose.yml updated from git")
-    
-    try:
-        run_docker_compose(["pull"], capture_output=True)
-    except SystemExit:
-        pass  # Ignore pull errors if images aren't on registry yet
-    
-    run_docker_compose(["up", "-d", "--force-recreate", "--build"])
-    
+
+    before_id = _panel_container_id()
+    pull_image = run_docker_compose(["pull", PANEL_SERVICE], capture_output=True)
+    if pull_image.returncode != 0:
+        print("Image pull failed; continuing with a local build of the panel image.")
+
+    run_docker_compose(["up", "-d", "--no-deps", "--force-recreate", "--build", PANEL_SERVICE])
+    if before_id is not None and _panel_container_id() == before_id:
+        print("Panel container was not replaced; the new code was not activated.")
+        sys.exit(1)
+    if not _wait_for_new_panel(before_id):
+        print("Panel is not answering after the update. Check: docker logs --tail 100 smite-panel")
+        print("The previous binary is not restored automatically; verify before retrying.")
+        sys.exit(1)
+
     cli_path = project_root / "cli" / "smite.py"
     if cli_path.exists():
         try:
@@ -744,9 +798,9 @@ def cmd_update(args):
             os.chmod("/usr/local/bin/smite", 0o755)
             print("CLI updated.")
         except Exception as e:
-            print(f"Warning: Failed to update CLI: {e}")
-            
-    print("Panel updated.")
+            print(f"Warning: panel is healthy but the CLI was not updated: {e}")
+
+    print("Panel updated; nginx and node containers were not recreated.")
 
 
 def cmd_restart(args):

@@ -484,7 +484,7 @@ def test_build_gost_node_specs_direct_mode_persistence():
 
 @pytest.mark.asyncio
 async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
-    """Verify reverse KCP tunnels generate Yamux multiplexer metadata on both listener and dialer"""
+    """Verify reverse KCP tunnels generate smux metadata on both listener and dialer"""
     adapter = GostAdapter()
     adapter.config_dir = tmp_path
     monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
@@ -508,13 +508,13 @@ async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
 
         cfg_server = json.loads((tmp_path / "kcp-rev-server.json").read_text())
         svc = cfg_server["services"][0]
-        # Listener metadata must have Yamux mux enabled
+        # Listener metadata must have smux enabled
         assert svc["listener"]["metadata"].get("mux") is True
-        assert svc["listener"]["metadata"].get("mux.type") == "yamux"
+        assert svc["listener"]["metadata"].get("mux.type") == "smux"
         assert svc["listener"]["metadata"].get("bind") is True
-        # Handler metadata must have Yamux mux enabled
+        # Handler metadata must have smux enabled
         assert svc["handler"]["metadata"].get("mux") is True
-        assert svc["handler"]["metadata"].get("mux.type") == "yamux"
+        assert svc["handler"]["metadata"].get("mux.type") == "smux"
 
     # 2. Reverse Client (Foreign)
     client_spec = {
@@ -535,12 +535,12 @@ async def test_gost_kcp_reverse_multiplexing_metadata(tmp_path, monkeypatch):
 
         cfg_client = json.loads((tmp_path / "kcp-rev-client.json").read_text())
         node0 = cfg_client["chains"][0]["hops"][0]["nodes"][0]
-        # Dialer metadata must have Yamux mux enabled
+        # Dialer metadata must have smux enabled
         assert node0["dialer"]["metadata"].get("mux") is True
-        assert node0["dialer"]["metadata"].get("mux.type") == "yamux"
-        # Connector metadata must have Yamux mux enabled
+        assert node0["dialer"]["metadata"].get("mux.type") == "smux"
+        # Connector metadata must have smux enabled
         assert node0["connector"]["metadata"].get("mux") is True
-        assert node0["connector"]["metadata"].get("mux.type") == "yamux"
+        assert node0["connector"]["metadata"].get("mux.type") == "smux"
 
 
 # ==============================================================================
@@ -816,9 +816,10 @@ async def test_gost_v3_mux_metadata_keys(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gost_utls_client_fingerprint(tmp_path, monkeypatch):
+async def test_gost_utls_security_falls_back_to_standard_tls(tmp_path, monkeypatch):
     """
-    Verify uTLS fingerprinting configures dialer tls.utls with specified browser fingerprint.
+    The pinned GOST core has no uTLS dialer: a legacy 'utls' security type must
+    render standard TLS metadata (no fake fingerprint) and keep the SNI.
     """
     adapter = GostAdapter()
     adapter.config_dir = tmp_path
@@ -847,7 +848,71 @@ async def test_gost_utls_client_fingerprint(tmp_path, monkeypatch):
 
         assert "tls" in dialer
         assert dialer["tls"]["serverName"] == "example.com"
-        assert dialer["tls"]["utls"]["client"] == "firefox"
+        assert "utls" not in dialer["tls"]
+
+
+@pytest.mark.asyncio
+async def test_gost_wss_client_verifies_distributed_ca(tmp_path, monkeypatch):
+    """A tunnel that terminates TLS server-side must verify against the panel CA."""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    spec = {
+        "mode": "client",
+        "is_reverse": False,
+        "control_port": 8443,
+        "server_ip": "1.2.3.4",
+        "ports": [8080],
+        "transport_type": "wss",
+        "security_type": "tls",
+        "tls_ca_cert_pem": "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=557, returncode=None)
+        await adapter.apply("wss-ca-test", spec)
+
+        config = json.loads((tmp_path / "wss-ca-test.json").read_text())
+        dialer = config["chains"][0]["hops"][0]["nodes"][0]["dialer"]
+
+        assert dialer["tls"]["secure"] is True
+        assert dialer["tls"]["serverName"] == "1.2.3.4"
+        assert dialer["tls"]["caFile"].endswith("gost_wss-ca-test_ca.pem")
+
+
+@pytest.mark.asyncio
+async def test_gost_kcp_ignores_tunnel_ca_without_tls_listener(tmp_path, monkeypatch):
+    """KCP has its own crypt and no TLS listener: a tunnel CA must never be attached or written."""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    spec = {
+        "mode": "client",
+        "is_reverse": False,
+        "control_port": 8443,
+        "server_ip": "1.2.3.4",
+        "ports": [8080],
+        "transport_type": "kcp",
+        "security_type": "tls",
+        "tls_ca_cert_pem": "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----"
+    }
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=558, returncode=None)
+        await adapter.apply("kcp-no-tls-test", spec)
+
+        config = json.loads((tmp_path / "kcp-no-tls-test.json").read_text())
+        dialer = config["chains"][0]["hops"][0]["nodes"][0]["dialer"]
+
+        assert "tls" not in dialer
+        assert not (tmp_path / "gost_kcp-no-tls-test_ca.pem").exists()
+        assert dialer["metadata"]["crypt"] == "aes"
 
 
 @pytest.mark.asyncio

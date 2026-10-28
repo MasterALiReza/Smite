@@ -5,7 +5,7 @@ import hashlib
 import socket
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from app.config import settings
 from app.frp_comm_client import frp_comm_client
 from . import agent_auth
@@ -81,6 +81,33 @@ class PanelClient:
             
         return f"{protocol}://{host}:{port}"
 
+    @staticmethod
+    def _detect_node_ip() -> str:
+        if getattr(settings, "node_ip", ""):
+            return settings.node_ip.strip()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("8.8.8.8", 80))
+                return sock.getsockname()[0]
+        except OSError:
+            return "0.0.0.0"
+
+    @staticmethod
+    def _agent_transport() -> Optional[Dict[str, Any]]:
+        identity = agent_auth.management_tls_metadata()
+        if not identity:
+            return None
+        result: Dict[str, Any] = {
+            "scheme": "https",
+            "certificate": identity["certificate"],
+            "fingerprint": identity["fingerprint"],
+        }
+        proof = agent_auth.get_or_create_bootstrap_proof()
+        if proof:
+            result["bootstrap_proof"] = proof["proof"]
+            result["bootstrap_expires_at"] = proof["expires_at"]
+        return result
+
     async def register_with_panel(self):
         """Auto-register with panel"""
         if not self.client:
@@ -88,28 +115,22 @@ class PanelClient:
         
         panel_api_url = self._get_panel_api_url()
         
-        if getattr(settings, "node_ip", ""):
-            node_ip = settings.node_ip.strip()
-        else:
-            import socket
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                node_ip = s.getsockname()[0]
-                s.close()
-            except:
-                node_ip = "0.0.0.0"
-        
+        node_ip = self._detect_node_ip()
+        agent_transport = self._agent_transport()
+        agent_scheme = "https" if agent_transport else "http"
+        host = f"[{node_ip}]" if ":" in node_ip and not node_ip.startswith("[") else node_ip
+
         registration_data = {
             "name": settings.node_name,
             "ip_address": node_ip,
             "api_port": settings.node_api_port,
             "fingerprint": self.fingerprint,
+            "agent_transport": agent_transport,
             "metadata": {
-                "api_address": f"http://{node_ip}:{settings.node_api_port}",
+                "api_address": f"{agent_scheme}://{host}:{settings.node_api_port}",
                 "node_name": settings.node_name,
                 "panel_address": self.panel_address,
-                "role": settings.node_role  # "iran" or "foreign"
+                "role": settings.node_role
             }
         }
         

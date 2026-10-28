@@ -129,7 +129,9 @@ COPY . .
 EXPOSE 8888
 
 RUN echo '#!/bin/sh' > /app/start.sh && \
-    echo 'exec uvicorn main:app --host 0.0.0.0 --port "${NODE_API_PORT:-8888}" --log-level info --access-log' >> /app/start.sh && \
+    echo 'set -eu' >> /app/start.sh && \
+    echo 'python -c "from app.agent_auth import ensure_management_tls_identity; ensure_management_tls_identity()"' >> /app/start.sh && \
+    echo 'exec uvicorn main:app --host 0.0.0.0 --port "${NODE_API_PORT:-8888}" --ssl-certfile /var/lib/smite-node/agent_tls.crt --ssl-keyfile /var/lib/smite-node/agent_tls.key --log-level info --access-log' >> /app/start.sh && \
     chmod +x /app/start.sh
 
 CMD ["/bin/sh", "/app/start.sh"]

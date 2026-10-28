@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -349,9 +350,16 @@ def agent_client(tmp_path, monkeypatch):
     from node.app.routers import agent as agent_router
 
     monkeypatch.setattr(agent_auth, "TOKEN_FILE", tmp_path / "agent_token")
+    monkeypatch.setattr(agent_auth, "ENFORCE_FILE", tmp_path / "agent_auth_enforce")
+    monkeypatch.setattr(agent_auth, "BOOTSTRAP_FILE", tmp_path / "agent_bootstrap.json")
+    monkeypatch.setattr(agent_auth, "TLS_CERT_FILE", tmp_path / "agent_tls.crt")
+    monkeypatch.setattr(agent_auth, "TLS_KEY_FILE", tmp_path / "agent_tls.key")
     monkeypatch.setattr(agent_auth, "_file_token", None)
     monkeypatch.setattr(agent_auth, "_loaded", False)
     monkeypatch.setattr(agent_auth.settings, "node_api_token", "")
+    monkeypatch.setattr(agent_auth.settings, "agent_auth_mode", "")
+    monkeypatch.setattr(agent_auth.settings, "node_bootstrap_secret", "")
+    monkeypatch.setattr(agent_auth.settings, "node_bootstrap_proof_ttl_seconds", 900)
 
     app = FastAPI()
     app.include_router(agent_router.router, prefix="/api/agent")
@@ -369,9 +377,20 @@ def test_agent_api_open_until_token_provisioned_then_enforced(agent_client):
 
     assert client.get("/api/agent/tunnels/status", params={"tunnel_id": "t1"}).status_code == 200
 
-    resp = client.post("/api/agent/auth/bootstrap", json={"token": token}, headers={"X-Node-Token": token})
+    # The first pairing must prove local ownership; no proof means no token.
+    refused = client.post("/api/agent/auth/bootstrap", json={"token": token}, headers={"X-Node-Token": token})
+    assert refused.status_code == 403
+    assert not agent_auth.TOKEN_FILE.exists()
+
+    prepared = agent_auth.get_or_create_bootstrap_proof()
+    resp = client.post(
+        "/api/agent/auth/bootstrap",
+        json={"token": token},
+        headers={"X-Node-Token": token, "X-Bootstrap-Proof": prepared["proof"]},
+    )
     assert resp.status_code == 200 and resp.json()["changed"] is True
     assert agent_auth.TOKEN_FILE.read_text() == token
+    assert not agent_auth.BOOTSTRAP_FILE.exists()
 
     assert client.get("/api/agent/tunnels/status", params={"tunnel_id": "t1"}).status_code == 401
     assert client.get("/api/agent/tunnels/status", params={"tunnel_id": "t1"}, headers={"X-Node-Token": "wrong" * 9}).status_code == 401
@@ -411,8 +430,11 @@ def test_status_reports_capabilities(agent_client):
     client, _ = agent_client
     data = client.get("/api/agent/status").json()
     assert data["hot_reload"] is True
-    assert data["api_version"] >= 2
+    assert data["api_version"] >= 6
     assert "agent_started_at" in data
+    assert "bootstrap_proof_v1" in data["capabilities"]
+    assert "pinned_https" in data["capabilities"]
+    assert "auth_enforce" in data["capabilities"]
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +460,93 @@ def test_public_node_metadata_hides_agent_token():
     with patch("app.node_client.settings") as s:
         s.node_api_token = "global"
         assert node_agent_token(node_env) == "global"
+
+
+def test_public_node_metadata_hides_pending_enrollment_secrets():
+    from app.node_client import public_node_metadata
+    meta = {
+        "ip_address": "1.2.3.4",
+        "role": "iran",
+        "agent_pending_api_address": "https://1.2.3.4:8888",
+        "agent_pending_tls_certificate": "-----BEGIN CERTIFICATE-----",
+        "agent_pending_tls_fingerprint": "f" * 64,
+        "agent_bootstrap_proof": "P" * 43,
+        "agent_bootstrap_expires_at": int(time.time()) + 600,
+    }
+    assert public_node_metadata(meta) == {"ip_address": "1.2.3.4", "role": "iran"}
+
+
+def test_untrusted_registration_only_stores_pending_pinned_transport(tmp_path, monkeypatch):
+    import node.app.agent_auth as agent_auth
+    from fastapi import HTTPException
+    from app.routers.nodes import NodeAgentTransport, _agent_transport_values
+
+    monkeypatch.setattr(agent_auth, "TLS_CERT_FILE", tmp_path / "agent_tls.crt")
+    monkeypatch.setattr(agent_auth, "TLS_KEY_FILE", tmp_path / "agent_tls.key")
+    monkeypatch.setattr(agent_auth.settings, "node_ip", "192.0.2.10")
+    monkeypatch.setattr(agent_auth.settings, "node_name", "registration-node")
+    agent_auth.ensure_management_tls_identity()
+    tls = agent_auth.management_tls_metadata()
+
+    transport = NodeAgentTransport(
+        scheme="https",
+        certificate=tls["certificate"],
+        fingerprint=tls["fingerprint"],
+        bootstrap_proof="P" * 43,
+        bootstrap_expires_at=int(time.time()) + 300,
+    )
+
+    pending = _agent_transport_values(transport, "2001:db8::5", 8888, trusted=False)
+    assert pending["agent_pending_api_address"] == "https://[2001:db8::5]:8888"
+    assert pending["agent_transport_mode"] == "pending_pinned_https"
+    assert pending["agent_bootstrap_proof"] == "P" * 43
+    assert "api_address" not in pending
+    assert "agent_tls_certificate" not in pending
+
+    promoted = _agent_transport_values(transport, "2001:db8::5", 8888, trusted=True)
+    assert promoted["api_address"] == "https://[2001:db8::5]:8888"
+    assert promoted["agent_tls_fingerprint"] == tls["fingerprint"]
+    assert promoted["agent_transport_mode"] == "pinned_https"
+    assert "agent_bootstrap_proof" not in promoted
+
+    with pytest.raises(HTTPException) as plaintext:
+        _agent_transport_values(
+            NodeAgentTransport(scheme="http", certificate=tls["certificate"], fingerprint=tls["fingerprint"]),
+            "192.0.2.10",
+            8888,
+            trusted=True,
+        )
+    assert plaintext.value.status_code == 400
+
+    with pytest.raises(HTTPException) as mismatch:
+        _agent_transport_values(
+            NodeAgentTransport(
+                scheme="https",
+                certificate=tls["certificate"],
+                fingerprint="0" * 64,
+                bootstrap_proof="P" * 43,
+                bootstrap_expires_at=int(time.time()) + 300,
+            ),
+            "192.0.2.10",
+            8888,
+            trusted=False,
+        )
+    assert mismatch.value.status_code == 400
+
+    with pytest.raises(HTTPException) as expired:
+        _agent_transport_values(
+            NodeAgentTransport(
+                scheme="https",
+                certificate=tls["certificate"],
+                fingerprint=tls["fingerprint"],
+                bootstrap_proof="P" * 43,
+                bootstrap_expires_at=int(time.time()) - 1,
+            ),
+            "192.0.2.10",
+            8888,
+            trusted=False,
+        )
+    assert expired.value.status_code == 400
 
 
 def test_node_request_trust_rules():
@@ -510,7 +619,7 @@ def test_cli_update_keeps_main_py_inode_and_backs_up(tmp_path):
     (root / "app" / "core_adapters.py").write_bytes(b"old core\n")
     inode_before = os.stat(root / "main.py").st_ino
 
-    backup = cli._write_code_atomically(root, {"main.py": b"new main\n", "app/core_adapters.py": b"new core\n", "app/hot_reload.py": b"x = 1\n"})
+    backup = cli._write_code_with_backup(root, {"main.py": b"new main\n", "app/core_adapters.py": b"new core\n", "app/hot_reload.py": b"x = 1\n"})
     assert (root / "main.py").read_bytes() == b"new main\n"
     assert os.stat(root / "main.py").st_ino == inode_before  # single-file bind mount keeps working
     assert (root / "app" / "hot_reload.py").exists()

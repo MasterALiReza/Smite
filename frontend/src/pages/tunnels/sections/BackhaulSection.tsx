@@ -61,7 +61,7 @@ export const BackhaulSection: React.FC<BackhaulSectionProps> = ({
       {/* 1. Header */}
       <CoreSectionHeader
         title="Backhaul Multiplexing Settings"
-        subtitle="High-Performance Reverse Tunnel with Yamux & WebSockets"
+        subtitle="Reverse Tunnel with smux Multiplexing & WebSockets"
         badgeText="Backhaul Core"
         icon={<RadioTower size={16} />}
         iconBoxClass="bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300"

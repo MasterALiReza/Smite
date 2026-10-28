@@ -68,15 +68,19 @@ interface FrpSettings {
   enabled: boolean
   port: number
   token?: string
+  token_set?: boolean
 }
 
 interface TelegramSettings {
   enabled: boolean
   bot_token?: string
+  bot_token_set?: boolean
   admin_ids: string[]
   backup_enabled?: boolean
   backup_interval?: number
   backup_interval_unit?: string
+  backup_passphrase?: string
+  backup_passphrase_set?: boolean
 }
 
 interface TunnelSettings {
@@ -85,10 +89,35 @@ interface TunnelSettings {
   auto_reapply_interval_unit?: string
 }
 
+interface FrpRuntime {
+  running: boolean
+  port?: number | null
+}
+
+interface TelegramRuntime {
+  running: boolean
+  polling: boolean
+  desired?: boolean
+  last_error?: string | null
+}
+
+interface TunnelRuntime {
+  periodic_running: boolean
+  healer_running: boolean
+}
+
+interface SettingsRuntime {
+  frp?: FrpRuntime
+  telegram?: TelegramRuntime
+  tunnel?: TunnelRuntime
+}
+
 interface SettingsData {
+  revision?: number
   frp: FrpSettings
   telegram: TelegramSettings
   tunnel?: TunnelSettings
+  runtime?: SettingsRuntime
 }
 
 export type SettingsTab = 'ssl' | 'frp' | 'telegram' | 'tunnel' | 'all'
@@ -132,6 +161,7 @@ const Settings = () => {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [newAdminId, setNewAdminId] = useState('')
+  const [originalSettings, setOriginalSettings] = useState<SettingsData | null>(null)
 
   useEffect(() => {
     loadSettings()
@@ -141,6 +171,7 @@ const Settings = () => {
     try {
       const response = await api.get('/settings')
       setSettings(response.data)
+      setOriginalSettings(JSON.parse(JSON.stringify(response.data)))
     } catch (error) {
       console.error('Failed to load settings:', error)
       setMessage({ type: 'error', text: t.settings.failedToLoad })
@@ -288,8 +319,9 @@ const Settings = () => {
     setRemoving(true)
     setMessage(null)
     try {
-      await api.delete('/ssl')
-      setMessage({ type: 'success', text: t.settings.sslRemovedSuccess || 'SSL disabled. Panel reverted to HTTP.' })
+      const res = await api.delete('/ssl')
+      const backendMessage = res.data?.message || res.data?.activation_message
+      setMessage({ type: 'success', text: backendMessage || t.settings.sslRemovedSuccess || 'SSL disabled. Restart the panel/nginx stack to serve HTTP only.' })
       await loadSslStatus()
       setShowRemoveConfirm(false)
       setShowReconfigure(false)
@@ -302,15 +334,57 @@ const Settings = () => {
   }
 
   const saveSettings = async () => {
+    if (!originalSettings) return
+
+    const changed: Record<string, unknown> = {}
+    if (JSON.stringify(settings.frp ?? null) !== JSON.stringify(originalSettings.frp ?? null)) {
+      changed.frp = settings.frp
+    }
+    if (JSON.stringify(settings.telegram ?? null) !== JSON.stringify(originalSettings.telegram ?? null)) {
+      const invalid = settings.telegram.admin_ids.filter(id => !/^\d+$/.test(id.trim()) || Number(id.trim()) <= 0)
+      if (invalid.length > 0) {
+        setMessage({ type: 'error', text: `Telegram admin IDs must be positive numeric user IDs: ${invalid.join(', ')}` })
+        return
+      }
+      changed.telegram = settings.telegram
+    }
+    if (JSON.stringify(settings.tunnel ?? null) !== JSON.stringify(originalSettings.tunnel ?? null)) {
+      changed.tunnel = settings.tunnel
+    }
+
+    if (Object.keys(changed).length === 0) {
+      setMessage({ type: 'success', text: t.settings.noChanges || 'No changes to save.' })
+      return
+    }
+
     setSaving(true)
     setMessage(null)
     try {
-      await api.put('/settings', settings)
-      setMessage({ type: 'success', text: t.settings.settingsSaved })
+      const payload: Record<string, unknown> = { ...changed }
+      if (typeof settings.revision === 'number') {
+        payload.revision = settings.revision
+      }
+      const response = await api.put('/settings', payload)
+      const warnings = response.data?.warnings
+      if (Array.isArray(warnings) && warnings.length > 0) {
+        setMessage({ type: 'error', text: warnings.join(' ') })
+      } else {
+        setMessage({ type: 'success', text: t.settings.settingsSaved })
+      }
       await loadSettings()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save settings:', error)
-      setMessage({ type: 'error', text: t.settings.failedToSave })
+      const detail = error?.response?.data?.detail
+      let text = t.settings.failedToSave
+      if (typeof detail === 'string' && detail) {
+        text = detail
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        text = detail.map((item: any) => item?.msg || String(item)).join(' ')
+      }
+      setMessage({ type: 'error', text })
+      if (error?.response?.status === 409) {
+        await loadSettings()
+      }
     } finally {
       setSaving(false)
     }
@@ -337,13 +411,23 @@ const Settings = () => {
     }))
   }
 
+  const isValidAdminId = (value: string) => /^\d+$/.test(value.trim()) && Number(value.trim()) > 0
+
   const addAdminId = () => {
-    if (newAdminId && newAdminId.trim()) {
-      updateTelegram({
-        admin_ids: [...settings.telegram.admin_ids, newAdminId.trim()]
-      })
-      setNewAdminId('')
+    const candidate = newAdminId.trim()
+    if (!candidate) return
+    if (!isValidAdminId(candidate)) {
+      setMessage({ type: 'error', text: 'Telegram admin IDs must be positive numeric user IDs (e.g. 123456789).' })
+      return
     }
+    if (settings.telegram.admin_ids.includes(candidate)) {
+      setNewAdminId('')
+      return
+    }
+    updateTelegram({
+      admin_ids: [...settings.telegram.admin_ids, candidate]
+    })
+    setNewAdminId('')
   }
 
   const removeAdminId = (index: number) => {
@@ -388,10 +472,14 @@ const Settings = () => {
       id: 'frp',
       label: t.settings.tabFrp || 'FRP Communication',
       icon: Radio,
-      badge: settings.frp.enabled ? (
+      badge: settings.runtime?.frp?.running ? (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           ON
+        </span>
+      ) : settings.frp.enabled ? (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+          SAVED
         </span>
       ) : (
         <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
@@ -401,10 +489,14 @@ const Settings = () => {
       id: 'telegram',
       label: t.settings.tabTelegram || 'Telegram Bot',
       icon: Send,
-      badge: settings.telegram.enabled ? (
+      badge: settings.runtime?.telegram?.polling ? (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           ON
+        </span>
+      ) : settings.telegram.enabled ? (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+          SAVED
         </span>
       ) : (
         <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
@@ -414,10 +506,14 @@ const Settings = () => {
       id: 'tunnel',
       label: t.settings.tabTunnel || 'Tunnel Automation',
       icon: RefreshCw,
-      badge: settings.tunnel?.auto_reapply_enabled ? (
+      badge: settings.runtime?.tunnel?.periodic_running ? (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           ON
+        </span>
+      ) : settings.tunnel?.auto_reapply_enabled ? (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+          SAVED
         </span>
       ) : (
         <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
@@ -532,6 +628,9 @@ const Settings = () => {
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 max-w-xl">
                   {t.settings.sslDescription || 'Secure your panel web interface with an automated Let\'s Encrypt certificate or custom SSL.'}
+                </p>
+                <p className="text-[11px] text-indigo-600/80 dark:text-indigo-300/80 mt-1.5 max-w-xl leading-relaxed">
+                  These actions apply immediately through their own SSL endpoints. They are not part of Save Settings and are never overwritten when another tab is saved.
                 </p>
               </div>
             </div>
@@ -1052,10 +1151,17 @@ const Settings = () => {
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-400">
                 {settings.frp.enabled ? (
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    ACTIVE
-                  </span>
+                  settings.runtime?.frp?.running ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      RUNNING
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      NOT RUNNING
+                    </span>
+                  )
                 ) : (
                   <span className="text-slate-400 dark:text-slate-500">DISABLED</span>
                 )}
@@ -1121,6 +1227,11 @@ const Settings = () => {
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
                   {t.settings.frpTokenDescription}
                 </p>
+                {settings.frp.enabled && !settings.frp.token && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2 leading-relaxed">
+                    No auth token is configured. Any client that can reach this FRP port may register tunnels; set a token to require authentication.
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -1149,10 +1260,17 @@ const Settings = () => {
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-400">
                 {settings.telegram.enabled ? (
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    ACTIVE
-                  </span>
+                  settings.runtime?.telegram?.polling ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      POLLING
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      NOT POLLING
+                    </span>
+                  )
                 ) : (
                   <span className="text-slate-400 dark:text-slate-500">DISABLED</span>
                 )}
@@ -1198,6 +1316,11 @@ const Settings = () => {
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
                   {t.settings.botTokenDescription}
                 </p>
+                {settings.telegram.enabled && settings.runtime?.telegram?.last_error && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 mt-2 leading-relaxed font-mono break-all">
+                    {settings.runtime.telegram.last_error}
+                  </p>
+                )}
               </div>
 
               {/* Admin User IDs */}
@@ -1218,7 +1341,11 @@ const Settings = () => {
                             updateTelegram({ admin_ids: newIds })
                           }}
                           autoComplete="off"
-                          className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
+                          className={`w-full px-3.5 py-2.5 border rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[44px] ${
+                            isValidAdminId(id)
+                              ? 'border-slate-200 dark:border-white/[0.08]'
+                              : 'border-rose-400 dark:border-rose-500/60'
+                          }`}
                         />
                       </div>
                       <button
@@ -1331,6 +1458,23 @@ const Settings = () => {
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                       {t.settings.backupDescription}
                     </p>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                        {t.settings.backupPassphrase || 'Backup Encryption Passphrase'}
+                      </label>
+                      <input
+                        type="password"
+                        value={settings.telegram.backup_passphrase || ''}
+                        onChange={(e) => updateTelegram({ backup_passphrase: e.target.value })}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all min-h-[44px]"
+                        placeholder={t.settings.backupPassphrasePlaceholder || 'At least 12 characters (optional)'}
+                      />
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                        {t.settings.backupPassphraseDescription || 'With a passphrase, backups are encrypted and include full configuration. Leave empty for a sanitized export without secrets.'}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1354,6 +1498,9 @@ const Settings = () => {
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 max-w-xl">
                   {t.settings.tunnelAutoReapplyDescription || 'Automatically reapply all tunnels at specified intervals'}
                 </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 max-w-xl leading-relaxed">
+                  Turning this off stops only the scheduled sweep. The 45-second self-healing watchdog is independent and always stays on.
+                </p>
               </div>
             </div>
 
@@ -1361,10 +1508,17 @@ const Settings = () => {
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-400">
                 {settings.tunnel?.auto_reapply_enabled ? (
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    ACTIVE
-                  </span>
+                  settings.runtime?.tunnel?.periodic_running ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      SCHEDULED
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      NOT SCHEDULED
+                    </span>
+                  )
                 ) : (
                   <span className="text-slate-400 dark:text-slate-500">DISABLED</span>
                 )}
@@ -1429,7 +1583,7 @@ const Settings = () => {
         {activeTab !== 'ssl' && (
           <div className="flex items-center justify-between pt-2 animate-fade-in">
             <span className="text-xs text-slate-400 dark:text-slate-500 hidden sm:inline">
-              Changes will take effect immediately upon saving.
+              Only changed sections are saved. A failed runtime change is rolled back automatically.
             </span>
             <button
               onClick={saveSettings}

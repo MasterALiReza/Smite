@@ -14,12 +14,14 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 
+import app.ssl_manager as sm
 from app.ssl_manager import (
     sanitize_domain,
     validate_domain_name,
     validate_email_address,
     parse_certificate_pem,
     validate_cert_and_key,
+    certificate_covers_domain,
     check_domain_dns,
     is_cloudflare_ip,
     MAX_CERT_SIZE,
@@ -62,6 +64,52 @@ def generate_test_cert_and_key(common_name: str = "panel.test.com", days_valid: 
     ).decode("utf-8")
     
     return cert_pem, key_pem
+
+
+def generate_cert_with_sans(
+    sans=None,
+    common_name: str = "panel.test.com",
+    not_before: datetime.datetime | None = None,
+    not_after: datetime.datetime | None = None,
+):
+    """Generate a self-signed certificate with explicit SANs and validity window"""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Smite Test Lab"),
+    ])
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before or now)
+        .not_valid_after(not_after or (now + datetime.timedelta(days=90)))
+    )
+    if sans:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(name) for name in sans]),
+            critical=False,
+        )
+    cert = builder.sign(private_key, hashes.SHA256())
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    return cert_pem, key_pem
+
+
+@pytest.fixture
+def isolated_cert_paths(tmp_path, monkeypatch):
+    cert_path = tmp_path / "certs" / "server.crt"
+    key_path = tmp_path / "certs" / "server.key"
+    monkeypatch.setattr(sm.settings, "https_cert_path", str(cert_path))
+    monkeypatch.setattr(sm.settings, "https_key_path", str(key_path))
+    return cert_path, key_path
 
 
 def test_sanitize_domain():
@@ -263,6 +311,158 @@ async def test_acme_challenge_root_endpoint(tmp_path):
     finally:
         if token_file.exists():
             token_file.unlink()
+
+
+def test_certificate_covers_domain_exact_and_wildcard():
+    cert_pem, _ = generate_cert_with_sans(["panel.example.com", "*.example.org"])
+
+    assert certificate_covers_domain(cert_pem, "panel.example.com") is True
+    assert certificate_covers_domain(cert_pem, "https://PANEL.EXAMPLE.COM:443/login") is True
+    assert certificate_covers_domain(cert_pem, "api.example.org") is True
+    # Wildcards cover exactly one label and never the apex
+    assert certificate_covers_domain(cert_pem, "example.org") is False
+    assert certificate_covers_domain(cert_pem, "a.b.example.org") is False
+    assert certificate_covers_domain(cert_pem, "other.example.net") is False
+
+
+def test_certificate_covers_domain_cn_fallback():
+    cert_pem, _ = generate_cert_with_sans(None, common_name="legacy.example.com")
+
+    assert certificate_covers_domain(cert_pem, "legacy.example.com") is True
+    assert certificate_covers_domain(cert_pem, "other.example.com") is False
+
+
+def test_parse_expired_and_not_yet_valid_certificate():
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    expired_pem, _ = generate_cert_with_sans(
+        ["old.example.com"],
+        not_before=now - datetime.timedelta(days=30),
+        not_after=now - datetime.timedelta(days=1),
+    )
+    expired = parse_certificate_pem(expired_pem)
+    assert expired["status"] == "expired"
+    assert expired["expired"] is True
+    assert expired["within_validity"] is False
+
+    future_pem, _ = generate_cert_with_sans(
+        ["future.example.com"],
+        not_before=now + datetime.timedelta(days=5),
+        not_after=now + datetime.timedelta(days=95),
+    )
+    future = parse_certificate_pem(future_pem)
+    assert future["status"] == "not_yet_valid"
+    assert future["not_yet_valid"] is True
+    assert future["within_validity"] is False
+
+
+def test_validate_certificate_for_domain_rejects_mismatch_and_expired():
+    cert_pem, key_pem = generate_cert_with_sans(["panel.example.com"])
+    with pytest.raises(ValueError, match="does not cover domain"):
+        sm._validate_certificate_for_domain(cert_pem, key_pem, "other.example.com")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expired_pem, expired_key = generate_cert_with_sans(
+        ["old.example.com"],
+        not_before=now - datetime.timedelta(days=30),
+        not_after=now - datetime.timedelta(days=1),
+    )
+    with pytest.raises(ValueError, match="expired"):
+        sm._validate_certificate_for_domain(expired_pem, expired_key, "old.example.com")
+
+
+def test_install_custom_ssl_rejects_domain_mismatch(isolated_cert_paths):
+    cert_path, key_path = isolated_cert_paths
+    cert_pem, key_pem = generate_cert_with_sans(["panel.example.com"])
+
+    with pytest.raises(ValueError, match="does not cover domain"):
+        sm.install_custom_ssl("other.example.com", cert_pem, key_pem)
+
+    assert not cert_path.exists()
+    assert not key_path.exists()
+
+
+def test_install_custom_ssl_restart_required_when_nginx_untestable(isolated_cert_paths, monkeypatch):
+    cert_path, key_path = isolated_cert_paths
+    cert_pem, key_pem = generate_cert_with_sans(["panel.example.com"], common_name="panel.example.com")
+    monkeypatch.setattr(sm, "_nginx_config_test", lambda: (None, "no tooling"))
+    monkeypatch.setattr(sm, "_active_nginx_serves_certificate", lambda path: None)
+
+    result = sm.install_custom_ssl("panel.example.com", cert_pem, key_pem)
+
+    assert result["activation"] == "restart_required"
+    assert "restart" in result["activation_message"].lower()
+    installed = parse_certificate_pem(cert_path.read_text(encoding="utf-8"))
+    assert installed["subject"] == "panel.example.com"
+    assert "PRIVATE KEY" in key_path.read_text(encoding="utf-8")
+
+
+def test_install_custom_ssl_rolls_back_when_nginx_rejects(isolated_cert_paths, monkeypatch):
+    cert_path, key_path = isolated_cert_paths
+    old_cert, old_key = generate_test_cert_and_key("old.example.com")
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cert_path.write_text(old_cert, encoding="utf-8")
+    key_path.write_text(old_key, encoding="utf-8")
+
+    new_cert, new_key = generate_cert_with_sans(["new.example.com"])
+    monkeypatch.setattr(sm, "_nginx_config_test", lambda: (False, "invalid config"))
+    monkeypatch.setattr(sm, "_active_nginx_serves_certificate", lambda path: True)
+
+    with pytest.raises(RuntimeError, match="previous certificate pair was restored"):
+        sm.install_custom_ssl("new.example.com", new_cert, new_key)
+
+    assert cert_path.read_text(encoding="utf-8") == old_cert
+    assert key_path.read_text(encoding="utf-8") == old_key
+
+
+def test_install_certificate_pair_restores_previous_files_on_write_failure(isolated_cert_paths, monkeypatch):
+    cert_path, key_path = isolated_cert_paths
+    old_cert, old_key = generate_test_cert_and_key("old.example.com")
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cert_path.write_text(old_cert, encoding="utf-8")
+    key_path.write_text(old_key, encoding="utf-8")
+
+    new_cert, new_key = generate_cert_with_sans(["new.example.com"])
+    original_write = sm._atomic_write_bytes
+    key_attempts = {"count": 0}
+
+    def flaky_write(path, data, mode=None):
+        if path.name == "server.key":
+            key_attempts["count"] += 1
+            if key_attempts["count"] == 1:
+                raise OSError("disk full")
+        return original_write(path, data, mode)
+
+    monkeypatch.setattr(sm, "_atomic_write_bytes", flaky_write)
+
+    with pytest.raises(RuntimeError, match="previous pair restored"):
+        sm._install_certificate_pair(new_cert, new_key)
+
+    assert cert_path.read_text(encoding="utf-8") == old_cert
+    assert key_path.read_text(encoding="utf-8") == old_key
+
+
+@pytest.mark.asyncio
+async def test_remove_ssl_cert_removes_files_and_reports_restart(isolated_cert_paths, monkeypatch):
+    cert_path, key_path = isolated_cert_paths
+    cert_pem, key_pem = generate_test_cert_and_key("panel.example.com")
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cert_path.write_text(cert_pem, encoding="utf-8")
+    key_path.write_text(key_pem, encoding="utf-8")
+
+    async def fake_save_ssl_db_settings(**kwargs):
+        return False
+
+    monkeypatch.setattr(sm, "save_ssl_db_settings", fake_save_ssl_db_settings)
+
+    result = await sm.remove_ssl_cert()
+
+    assert result["status"] == "success"
+    assert result["activation"] == "restart_required"
+    assert "restart" in result["message"].lower()
+    assert ".env" in result["message"]
+    assert not cert_path.exists()
+    assert not key_path.exists()
 
 
 

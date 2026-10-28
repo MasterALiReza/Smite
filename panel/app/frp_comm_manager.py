@@ -52,8 +52,11 @@ class FrpCommManager:
     async def start(self, port: int, token: Optional[str] = None) -> bool:
         """Start FRP server for panel-node communication"""
         if self.process and self.process.returncode is None:
-            logger.warning("FRP communication server already running")
-            return True
+            if self.port == port and self.token == token:
+                logger.debug("FRP communication server already running with the requested configuration")
+                return True
+            logger.info("FRP communication server configuration changed; restarting")
+            await self.stop()
         
         try:
             self.port = port

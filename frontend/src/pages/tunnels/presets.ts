@@ -20,21 +20,20 @@ export const GOST_PRESETS: TunnelPreset[] = [
     icon: 'shield',
     colorScheme: 'purple',
     badge: 'Recommended',
-    description: 'gRPC + uTLS Chrome. Bypasses deep packet inspection (Recommended for Iran).',
+    description: 'gRPC + TLS with decoy SNI. Bypasses deep packet inspection (Recommended for Iran).',
     appliedValues: {
       transport_type: 'grpc',
-      security_type: 'utls',
-      utls_fingerprint: 'chrome',
+      security_type: 'tls',
       stealth_domain: 'www.google.com',
       keepalive_interval: 15,
       gaming_mode: false,
     },
     isActive: (formData) =>
       formData.transport_type === 'grpc' &&
-      formData.security_type === 'utls' &&
+      formData.security_type === 'tls' &&
       !formData.gaming_mode,
     toastTitle: 'Preset Applied',
-    toastMessage: 'Stealth Anti-DPI (gRPC + uTLS Chrome) applied',
+    toastMessage: 'Stealth Anti-DPI (gRPC + TLS) applied',
   },
   {
     id: 'gost-gaming',
@@ -42,11 +41,10 @@ export const GOST_PRESETS: TunnelPreset[] = [
     icon: 'zap',
     colorScheme: 'amber',
     badge: 'Gaming / UDP',
-    description: 'gRPC + uTLS Chrome. 0-RTT Multiplexing & Lowest Jitter (Best for Gaming / UDP).',
+    description: 'gRPC + TLS. 0-RTT Multiplexing & Lowest Jitter (Best for Gaming / UDP).',
     appliedValues: {
       transport_type: 'grpc',
-      security_type: 'utls',
-      utls_fingerprint: 'chrome',
+      security_type: 'tls',
       stealth_domain: 'www.google.com',
       gaming_mode: true,
       keepalive_interval: 15,
@@ -54,7 +52,7 @@ export const GOST_PRESETS: TunnelPreset[] = [
     isActive: (formData) =>
       formData.transport_type === 'grpc' && Boolean(formData.gaming_mode),
     toastTitle: 'Preset Applied',
-    toastMessage: 'Ultra-Low Ping (gRPC + uTLS Chrome Gaming) applied',
+    toastMessage: 'Ultra-Low Ping (gRPC + TLS Gaming) applied',
   },
   {
     id: 'gost-packetloss',
@@ -85,7 +83,7 @@ export const RATHOLE_PRESETS: TunnelPreset[] = [
     icon: 'shield',
     colorScheme: 'amber',
     badge: 'Gaming & Anti-DPI',
-    description: 'WireGuard-grade encrypted tunnel. Zero handshake lag & optimal UDP forwarding.',
+    description: 'Noise_KK mutual-key encryption with low handshake overhead and UDP forwarding.',
     appliedValues: {
       rathole_transport: 'noise',
       custom_sni: '',
@@ -261,7 +259,7 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
     icon: 'zap',
     colorScheme: 'amber',
     badge: 'Gaming / UDP Anti-Lag',
-    description: 'Yamux nodelay + 8K channel size + aggressive pool for instant UDP responses.',
+    description: 'smux nodelay + aggressive pool + UDP-over-TCP for fast game traffic.',
     appliedValues: {
       // Upstream Backhaul implements accept_udp only for transport=tcp
       transport: 'tcp',
@@ -270,7 +268,7 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
     },
     isActive: (backhaulState) => Boolean(backhaulState.gaming_mode),
     toastTitle: 'Preset Applied',
-    toastMessage: 'Ultra-Low Ping Gaming (Yamux/Nodelay/Aggressive Pool) applied',
+    toastMessage: 'Ultra-Low Ping Gaming (smux/Nodelay/Aggressive Pool) applied',
   },
   {
     id: 'backhaul-wss',
@@ -278,7 +276,7 @@ export const BACKHAUL_PRESETS: TunnelPreset[] = [
     icon: 'globe',
     colorScheme: 'blue',
     badge: 'CDN & Anti-DPI',
-    description: 'Secure TLS 1.3 WebSocket encapsulation capable of routing via CDN proxies.',
+    description: 'WebSocket-over-TLS encapsulation. Backhaul v0.7.2 does not verify the server certificate.',
     appliedValues: {
       transport: 'wssmux',
       accept_udp: false,

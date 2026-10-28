@@ -94,7 +94,7 @@ export const RatholeSection: React.FC<RatholeSectionProps> = ({
           />
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">
             {formData.rathole_transport === 'noise' &&
-              'WireGuard-grade 256-bit encryption with zero-handshake delay (Best for Gaming).'}
+              'Noise_KK (X25519/ChaCha20-Poly1305) with mutual keys and replay protection. Low overhead, not WireGuard.'}
             {formData.rathole_transport === 'wss' &&
               'Standard TLS 1.3 encapsulation for anti-DPI camouflage.'}
             {formData.rathole_transport === 'ws' && 'Standard WebSocket stream.'}

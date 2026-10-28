@@ -113,26 +113,59 @@ def test_frp_adapter_sni_configurable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_jwt_revocation_and_logout():
+async def test_jwt_revocation_and_logout(monkeypatch):
     """Verify H-2: Revoking a JWT prevents it from being used in get_current_user"""
-    from panel.app.routers.auth import create_access_token, revoke_token, is_token_revoked, get_current_user
+    from panel.app.routers import auth
     from fastapi.security import HTTPAuthorizationCredentials
     from fastapi import HTTPException
-    
-    test_token = create_access_token(data={"sub": "admin"})
-    assert not is_token_revoked(test_token), "Fresh token must not be revoked"
-    
-    revoke_token(test_token)
-    assert is_token_revoked(test_token), "Revoked token must be recognized by is_token_revoked"
-    
+
+    # Memory-only: this unit test must not write to a database.
+    monkeypatch.setattr(auth, "_session_factory", None)
+    auth._revoked_token_hashes.clear()
+
+    test_token = auth.create_access_token(data={"sub": "admin"})
+    assert not await auth.is_token_revoked(test_token), "Fresh token must not be revoked"
+
+    await auth.revoke_token(test_token)
+    assert await auth.is_token_revoked(test_token), "Revoked token must be recognized by is_token_revoked"
+
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=test_token)
     mock_db = MagicMock()
-    
+
     with pytest.raises(HTTPException) as exc_info:
-        await get_current_user(credentials=creds, db=mock_db)
-    
+        await auth.get_current_user(credentials=creds, db=mock_db)
+
     assert exc_info.value.status_code == 401
     assert "revoked" in exc_info.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_revocation_survives_restart(tmp_path):
+    """Verify revocations are hydrated from SQLite after an agent/panel restart"""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.database import Base
+    from panel.app.routers import auth
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'revocations.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    auth._revoked_token_hashes.clear()
+    auth._session_factory = factory
+    try:
+        token = auth.create_access_token(data={"sub": "admin"})
+        await auth.revoke_token(token)
+
+        # Simulate a process restart: memory is empty until startup hydration.
+        auth._revoked_token_hashes.clear()
+        assert not await auth.is_token_revoked(token)
+        assert await auth.hydrate_revoked_tokens() == 1
+        assert await auth.is_token_revoked(token)
+    finally:
+        auth._session_factory = None
+        auth._revoked_token_hashes.clear()
+        await engine.dispose()
 
 
 def test_sanitize_spec_for_log():

@@ -89,6 +89,40 @@ def is_valid_ipv6(addr: str) -> bool:
     return ":" in clean
 
 
+def _cert_covers_identities(cert_pem: Optional[str], dns_names: List[str], ip_addresses: List[str]) -> bool:
+    """True when every requested identity is present in the certificate SAN."""
+    if not cert_pem:
+        return False
+    try:
+        import ipaddress
+        from cryptography import x509
+
+        cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+        try:
+            san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        except x509.ExtensionNotFound:
+            return False
+        san_dns = {str(n).lower() for n in san.get_values_for_type(x509.DNSName)}
+        san_ips = {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+        for name in dns_names:
+            if name and str(name).lower() not in san_dns:
+                return False
+        for ip in ip_addresses:
+            if not ip:
+                continue
+            try:
+                normalized_ip = str(ipaddress.ip_address(str(ip).strip("[]")))
+            except ValueError:
+                if str(ip).lower() not in san_dns:
+                    return False
+                continue
+            if normalized_ip not in san_ips:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def parse_ports_list(spec_or_ports: Any) -> List[int]:
     """Extract integer ports from various spec input formats (int, str, dict, ranges, comma-separated)"""
     if isinstance(spec_or_ports, dict):
@@ -525,12 +559,16 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
         if public_port:
             p_str = str(public_port).strip()
             if target_port and p_str != str(target_port).strip():
-                ports = [f"{p_str}={target_host}:{target_port}"]
+                target_port_num = int(target_port) if str(target_port).strip().isdigit() else target_port
+                ports = [f"{p_str}={format_address_port(str(target_host), target_port_num)}"]
             elif '-' in p_str:
                 # Port range like 27000-27050
                 ports = [p_str]
             else:
-                ports = [f"{p_str}={target_host}:{p_str}"] if p_str.isdigit() else [p_str]
+                ports = (
+                    [f"{p_str}={format_address_port(str(target_host), int(p_str))}"]
+                    if p_str.isdigit() else [p_str]
+                )
     else:
         processed_ports = []
         for p in ports:
@@ -539,22 +577,26 @@ def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -
             if isinstance(p, str):
                 p_clean = p.strip()
                 if '=' in p_clean:
-                    # Backhaul cannot parse "A-B=host:A-B"; collapse to native "A-B"
-                    m_rng = re.fullmatch(r"(\d+)-(\d+)=[^:=]+:(\d+)-(\d+)", p_clean)
-                    if m_rng and m_rng.group(1) == m_rng.group(3) and m_rng.group(2) == m_rng.group(4):
-                        processed_ports.append(f"{m_rng.group(1)}-{m_rng.group(2)}")
-                    else:
-                        processed_ports.append(p_clean)
+                    # Keep the mapping intact: the node adapter expands the legacy
+                    # "A-B=host:A-B" shorthand into supported 1:1 mappings so the
+                    # target host is never dropped, and rejects unsupported forms
+                    # before the running tunnel is stopped.
+                    processed_ports.append(p_clean)
                 elif p_clean.isdigit():
-                    processed_ports.append(f"{p_clean}={target_host}:{p_clean}")
+                    processed_ports.append(
+                        f"{p_clean}={format_address_port(str(target_host), int(p_clean))}"
+                    )
                 elif '-' in p_clean:
-                    # Native Backhaul port range (e.g. 27000-27050)
+                    # Native Backhaul port range (e.g. 27000-27050). The node
+                    # expands it 1:1 when a non-default target host is configured.
                     processed_ports.append(p_clean)
                 else:
                     processed_ports.append(p_clean)
             elif isinstance(p, (int, float)):
                 p_int = int(p)
-                processed_ports.append(f"{p_int}={target_host}:{p_int}")
+                processed_ports.append(
+                    f"{p_int}={format_address_port(str(target_host), p_int)}"
+                )
             elif isinstance(p, dict):
                 local = p.get("local") or p.get("listen_port") or p.get("public_port")
                 tgt_host = p.get("target_host") or target_host
@@ -854,6 +896,14 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     # 7. TLS Certificate Generation with SAN
     tls_cert_pem = spec.get("tls_cert_pem")
     tls_key_pem = spec.get("tls_key_pem")
+    server_target_ip = iran_node_ip if is_reverse else foreign_node_ip
+    if use_tls:
+        expected_dns = [custom_sni] if custom_sni else []
+        if not (tls_cert_pem and tls_key_pem) or not _cert_covers_identities(
+            tls_cert_pem, expected_dns, [server_target_ip]
+        ):
+            tls_cert_pem = None
+            tls_key_pem = None
     if use_tls and not (tls_cert_pem and tls_key_pem):
         try:
             from cryptography import x509
@@ -863,7 +913,6 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
             import datetime
             import ipaddress
 
-            server_target_ip = iran_node_ip if is_reverse else foreign_node_ip
             key_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
             cn_val = custom_sni or server_target_ip or "chisel-tunnel"
             subject = issuer = x509.Name([
@@ -907,6 +956,11 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
             ).decode('utf-8')
         except Exception as e:
             logger.warning(f"Could not generate in-memory cert with SAN for chisel: {e}")
+
+    if use_tls and not (tls_cert_pem and tls_key_pem):
+        # Fail closed: WSS must never fall back to plaintext because cert
+        # provisioning failed after the running server was already stopped.
+        raise ValueError("Chisel WSS requires a TLS certificate; refusing to apply without one")
 
     # Build server spec
     server_spec_dict = spec.copy()
@@ -991,7 +1045,11 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     if custom_headers:
         client_spec_dict["custom_headers"] = custom_headers
     if use_tls:
-        client_spec_dict["tls_skip_verify"] = spec.get("tls_skip_verify", True)
+        explicit_skip_verify = spec.get("tls_skip_verify")
+        # Verify the generated cert unless the operator explicitly opted out.
+        client_spec_dict["tls_skip_verify"] = (
+            bool(explicit_skip_verify) if explicit_skip_verify is not None else False
+        )
         if tls_cert_pem:
             client_spec_dict["tls_ca_cert_pem"] = tls_cert_pem
 
@@ -1148,8 +1206,13 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         or "tcp"
     ).lower()
 
-    if raw_transport in ["websocket", "ws", "wss", "https"]:
+    if raw_transport in ["websocket", "ws"]:
+        # Plain WebSocket (ws://) unless the security selector enables TLS.
         transport_proto = "websocket"
+    elif raw_transport in ["wss", "https"]:
+        # Keep WSS as its own protocol: FRP applies TLS before the WebSocket
+        # handshake, which is a different stack from websocket + tls.
+        transport_proto = "wss"
     elif raw_transport == "quic":
         transport_proto = "quic"
     elif raw_transport == "kcp":
@@ -1187,9 +1250,18 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         )
 
     # In-memory self-signed TLS certificates for WSS / TLS server
+    tls_cert_pem = server_spec.get("tls_cert_pem")
+    tls_key_pem = server_spec.get("tls_key_pem")
     if use_tls:
-        tls_cert_pem = server_spec.get("tls_cert_pem")
-        tls_key_pem = server_spec.get("tls_key_pem")
+        server_identity_ip = iran_node_ip if is_reverse else foreign_node_ip
+        expected_dns = [custom_sni] if custom_sni else []
+        if not (tls_cert_pem and tls_key_pem) or not _cert_covers_identities(
+            tls_cert_pem, expected_dns, [server_identity_ip]
+        ):
+            # Stored cert predates a SNI/endpoint change; regenerate so the client
+            # can verify the server against the CA we hand it in the same pass.
+            tls_cert_pem = None
+            tls_key_pem = None
         if not (tls_cert_pem and tls_key_pem):
             try:
                 import ipaddress
@@ -1393,6 +1465,13 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["ports"] = ports
     client_spec["is_reverse"] = is_reverse
     client_spec["force_direct"] = not is_reverse
+
+    if use_tls and tls_cert_pem:
+        # Pin the client to the exact self-signed server cert; FRP otherwise
+        # falls back to InsecureSkipVerify when no CA file is supplied.
+        client_spec["tls_ca_cert_pem"] = tls_cert_pem
+    else:
+        client_spec.pop("tls_ca_cert_pem", None)
 
     if health_check_type:
         client_spec["health_check_type"] = health_check_type
@@ -1728,13 +1807,16 @@ def build_gost_node_specs(
     # For UDP datagram tunneling over streaming transports, ensure multiplexing is default
     if tunnel_type in ["udp", "tcp+udp"] and transport_type.lower() not in ["mws", "mwss", "udp", "rudp", "kcp", "quic"]:
         base_spec["multiplex"] = True
-        if not base_spec.get("mux_type"):
-            base_spec["mux_type"] = "yamux"
+        if not base_spec.get("mux_type") or str(base_spec.get("mux_type")).lower() == "yamux":
+            base_spec["mux_type"] = "smux"
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout", "force_direct"]:
             if k in tunnel.spec:
                 base_spec[k] = tunnel.spec[k]
+
+    if str(base_spec.get("mux_type") or "").lower() in ("", "yamux"):
+        base_spec["mux_type"] = "smux"
 
     # Normalize allowed_ips to list
     allowed_list: List[str] = []
@@ -1777,6 +1859,97 @@ def build_gost_node_specs(
         else:
             client_spec["allowed_ips"] = None
         server_spec["allowed_ips"] = None
+
+    # TLS trust material. The node binary can self-sign, but its client then has
+    # no way to authenticate the listener; distribute one cert so the dialer can
+    # verify instead of running with secure=false.
+    transport_lc = str(transport_type or "").lower()
+    security_lc = str(security_type or "").lower()
+    grpc_with_tls = transport_lc == "grpc" and (
+        security_lc in ("tls", "utls")
+        or bool(custom_sni)
+        or bool(spec.get("tls_cert"))
+        or bool(spec.get("tls_cert_pem"))
+    )
+    # Carriers where the tunnel server terminates TLS itself. The adapter
+    # promotes tcp/ws/mws/mtcp to tls/wss/mwss/mtls when security is TLS, but
+    # UDP/KCP/SSH have no listener-side TLS, so a tunnel CA must not be forced
+    # on them (their TLS dialer passes through to the target).
+    requires_tls = (
+        transport_lc in ("wss", "mwss", "tls", "mtls", "quic")
+        or (transport_lc in ("tcp", "ws", "mws", "mtcp") and security_lc in ("tls", "utls"))
+        or grpc_with_tls
+    )
+    if requires_tls:
+        gost_server_spec = server_spec if is_reverse else client_spec
+        gost_client_spec = client_spec if is_reverse else server_spec
+        gost_server_ip = gost_client_spec.get("server_ip")
+        tls_cert_pem = spec.get("tls_cert_pem") or spec.get("tls_cert")
+        tls_key_pem = spec.get("tls_key_pem") or spec.get("tls_key")
+        if not (tls_cert_pem and tls_key_pem) or not _cert_covers_identities(
+            tls_cert_pem, [custom_sni] if custom_sni else [], [gost_server_ip]
+        ):
+            tls_cert_pem = None
+            tls_key_pem = None
+        if not (tls_cert_pem and tls_key_pem):
+            try:
+                import datetime
+                import ipaddress
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+
+                key_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                cn_val = custom_sni or gost_server_ip or "gost-tunnel"
+                subject = issuer = x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, cn_val),
+                ])
+                san_list = []
+                if custom_sni:
+                    san_list.append(x509.DNSName(custom_sni))
+                if gost_server_ip:
+                    try:
+                        san_list.append(x509.IPAddress(ipaddress.ip_address(gost_server_ip)))
+                    except ValueError:
+                        san_list.append(x509.DNSName(gost_server_ip))
+                san_list.append(x509.DNSName("gost-tunnel"))
+                cert = (
+                    x509.CertificateBuilder()
+                    .subject_name(subject)
+                    .issuer_name(issuer)
+                    .public_key(key_obj.public_key())
+                    .serial_number(x509.random_serial_number())
+                    .not_valid_before(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1))
+                    .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650))
+                    .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+                    .sign(key_obj, hashes.SHA256())
+                )
+                tls_key_pem = key_obj.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode('utf-8')
+                tls_cert_pem = cert.public_bytes(encoding=serialization.Encoding.PEM).decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Could not generate in-memory cert for GOST: {e}")
+
+        if tls_cert_pem and tls_key_pem:
+            gost_server_spec["tls_cert_pem"] = tls_cert_pem
+            gost_server_spec["tls_key_pem"] = tls_key_pem
+            # Nodes from before the *_pem fields only read these legacy names.
+            # Sending both keeps a mixed-version fleet on one certificate while
+            # it is being rolled forward.
+            gost_server_spec["tls_cert"] = tls_cert_pem
+            gost_server_spec["tls_key"] = tls_key_pem
+            gost_client_spec["tls_ca_cert_pem"] = tls_cert_pem
+            if isinstance(tunnel.spec, dict):
+                tunnel.spec["tls_cert_pem"] = tls_cert_pem
+                tunnel.spec["tls_key_pem"] = tls_key_pem
+        else:
+            # Fail closed for transport-level TLS added by this contract;
+            # legacy raw-TCP/KCP tunnels never reach this branch.
+            raise ValueError("GOST TLS requires a server certificate; refusing to apply without one")
 
     return server_spec, client_spec
 

@@ -1,19 +1,11 @@
-"""Zero-downtime in-place agent reload.
-
-`docker kill --signal=HUP <node-container>` (used by `smite-node update`) makes the
-agent re-exec itself with the code currently on disk. The PID stays the same, so
-the container keeps running and every tunnel core process keeps forwarding
-traffic; the new agent adopts them through their PID files.
-
-Before re-exec the new code is imported in a child interpreter. If that fails the
-reload is aborted and the running agent (old code) keeps serving.
-"""
+"""Validate new agent code, drain tracked operations, and re-exec in place."""
 import asyncio
 import logging
 import os
 import signal
 import subprocess
 import sys
+import time
 from typing import Any, List
 
 logger = logging.getLogger(__name__)
@@ -73,29 +65,27 @@ async def _reload(app: Any) -> None:
             return
 
         state = getattr(app, "state", None)
-        # Stop background loops; tunnel core processes are intentionally left running.
-        task = getattr(state, "registration_task", None) if state else None
-        if task:
-            task.cancel()
         manager = getattr(state, "adapter_manager", None) if state else None
         if manager is not None:
-            try:
-                manager.stop_watchdog()
-            except Exception:
-                pass
-            # Let in-flight apply/remove operations finish so no tunnel is left half-applied
-            for _ in range(60):
+            deadline = time.monotonic() + 15
+            while True:
+                if getattr(manager, "_shutting_down", False):
+                    logger.error("Hot reload aborted: agent shutdown is already in progress")
+                    return
                 locks = list(getattr(manager, "_tunnel_locks", {}).values())
-                if not any(lock.locked() for lock in locks):
+                io_lock = getattr(manager, "_io_lock", None)
+                if io_lock is not None:
+                    locks.append(io_lock)
+                workers = getattr(manager, "_pending_workers", ())
+                if not any(lock.locked() for lock in locks) and not any(not task.done() for task in workers):
                     break
-                await asyncio.sleep(0.25)
-        h2_client = getattr(state, "h2_client", None) if state else None
-        if h2_client is not None:
-            try:
-                await asyncio.wait_for(h2_client.stop(), timeout=8)
-            except Exception as e:
-                logger.debug(f"Panel client stop during reload: {e}")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.error("Hot reload aborted: adapter operations still busy after 15 seconds")
+                    return
+                await asyncio.sleep(min(0.25, remaining))
 
+        # No awaits after the drain check: event-loop mutations must not resume before exec.
         argv = _build_exec_argv()
         logger.warning(f"Hot reload: re-executing agent in place ({' '.join(argv)}); tunnels keep running")
         for h in logging.getLogger().handlers:
