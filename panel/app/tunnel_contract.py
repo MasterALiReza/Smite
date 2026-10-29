@@ -137,12 +137,18 @@ def validate_tunnel_request(
             )
 
     tls = carrier in _TLS_CARRIERS.get(core_key, set())
-    if security_type:
-        security = security_type.strip().lower()
+    effective_sec = security_type or (spec.get("security_type") if spec else None)
+    if effective_sec:
+        security = str(effective_sec).strip().lower()
         if core_key == "frp" and carrier == "quic" and security == "none":
             warnings.append("frp: QUIC always uses TLS 1.3; security 'none' is ignored for this carrier")
         if core_key == "frp" and security == "none" and carrier == "wss":
             raise TunnelContractError("frp: WSS is TLS by definition; security 'none' contradicts it")
+        if core_key == "frp" and carrier == "kcp" and security in ("tls", "utls", "force_tls"):
+            raise TunnelContractError(
+                "frp: KCP transport operates over UDP and cannot be wrapped in TLS. "
+                "Use transport 'tcp' or 'wss' for TLS security, or set security to 'none' for KCP."
+            )
 
     return {
         "contract_version": CONTRACT_VERSION,

@@ -89,6 +89,24 @@ def is_valid_ipv6(addr: str) -> bool:
     return ":" in clean
 
 
+def resolve_effective_sni(tunnel: Any, spec: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Resolve unified SNI / camouflage domain across custom_sni, stealth_domain, and sni."""
+    spec_dict = spec if isinstance(spec, dict) else (getattr(tunnel, "spec", None) if isinstance(getattr(tunnel, "spec", None), dict) else {})
+    candidates = [
+        getattr(tunnel, "custom_sni", None),
+        getattr(tunnel, "stealth_domain", None),
+        spec_dict.get("custom_sni"),
+        spec_dict.get("stealth_domain"),
+        spec_dict.get("sni"),
+    ]
+    for c in candidates:
+        if c is not None:
+            s = str(c).strip()
+            if s:
+                return s
+    return None
+
+
 def _cert_covers_identities(cert_pem: Optional[str], dns_names: List[str], ip_addresses: List[str]) -> bool:
     """True when every requested identity is present in the certificate SAN."""
     if not cert_pem:
@@ -105,8 +123,16 @@ def _cert_covers_identities(cert_pem: Optional[str], dns_names: List[str], ip_ad
         san_dns = {str(n).lower() for n in san.get_values_for_type(x509.DNSName)}
         san_ips = {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
         for name in dns_names:
-            if name and str(name).lower() not in san_dns:
-                return False
+            if not name:
+                continue
+            name_clean = str(name).strip().lower()
+            try:
+                norm_ip = str(ipaddress.ip_address(name_clean.strip("[]")))
+                if norm_ip not in san_ips and name_clean not in san_dns:
+                    return False
+            except ValueError:
+                if name_clean not in san_dns:
+                    return False
         for ip in ip_addresses:
             if not ip:
                 continue
@@ -859,16 +885,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         auth = f"smite:{auth}"
 
     # 5. Anti-DPI & Stealth (Custom SNI, Host Header, Decoy Backend)
-    if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
-        custom_sni = (
-            (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
-            or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
-        )
-    else:
-        custom_sni = (
-            spec.get("custom_sni")
-            or spec.get("stealth_domain")
-        )
+    custom_sni = resolve_effective_sni(tunnel, spec)
     if hasattr(tunnel, "custom_host"):
         custom_host = tunnel.custom_host.strip() if tunnel.custom_host else None
     else:
@@ -1230,7 +1247,15 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     elif transport_proto == "quic":
         use_tls = True
         security_type = "tls"
-    else: # tcp, kcp
+    elif transport_proto == "kcp":
+        # FRP KCP operates over UDP and cannot be wrapped in TLS.
+        use_tls = False
+        security_type = "none"
+        if explicit_security in ["tls", "force_tls"]:
+            logger.warning(
+                f"FRP tunnel {getattr(tunnel, 'id', '')}: KCP transport operates over UDP and cannot be wrapped in TLS; falling back to security_type='none'"
+            )
+    else: # tcp
         if explicit_security == "none":
             use_tls = False
             security_type = "none"
@@ -1238,16 +1263,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             use_tls = (explicit_security in ["tls", "force_tls"]) or bool(server_spec.get("tls_enable", True))
             security_type = explicit_security or ("tls" if use_tls else "none")
 
-    if hasattr(tunnel, "custom_sni") or hasattr(tunnel, "stealth_domain"):
-        custom_sni = (
-            (tunnel.custom_sni.strip() if getattr(tunnel, "custom_sni", None) else None)
-            or (tunnel.stealth_domain.strip() if getattr(tunnel, "stealth_domain", None) else None)
-        )
-    else:
-        custom_sni = (
-            server_spec.get("custom_sni")
-            or server_spec.get("stealth_domain")
-        )
+    custom_sni = resolve_effective_sni(tunnel, server_spec)
 
     # In-memory self-signed TLS certificates for WSS / TLS server
     tls_cert_pem = server_spec.get("tls_cert_pem")
@@ -1293,7 +1309,10 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
 
                 san_items = []
                 if custom_sni:
-                    san_items.append(x509.DNSName(custom_sni))
+                    try:
+                        san_items.append(x509.IPAddress(ipaddress.ip_address(custom_sni)))
+                    except ValueError:
+                        san_items.append(x509.DNSName(custom_sni))
                 for s_ip in [target_server_ip, iran_node_ip, foreign_node_ip]:
                     if s_ip:
                         try:
@@ -1448,6 +1467,11 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     if custom_sni:
         client_spec["custom_sni"] = custom_sni
         server_spec["custom_sni"] = custom_sni
+        client_spec["stealth_domain"] = custom_sni
+        server_spec["stealth_domain"] = custom_sni
+        if tunnel.spec is not None and isinstance(tunnel.spec, dict):
+            tunnel.spec["custom_sni"] = custom_sni
+            tunnel.spec["stealth_domain"] = custom_sni
     else:
         client_spec.pop("custom_sni", None)
         client_spec.pop("stealth_domain", None)
@@ -1684,15 +1708,6 @@ def build_gost_node_specs(
         if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
             tunnel.spec.pop("custom_host", None)
 
-    if hasattr(tunnel, "custom_sni"):
-        custom_sni = tunnel.custom_sni.strip() if tunnel.custom_sni else None
-    else:
-        custom_sni = spec.get("custom_sni")
-    if custom_sni is None:
-        spec.pop("custom_sni", None)
-        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-            tunnel.spec.pop("custom_sni", None)
-
     if hasattr(tunnel, "ws_path"):
         ws_path = tunnel.ws_path.strip() if tunnel.ws_path else None
     else:
@@ -1702,14 +1717,21 @@ def build_gost_node_specs(
         if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
             tunnel.spec.pop("ws_path", None)
 
-    if hasattr(tunnel, "stealth_domain"):
-        stealth_domain = tunnel.stealth_domain.strip() if tunnel.stealth_domain else None
-    else:
-        stealth_domain = spec.get("stealth_domain")
-    if stealth_domain is None:
+    effective_sni = resolve_effective_sni(tunnel, spec)
+    custom_sni = effective_sni
+    stealth_domain = effective_sni
+    if effective_sni is None:
+        spec.pop("custom_sni", None)
         spec.pop("stealth_domain", None)
         if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec.pop("custom_sni", None)
             tunnel.spec.pop("stealth_domain", None)
+    else:
+        spec["custom_sni"] = effective_sni
+        spec["stealth_domain"] = effective_sni
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec["custom_sni"] = effective_sni
+            tunnel.spec["stealth_domain"] = effective_sni
 
     if hasattr(tunnel, "rate_limit_mbps"):
         rate_limit_mbps = tunnel.rate_limit_mbps
@@ -1886,8 +1908,20 @@ def build_gost_node_specs(
         gost_server_ip = gost_client_spec.get("server_ip")
         tls_cert_pem = spec.get("tls_cert_pem") or spec.get("tls_cert")
         tls_key_pem = spec.get("tls_key_pem") or spec.get("tls_key")
+        dns_candidates = [
+            d for d in [
+                effective_sni,
+                getattr(tunnel, "custom_sni", None),
+                getattr(tunnel, "stealth_domain", None),
+                spec.get("custom_sni"),
+                spec.get("stealth_domain"),
+                spec.get("sni"),
+            ]
+            if d and str(d).strip()
+        ]
+        expected_dns = list(dict.fromkeys([str(d).strip() for d in dns_candidates]))
         if not (tls_cert_pem and tls_key_pem) or not _cert_covers_identities(
-            tls_cert_pem, [custom_sni] if custom_sni else [], [gost_server_ip]
+            tls_cert_pem, expected_dns, [gost_server_ip]
         ):
             tls_cert_pem = None
             tls_key_pem = None
@@ -1901,18 +1935,25 @@ def build_gost_node_specs(
                 from cryptography.hazmat.primitives.asymmetric import rsa
 
                 key_obj = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-                cn_val = custom_sni or gost_server_ip or "gost-tunnel"
+                cn_val = effective_sni or gost_server_ip or "gost-tunnel"
                 subject = issuer = x509.Name([
                     x509.NameAttribute(NameOID.COMMON_NAME, cn_val),
                 ])
                 san_list = []
-                if custom_sni:
-                    san_list.append(x509.DNSName(custom_sni))
+                for d in expected_dns:
+                    try:
+                        san_list.append(x509.IPAddress(ipaddress.ip_address(d)))
+                    except ValueError:
+                        san_list.append(x509.DNSName(d))
                 if gost_server_ip:
                     try:
-                        san_list.append(x509.IPAddress(ipaddress.ip_address(gost_server_ip)))
+                        ip_obj = x509.IPAddress(ipaddress.ip_address(gost_server_ip))
+                        if ip_obj not in san_list:
+                            san_list.append(ip_obj)
                     except ValueError:
-                        san_list.append(x509.DNSName(gost_server_ip))
+                        dns_obj = x509.DNSName(gost_server_ip)
+                        if dns_obj not in san_list:
+                            san_list.append(dns_obj)
                 san_list.append(x509.DNSName("gost-tunnel"))
                 cert = (
                     x509.CertificateBuilder()
@@ -1946,6 +1987,14 @@ def build_gost_node_specs(
             if isinstance(tunnel.spec, dict):
                 tunnel.spec["tls_cert_pem"] = tls_cert_pem
                 tunnel.spec["tls_key_pem"] = tls_key_pem
+            if effective_sni:
+                gost_server_spec["custom_sni"] = effective_sni
+                gost_server_spec["stealth_domain"] = effective_sni
+                gost_client_spec["custom_sni"] = effective_sni
+                gost_client_spec["stealth_domain"] = effective_sni
+                if isinstance(tunnel.spec, dict):
+                    tunnel.spec["custom_sni"] = effective_sni
+                    tunnel.spec["stealth_domain"] = effective_sni
         else:
             logger.warning(
                 f"GOST TLS tunnel {getattr(tunnel, 'id', 'unknown')} missing in-memory certificate; "

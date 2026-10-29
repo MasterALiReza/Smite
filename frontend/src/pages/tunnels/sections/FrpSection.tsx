@@ -99,7 +99,13 @@ export const FrpSection: React.FC<FrpSectionProps> = ({
           </div>
           <CustomSelect
             value={formData.frp_transport || 'tcp'}
-            onChange={(val) => onChange({ frp_transport: val })}
+            onChange={(val) => {
+              if (val === 'kcp') {
+                onChange({ frp_transport: val, security_type: 'none' })
+              } else {
+                onChange({ frp_transport: val })
+              }
+            }}
             options={[
               { value: 'tcp', label: 'TCP (with TLS & Zero-Byte Signature)' },
               { value: 'kcp', label: 'KCP (Fast UDP - Resilient to Packet Loss)' },
@@ -112,7 +118,7 @@ export const FrpSection: React.FC<FrpSectionProps> = ({
             {formData.frp_transport === 'quic' &&
               'Ultra-fast 0-RTT UDP multiplexing with TLS 1.3 encryption.'}
             {formData.frp_transport === 'kcp' &&
-              'Aggressive ARQ UDP for bad or filtered routes (Gaming / High-Loss).'}
+              'Aggressive ARQ UDP for bad or filtered routes (Gaming / High-Loss). Note: TLS is disabled on KCP.'}
             {formData.frp_transport === 'wss' &&
               'Encrypted WebSocket compatible with CDN reverse proxies.'}
             {formData.frp_transport === 'websocket' && 'Standard HTTP WebSocket proxy.'}

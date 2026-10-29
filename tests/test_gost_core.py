@@ -1160,6 +1160,55 @@ async def test_gost_anti_packetloss_frame_size_32k(tmp_path, monkeypatch):
         assert meta["mux.maxStreamBuffer"] == 8388608
 
 
+@pytest.mark.asyncio
+async def test_gost_adapter_rfc6066_and_stealth_domain(tmp_path, monkeypatch):
+    """Verify GostAdapter strictly follows RFC 6066 and binds stealth_domain into dialer serverName."""
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=2001, returncode=None)
+
+        # 1. With stealth_domain and CA: secure=True and serverName is the domain
+        spec_domain = {
+            "mode": "client",
+            "is_reverse": False,
+            "control_port": 8443,
+            "server_ip": "10.0.0.1",
+            "ports": [8080],
+            "transport_type": "wss",
+            "security_type": "tls",
+            "stealth_domain": "dl.google.com",
+            "tls_ca_cert_pem": "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----",
+        }
+        await adapter.apply("gost-sni-domain", spec_domain)
+        cfg1 = json.loads((tmp_path / "gost-sni-domain.json").read_text())
+        dialer1 = cfg1["chains"][0]["hops"][0]["nodes"][0]["dialer"]["tls"]
+        assert dialer1["serverName"] == "dl.google.com"
+        assert dialer1["secure"] is True
+        assert dialer1["caFile"].endswith("gost_gost-sni-domain_ca.pem")
+
+        # 2. Without CA or explicit domain: falls back to www.google.com with secure=False (never raw IP)
+        spec_no_sni = {
+            "mode": "client",
+            "is_reverse": False,
+            "control_port": 8443,
+            "server_ip": "10.0.0.1",
+            "ports": [8080],
+            "transport_type": "wss",
+            "security_type": "tls",
+        }
+        await adapter.apply("gost-no-sni", spec_no_sni)
+        cfg2 = json.loads((tmp_path / "gost-no-sni.json").read_text())
+        dialer2 = cfg2["chains"][0]["hops"][0]["nodes"][0]["dialer"]["tls"]
+        assert dialer2["serverName"] == "www.google.com"
+        assert dialer2["secure"] is False
+
+
+
 
 
 

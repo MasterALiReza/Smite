@@ -120,14 +120,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
     custom_host: tunnel.custom_host || tunnel.spec?.custom_host || '',
-    custom_sni: tunnel.custom_sni || tunnel.spec?.custom_sni || '',
+    custom_sni: (tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.stealth_domain || tunnel.spec?.stealth_domain || '').trim(),
     ws_path: tunnel.ws_path || tunnel.spec?.ws_path || '',
     is_reverse: tunnel.is_reverse !== undefined && tunnel.is_reverse !== null
       ? Boolean(tunnel.is_reverse)
       : (tunnel.spec?.is_reverse !== undefined && tunnel.spec?.is_reverse !== null
           ? Boolean(tunnel.spec.is_reverse)
           : !tunnel.spec?.force_direct),
-    stealth_domain: tunnel.stealth_domain || tunnel.spec?.stealth_domain || '',
+    stealth_domain: (tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.custom_sni || tunnel.spec?.custom_sni || '').trim(),
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type === 'utls' ? 'tls' : (tunnel.security_type || 'none'),
     selector_strategy: tunnel.selector_strategy || 'fifo',
@@ -308,14 +308,12 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         } else {
           delete updatedSpec.rate_limit_mbps
         }
-        if (formData.stealth_domain && formData.stealth_domain.trim()) {
-          updatedSpec.stealth_domain = formData.stealth_domain.trim()
+        const effectiveGostSni = (formData.custom_sni || formData.stealth_domain || '').trim()
+        if (effectiveGostSni) {
+          updatedSpec.stealth_domain = effectiveGostSni
+          updatedSpec.custom_sni = effectiveGostSni
         } else {
           delete updatedSpec.stealth_domain
-        }
-        if (formData.custom_sni && formData.custom_sni.trim()) {
-          updatedSpec.custom_sni = formData.custom_sni.trim()
-        } else {
           delete updatedSpec.custom_sni
         }
         if (formData.custom_host && formData.custom_host.trim()) {
@@ -453,7 +451,8 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           port_ranges: port_ranges.length > 0 ? port_ranges : null,
         }),
         ...(tunnel.core === 'frp' && {
-          security_type: formData.frp_security || 'tls',
+          transport_type: formData.frp_transport || 'tcp',
+          security_type: formData.frp_transport === 'kcp' ? 'none' : (formData.frp_security || 'tls'),
           custom_sni: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           stealth_domain: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
@@ -473,10 +472,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
           custom_host: (formData.custom_host && formData.custom_host.trim()) ? formData.custom_host.trim() : null,
-          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          custom_sni: effectiveGostSni || null,
           ws_path: (formData.ws_path && formData.ws_path.trim()) ? formData.ws_path.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
-          stealth_domain: (formData.stealth_domain && formData.stealth_domain.trim()) ? formData.stealth_domain.trim() : null,
+          stealth_domain: effectiveGostSni || null,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
           utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,

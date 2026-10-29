@@ -225,14 +225,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         } else {
           delete spec.rate_limit_mbps
         }
-        if (formData.stealth_domain && formData.stealth_domain.trim()) {
-          spec.stealth_domain = formData.stealth_domain.trim()
+        const effectiveGostSni = (formData.custom_sni || formData.stealth_domain || '').trim()
+        if (effectiveGostSni) {
+          spec.stealth_domain = effectiveGostSni
+          spec.custom_sni = effectiveGostSni
         } else {
           delete spec.stealth_domain
-        }
-        if (formData.custom_sni && formData.custom_sni.trim()) {
-          spec.custom_sni = formData.custom_sni.trim()
-        } else {
           delete spec.custom_sni
         }
         if (formData.custom_host && formData.custom_host.trim()) {
@@ -423,10 +421,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           cdn_mode: formData.cdn_mode,
           gaming_mode: formData.gaming_mode,
           custom_host: (formData.custom_host && formData.custom_host.trim()) ? formData.custom_host.trim() : null,
-          custom_sni: (formData.custom_sni && formData.custom_sni.trim()) ? formData.custom_sni.trim() : null,
+          custom_sni: effectiveGostSni || null,
           ws_path: (formData.ws_path && formData.ws_path.trim()) ? formData.ws_path.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
-          stealth_domain: (formData.stealth_domain && formData.stealth_domain.trim()) ? formData.stealth_domain.trim() : null,
+          stealth_domain: effectiveGostSni || null,
           transport_type: formData.transport_type,
           security_type: formData.security_type,
           selector_strategy: formData.selector_strategy || 'fifo',
@@ -441,7 +439,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         }),
         ...(formData.core === 'frp' && {
           transport_type: formData.frp_transport || 'tcp',
-          security_type: formData.frp_security || 'tls',
+          security_type: formData.frp_transport === 'kcp' ? 'none' : (formData.frp_security || 'tls'),
           custom_sni: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           stealth_domain: (formData.frp_sni && formData.frp_sni.trim()) ? formData.frp_sni.trim() : null,
           is_reverse: formData.is_reverse !== false,

@@ -49,6 +49,20 @@ def sanitize_config_str(val: Any) -> str:
         return ""
     return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
 
+def _is_ip_address(val: Any) -> bool:
+    """True if val is a literal IPv4 or IPv6 address."""
+    if not val:
+        return False
+    clean = str(val).strip().strip("[]")
+    if not clean:
+        return False
+    try:
+        import ipaddress
+        ipaddress.ip_address(clean)
+        return True
+    except (ValueError, Exception):
+        return False
+
 def sanitize_spec_for_log(spec: Any) -> Any:
     """Sanitize sensitive fields (tokens, keys, passwords) before logging."""
     if not isinstance(spec, dict):
@@ -3076,6 +3090,8 @@ class FrpAdapter:
             force_tls = bool(spec.get('force_tls')) or (spec.get('security_type') in ['tls', 'force_tls']) or bool(spec.get('tls_enable'))
             if transport_proto in ['wss', 'quic']:
                 force_tls = True
+            elif transport_proto == 'kcp':
+                force_tls = False
 
             tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
 
@@ -3344,8 +3360,12 @@ loginFailExit: false
             tls_enable = spec.get('tls_enable', True) if security_type != 'none' else False
             if transport_proto in ['wss', 'quic']:
                 tls_enable = True
+            elif transport_proto == 'kcp':
+                tls_enable = False
             
-            custom_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('server_name') or os.getenv('FRP_DEFAULT_SNI')
+            raw_frp_sni = spec.get('custom_sni') or spec.get('stealth_domain') or spec.get('server_name') or os.getenv('FRP_DEFAULT_SNI')
+            clean_sni_str = str(raw_frp_sni).strip() if raw_frp_sni else None
+            custom_sni = clean_sni_str if (clean_sni_str and not _is_ip_address(clean_sni_str)) else None
             
             # Layer-2 proxy payload encryption & compression
             use_encryption = spec.get('use_encryption', True)
@@ -4072,6 +4092,7 @@ class GostAdapter:
                 or bool(spec.get("tls_cert"))
                 or bool(spec.get("tls_cert_pem"))
                 or bool(spec.get("custom_sni"))
+                or bool(spec.get("stealth_domain"))
             )
             requires_tls = (
                 security_type in ["tls", "utls"]
@@ -4216,8 +4237,14 @@ class GostAdapter:
                 dialer_metadata["host"] = str(spec.get("stealth_domain")).strip()
                 
             dialer_tls = {}
-            # custom_sni takes priority over stealth_domain
+            # custom_sni takes priority over stealth_domain; resolve unified SNI candidate
             sni_candidate = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni")
+            raw_sni_str = str(sni_candidate).strip() if sni_candidate else None
+            # RFC 6066: The SNI extension strictly requires a DNS hostname, never an IP literal.
+            # Go's crypto/tls silently strips literal IPs from the ClientHello SNI extension,
+            # which exposes the connection to Iranian DPI RST on non-standard ports.
+            domain_sni = raw_sni_str if (raw_sni_str and not _is_ip_address(raw_sni_str)) else None
+
             tls_ca_pem = spec.get("tls_ca_cert_pem") or spec.get("tls_ca")
             # Only these carriers authenticate the tunnel server itself. UDP/KCP/SSH
             # have no TLS listener, so a tunnel CA would be attached to a transport
@@ -4228,7 +4255,7 @@ class GostAdapter:
                 or (gost_type in ["ws", "mws"] and security_type in ["tls", "utls"])
                 or (
                     gost_type == "grpc"
-                    and (security_type in ["tls", "utls"] or bool(sni_candidate or tls_ca_pem))
+                    and (security_type in ["tls", "utls"] or bool(domain_sni or tls_ca_pem))
                 )
             )
             if server_terminates_tls:
@@ -4248,21 +4275,23 @@ class GostAdapter:
                         pass
                     dialer_tls["caFile"] = str(ca_path)
                     dialer_tls["secure"] = True
-                    dialer_tls["serverName"] = str(sni_candidate).strip() if sni_candidate else server_ip
-                else:
-                    # Legacy peers did not distribute a CA; keep the tunnel
-                    # working but surface that the listener is unauthenticated.
+                    dialer_tls["serverName"] = domain_sni if domain_sni else (server_ip or "www.google.com")
+                elif domain_sni:
+                    # Domain SNI without CA or unauthenticated listener
                     dialer_tls["secure"] = False
-                    if sni_candidate:
-                        dialer_tls["serverName"] = str(sni_candidate).strip()
-                    elif server_ip:
-                        dialer_tls["serverName"] = server_ip
+                    dialer_tls["serverName"] = domain_sni
+                else:
+                    # RFC 6066: Never put literal IP in serverName when unauthenticated.
+                    # Fall back to benign domain with secure=False to evade DPI RST while
+                    # preventing certificate verification failure.
+                    dialer_tls["secure"] = False
+                    dialer_tls["serverName"] = "www.google.com"
             elif security_type in ["tls", "utls"]:
                 # Pass-through TLS: the peer is the target service, not the
                 # tunnel server. Preserve the historical behaviour exactly.
                 dialer_tls["secure"] = False
-                if sni_candidate:
-                    dialer_tls["serverName"] = str(sni_candidate).strip()
+                if domain_sni:
+                    dialer_tls["serverName"] = domain_sni
                 else:
                     dialer_tls["serverName"] = "www.google.com"
 
@@ -4357,6 +4386,7 @@ class GostAdapter:
                 or bool(spec.get("tls_cert"))
                 or bool(spec.get("tls_cert_pem"))
                 or bool(spec.get("custom_sni"))
+                or bool(spec.get("stealth_domain"))
             )
             requires_tls = (
                 security_type in ["tls", "utls"]

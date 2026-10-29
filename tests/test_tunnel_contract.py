@@ -103,3 +103,19 @@ def test_router_contract_check_rejects_new_contradictory_pair():
 
     with pytest.raises(TunnelContractError):
         _contract_check("frp", "tcp", "wss", {}, "none", legacy_pair=("tcp", "none"))
+
+
+def test_frp_kcp_rejects_tls_security():
+    with pytest.raises(TunnelContractError, match="KCP transport operates over UDP and cannot be wrapped in TLS"):
+        validate_tunnel_request("frp", "tcp", "kcp", security_type="tls")
+
+    with pytest.raises(TunnelContractError, match="KCP transport operates over UDP and cannot be wrapped in TLS"):
+        validate_tunnel_request("frp", "tcp", "kcp", security_type="utls")
+
+
+def test_frp_kcp_allows_none_security():
+    result = validate_tunnel_request("frp", "tcp", "kcp", security_type="none")
+    assert result["transport"] == "kcp"
+    assert result["tls"] is False
+
+

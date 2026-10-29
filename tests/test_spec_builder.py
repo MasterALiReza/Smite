@@ -1037,6 +1037,82 @@ def test_spec_builder_chisel_port_ranges_expansion():
     assert len(s["ports"]) == 5
 
 
+def test_spec_builder_gost_stealth_domain_in_san():
+    from cryptography import x509
+
+    tunnel = DummyTunnel(
+        id="t-gost-stealth",
+        core="gost",
+        type="tcp",
+        is_reverse=True,
+        spec={
+            "ports": [8080],
+            "transport": "wss",
+            "transport_type": "wss",
+            "security_type": "tls",
+            "stealth_domain": "dl.google.com",
+        },
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["tls_cert_pem"]
+    assert c["custom_sni"] == "dl.google.com"
+    assert c["stealth_domain"] == "dl.google.com"
+
+    cert = x509.load_pem_x509_certificate(s["tls_cert_pem"].encode("utf-8"))
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    dns_names = [str(d) for d in san.get_values_for_type(x509.DNSName)]
+    assert "dl.google.com" in dns_names
+
+
+def test_spec_builder_frp_stealth_domain_in_san():
+    from cryptography import x509
+
+    tunnel = DummyTunnel(
+        id="t-frp-stealth",
+        core="frp",
+        type="tcp",
+        is_reverse=True,
+        spec={
+            "ports": [8080],
+            "transport": "tcp",
+            "frp_transport": "tcp",
+            "security_type": "tls",
+            "stealth_domain": "speedtest.net",
+        },
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["tls_cert_pem"]
+    assert c["custom_sni"] == "speedtest.net"
+    assert c["stealth_domain"] == "speedtest.net"
+    assert "stealth_domain" in tunnel.spec
+
+    cert = x509.load_pem_x509_certificate(s["tls_cert_pem"].encode("utf-8"))
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    dns_names = [str(d) for d in san.get_values_for_type(x509.DNSName)]
+    assert "speedtest.net" in dns_names
+
+
+def test_spec_builder_frp_kcp_forces_none_security():
+    tunnel = DummyTunnel(
+        id="t-frp-kcp",
+        core="frp",
+        type="tcp",
+        is_reverse=True,
+        spec={
+            "ports": [8080],
+            "transport": "kcp",
+            "frp_transport": "kcp",
+            "security_type": "tls",
+        },
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert s["security_type"] == "none"
+    assert c["security_type"] == "none"
+    assert s.get("tls_enable") is False
+    assert c.get("tls_enable") is False
+
+
+
 if __name__ == "__main__":
     import inspect
     current_module = sys.modules[__name__]
