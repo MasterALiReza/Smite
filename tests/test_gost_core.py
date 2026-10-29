@@ -858,7 +858,8 @@ async def test_gost_wss_client_verifies_distributed_ca(tmp_path, monkeypatch):
     adapter.config_dir = tmp_path
     monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
 
-    spec = {
+    # 1. With explicit domain SNI and CA: dialer sets serverName=domain, secure=True, and caFile
+    spec_with_domain = {
         "mode": "client",
         "is_reverse": False,
         "control_port": 8443,
@@ -866,6 +867,7 @@ async def test_gost_wss_client_verifies_distributed_ca(tmp_path, monkeypatch):
         "ports": [8080],
         "transport_type": "wss",
         "security_type": "tls",
+        "custom_sni": "dl.google.com",
         "tls_ca_cert_pem": "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----"
     }
 
@@ -873,14 +875,31 @@ async def test_gost_wss_client_verifies_distributed_ca(tmp_path, monkeypatch):
          patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
          patch("asyncio.sleep", new_callable=AsyncMock):
         mock_proc.return_value = MagicMock(pid=557, returncode=None)
-        await adapter.apply("wss-ca-test", spec)
+        await adapter.apply("wss-ca-domain-test", spec_with_domain)
 
-        config = json.loads((tmp_path / "wss-ca-test.json").read_text())
+        config = json.loads((tmp_path / "wss-ca-domain-test.json").read_text())
         dialer = config["chains"][0]["hops"][0]["nodes"][0]["dialer"]
 
         assert dialer["tls"]["secure"] is True
-        assert dialer["tls"]["serverName"] == "1.2.3.4"
-        assert dialer["tls"]["caFile"].endswith("gost_wss-ca-test_ca.pem")
+        assert dialer["tls"]["serverName"] == "dl.google.com"
+        assert dialer["tls"]["caFile"].endswith("gost_wss-ca-domain-test_ca.pem")
+
+        # 2. RFC 6066: Without domain SNI, raw IP 1.2.3.4 must NEVER be placed in serverName
+        spec_raw_ip = {
+            "mode": "client",
+            "is_reverse": False,
+            "control_port": 8443,
+            "server_ip": "1.2.3.4",
+            "ports": [8080],
+            "transport_type": "wss",
+            "security_type": "tls",
+            "tls_ca_cert_pem": "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----"
+        }
+        await adapter.apply("wss-ca-rawip-test", spec_raw_ip)
+        config_raw = json.loads((tmp_path / "wss-ca-rawip-test.json").read_text())
+        dialer_raw = config_raw["chains"][0]["hops"][0]["nodes"][0]["dialer"]
+        assert dialer_raw["tls"]["serverName"] == "www.google.com"
+        assert dialer_raw["tls"]["secure"] is False
 
 
 @pytest.mark.asyncio

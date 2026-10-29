@@ -1112,6 +1112,72 @@ def test_spec_builder_frp_kcp_forces_none_security():
     assert c.get("tls_enable") is False
 
 
+def test_spec_builder_frp_does_not_mutate_tunnel_spec_when_sni_absent():
+    orig_spec = {
+        "ports": [8080],
+        "transport": "tcp",
+        "frp_transport": "tcp",
+        "security_type": "tls",
+        "custom_tag": "keep_me",
+    }
+    tunnel = DummyTunnel(
+        id="t-frp-nomutate",
+        core="frp",
+        type="tcp",
+        is_reverse=True,
+        spec=orig_spec.copy(),
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert "custom_tag" in tunnel.spec
+    assert tunnel.spec["custom_tag"] == "keep_me"
+    assert "custom_sni" not in s
+    assert "stealth_domain" not in s
+
+
+def test_spec_builder_gost_does_not_mutate_tunnel_spec_when_sni_absent():
+    orig_spec = {
+        "ports": [8080],
+        "transport": "wss",
+        "transport_type": "wss",
+        "security_type": "tls",
+        "custom_marker": "preserve",
+    }
+    tunnel = DummyTunnel(
+        id="t-gost-nomutate",
+        core="gost",
+        type="tcp",
+        is_reverse=True,
+        spec=orig_spec.copy(),
+    )
+    s, c = build_tunnel_node_specs(tunnel, "1.1.1.1", "2.2.2.2")
+    assert "custom_marker" in tunnel.spec
+    assert tunnel.spec["custom_marker"] == "preserve"
+
+
+def test_spec_builder_gost_handles_ipv6_and_bracketed_addresses():
+    from cryptography import x509
+
+    tunnel = DummyTunnel(
+        id="t-gost-ipv6",
+        core="gost",
+        type="tcp",
+        is_reverse=True,
+        spec={
+            "ports": [8080],
+            "transport": "wss",
+            "transport_type": "wss",
+            "security_type": "tls",
+            "stealth_domain": "[2001:db8::1]",
+        },
+    )
+    s, c = build_tunnel_node_specs(tunnel, "2001:db8::2", "2001:db8::3")
+    assert s["tls_cert_pem"]
+    cert = x509.load_pem_x509_certificate(s["tls_cert_pem"].encode("utf-8"))
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    ips = [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+    assert "2001:db8::1" in ips or "2001:db8::2" in ips
+
+
 
 if __name__ == "__main__":
     import inspect

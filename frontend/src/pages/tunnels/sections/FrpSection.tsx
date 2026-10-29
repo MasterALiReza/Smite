@@ -101,7 +101,7 @@ export const FrpSection: React.FC<FrpSectionProps> = ({
             value={formData.frp_transport || 'tcp'}
             onChange={(val) => {
               if (val === 'kcp') {
-                onChange({ frp_transport: val, security_type: 'none' })
+                onChange({ frp_transport: val, security_type: 'none', frp_security: 'none' })
               } else {
                 onChange({ frp_transport: val })
               }

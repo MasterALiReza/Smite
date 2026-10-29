@@ -50,12 +50,18 @@ def sanitize_config_str(val: Any) -> str:
     return str(val).replace("\r", "").replace("\n", "").replace('"', "").replace("'", "").strip()
 
 def _is_ip_address(val: Any) -> bool:
-    """True if val is a literal IPv4 or IPv6 address."""
+    """True if val is a literal IPv4 or IPv6 address (with optional brackets or port)."""
     if not val:
         return False
-    clean = str(val).strip().strip("[]")
+    clean = str(val).strip()
     if not clean:
         return False
+    if clean.startswith("[") and "]" in clean:
+        clean = clean[1:clean.index("]")]
+    elif ":" in clean and clean.count(":") == 1:
+        clean = clean.split(":", 1)[0]
+    else:
+        clean = clean.strip("[]")
     try:
         import ipaddress
         ipaddress.ip_address(clean)
@@ -855,7 +861,7 @@ def is_port_listening_locally(port: int, proto: str = "any") -> bool:
             except OSError as err:
                 s.close()
                 import errno
-                if err.errno in (getattr(errno, 'EADDRINUSE', 98), 10048, getattr(errno, 'EACCES', 13)):
+                if err.errno in (getattr(errno, 'EADDRINUSE', 98), 98, 10048):
                     return True
         except Exception:
             pass
@@ -4265,25 +4271,24 @@ class GostAdapter:
                         f"GOST tunnel {tunnel_id}: uTLS is unsupported by the installed core; "
                         "falling back to standard TLS"
                     )
-                if tls_ca_pem:
-                    ca_path = self.config_dir / f"gost_{tunnel_id}_ca.pem"
-                    with open(ca_path, "w") as cf:
-                        cf.write(tls_ca_pem)
-                    try:
-                        os.chmod(ca_path, 0o600)
-                    except Exception:
-                        pass
-                    dialer_tls["caFile"] = str(ca_path)
-                    dialer_tls["secure"] = True
-                    dialer_tls["serverName"] = domain_sni if domain_sni else (server_ip or "www.google.com")
-                elif domain_sni:
-                    # Domain SNI without CA or unauthenticated listener
-                    dialer_tls["secure"] = False
+                if domain_sni:
                     dialer_tls["serverName"] = domain_sni
+                    if tls_ca_pem:
+                        ca_path = self.config_dir / f"gost_{tunnel_id}_ca.pem"
+                        with open(ca_path, "w") as cf:
+                            cf.write(tls_ca_pem)
+                        try:
+                            os.chmod(ca_path, 0o600)
+                        except Exception:
+                            pass
+                        dialer_tls["caFile"] = str(ca_path)
+                        dialer_tls["secure"] = True
+                    else:
+                        dialer_tls["secure"] = False
                 else:
-                    # RFC 6066: Never put literal IP in serverName when unauthenticated.
-                    # Fall back to benign domain with secure=False to evade DPI RST while
-                    # preventing certificate verification failure.
+                    # RFC 6066: The SNI extension strictly requires a DNS hostname, never an IP literal.
+                    # Never assign a literal IP to serverName. Fall back to benign domain with secure=False
+                    # to evade DPI RST without failing certificate verification.
                     dialer_tls["secure"] = False
                     dialer_tls["serverName"] = "www.google.com"
             elif security_type in ["tls", "utls"]:

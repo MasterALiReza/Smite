@@ -381,7 +381,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         tunnelType = spec.type
         spec.transport_type = formData.frp_transport || 'tcp'
         spec.transport = formData.frp_transport || 'tcp'
-        spec.security_type = formData.frp_security || 'tls'
+        spec.security_type = formData.frp_transport === 'kcp' ? 'none' : (formData.frp_security || 'tls')
         if (formData.frp_sni && formData.frp_sni.trim()) {
           spec.custom_sni = formData.frp_sni.trim()
           spec.stealth_domain = formData.frp_sni.trim()

@@ -108,7 +108,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     frp_local_ip: tunnel.spec?.local_ip || '127.0.0.1',
     frp_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
     frp_security: tunnel.spec?.security_type || 'tls',
-    frp_sni: tunnel.spec?.custom_sni || tunnel.spec?.stealth_domain || '',
+    frp_sni: (tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.stealth_domain || tunnel.spec?.stealth_domain || '').trim(),
     frp_encryption: tunnel.spec?.use_encryption !== false,
     frp_compression: tunnel.spec?.use_compression !== false,
     frp_health_check: tunnel.spec?.enable_health_check !== false && tunnel.spec?.health_check_type !== null,
@@ -379,7 +379,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.type = (tunnel.type === 'udp' || tunnel.type === 'tcp+udp' || tunnel.type === 'http' || tunnel.type === 'https') ? tunnel.type : 'tcp'
         updatedSpec.transport_type = formData.frp_transport || 'tcp'
         updatedSpec.transport = formData.frp_transport || 'tcp'
-        updatedSpec.security_type = formData.frp_security || 'tls'
+        updatedSpec.security_type = formData.frp_transport === 'kcp' ? 'none' : (formData.frp_security || 'tls')
         if (formData.frp_sni && formData.frp_sni.trim()) {
           updatedSpec.custom_sni = formData.frp_sni.trim()
           updatedSpec.stealth_domain = formData.frp_sni.trim()

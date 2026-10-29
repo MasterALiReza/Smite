@@ -1270,7 +1270,18 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     tls_key_pem = server_spec.get("tls_key_pem")
     if use_tls:
         server_identity_ip = iran_node_ip if is_reverse else foreign_node_ip
-        expected_dns = [custom_sni] if custom_sni else []
+        dns_candidates = [
+            d for d in [
+                custom_sni,
+                getattr(tunnel, "custom_sni", None),
+                getattr(tunnel, "stealth_domain", None),
+                server_spec.get("custom_sni"),
+                server_spec.get("stealth_domain"),
+                server_spec.get("sni"),
+            ]
+            if d and str(d).strip()
+        ]
+        expected_dns = list(dict.fromkeys([str(d).strip() for d in dns_candidates]))
         if not (tls_cert_pem and tls_key_pem) or not _cert_covers_identities(
             tls_cert_pem, expected_dns, [server_identity_ip]
         ):
@@ -1308,11 +1319,11 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                 )
 
                 san_items = []
-                if custom_sni:
+                for d in expected_dns:
                     try:
-                        san_items.append(x509.IPAddress(ipaddress.ip_address(custom_sni)))
+                        san_items.append(x509.IPAddress(ipaddress.ip_address(d)))
                     except ValueError:
-                        san_items.append(x509.DNSName(custom_sni))
+                        san_items.append(x509.DNSName(d))
                 for s_ip in [target_server_ip, iran_node_ip, foreign_node_ip]:
                     if s_ip:
                         try:
@@ -1477,9 +1488,6 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         client_spec.pop("stealth_domain", None)
         server_spec.pop("custom_sni", None)
         server_spec.pop("stealth_domain", None)
-        if tunnel.spec is not None and isinstance(tunnel.spec, dict):
-            tunnel.spec.pop("custom_sni", None)
-            tunnel.spec.pop("stealth_domain", None)
     client_spec["use_encryption"] = use_encryption
     client_spec["use_compression"] = use_compression
     client_spec["tunnel_type"] = tunnel_type
@@ -1723,9 +1731,6 @@ def build_gost_node_specs(
     if effective_sni is None:
         spec.pop("custom_sni", None)
         spec.pop("stealth_domain", None)
-        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-            tunnel.spec.pop("custom_sni", None)
-            tunnel.spec.pop("stealth_domain", None)
     else:
         spec["custom_sni"] = effective_sni
         spec["stealth_domain"] = effective_sni
