@@ -32,10 +32,16 @@ export interface Tunnel {
   error_message?: string | null
   revision: number
   category?: string | null
+  pending_changes?: Record<string, any> | null
   created_at: string
   updated_at: string
   [key: string]: any
 }
+
+// Edits waiting for an explicit apply: staged node/type changes or a changed spec
+export const hasPendingChanges = (tunnel: Tunnel): boolean =>
+  Boolean(tunnel.spec?._pending_reapply) ||
+  Boolean(tunnel.pending_changes && Object.keys(tunnel.pending_changes).length > 0)
 
 export type BackhaulTransport = 'tcp' | 'udp' | 'ws' | 'wsmux' | 'tcpmux' | 'wss' | 'wssmux'
 

@@ -161,6 +161,10 @@ async def migrate_db():
             logger.info("Adding keepalive_interval column to tunnels table")
             await conn.execute(text("ALTER TABLE tunnels ADD COLUMN keepalive_interval INTEGER DEFAULT 15"))
 
+        if "pending_changes" not in columns:
+            logger.info("Adding pending_changes column to tunnels table")
+            await conn.execute(text("ALTER TABLE tunnels ADD COLUMN pending_changes JSON"))
+
 
 async def init_db():
     """Initialize database tables"""
