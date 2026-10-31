@@ -74,6 +74,9 @@ class Tunnel(Base):
     category = Column(String, nullable=True, index=True) # Category/Group name
     selector_strategy = Column(String, default="fifo") # e.g., 'fifo', 'round', 'parallel', 'rand'
     keepalive_interval = Column(Integer, default=15)
+    # Staged node/type changes, applied atomically by tunnel_ops.apply_pending_changes.
+    # Live columns always describe what is actually running on the nodes.
+    pending_changes = Column(JSON, nullable=True)
 
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

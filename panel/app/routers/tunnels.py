@@ -14,6 +14,16 @@ from app.models import Tunnel, Node, Admin, TunnelCategory, utcnow
 from app.node_client import NodeClient
 from app.routers.auth import get_current_user
 from app.tunnel_contract import CORE_TYPES, TunnelContractError, normalize_transport, validate_tunnel_request
+from app.tunnel_ops import (
+    apply_pending_changes,
+    describe_pending,
+    effective_value,
+    is_multi_node,
+    merge_pending,
+    tunnel_lock,
+    validate_nodes,
+    validate_type,
+)
 
 
 router = APIRouter()
@@ -261,6 +271,7 @@ class TunnelResponse(BaseModel):
     category: str | None = None
     selector_strategy: str | None = "fifo"
     keepalive_interval: int | None = 15
+    pending_changes: dict | None = None
     status: str
     error_message: str | None = None
     revision: int
@@ -1711,10 +1722,12 @@ async def update_tunnel(
     tunnel_id: str,
     tunnel_update: TunnelUpdate,
     request: Request,
+    apply: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: Admin = Depends(get_current_user)
 ):
-    """Update a tunnel and re-apply if spec changed"""
+    """Update a tunnel. Node and type changes are staged in ``pending_changes``;
+    ``?apply=true`` applies the staged changes right away (with automatic rollback)."""
     from app.node_client import NodeClient
     
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
@@ -1732,6 +1745,7 @@ async def update_tunnel(
         return getattr(tunnel_update, fname, None) is not None
 
     spec_changed = False
+    multi_node = is_multi_node(tunnel)
 
     if is_field_set("spec") and tunnel_update.spec != tunnel.spec:
         spec_changed = True
@@ -1747,11 +1761,11 @@ async def update_tunnel(
         spec_changed = True
     if is_field_set("is_reverse") and tunnel_update.is_reverse is not None and tunnel_update.is_reverse != tunnel.is_reverse:
         spec_changed = True
-    if is_field_set("node_id") and (tunnel_update.node_id.strip() if tunnel_update.node_id else None) != tunnel.node_id:
+    if not multi_node and is_field_set("node_id") and (tunnel_update.node_id.strip() if tunnel_update.node_id else None) != tunnel.node_id:
         spec_changed = True
-    if is_field_set("foreign_node_id") and (tunnel_update.foreign_node_id.strip() if tunnel_update.foreign_node_id else None) != tunnel.foreign_node_id:
+    if not multi_node and is_field_set("foreign_node_id") and (tunnel_update.foreign_node_id.strip() if tunnel_update.foreign_node_id else None) != tunnel.foreign_node_id:
         spec_changed = True
-    if is_field_set("iran_node_id") and (tunnel_update.iran_node_id.strip() if tunnel_update.iran_node_id else None) != tunnel.iran_node_id:
+    if not multi_node and is_field_set("iran_node_id") and (tunnel_update.iran_node_id.strip() if tunnel_update.iran_node_id else None) != tunnel.iran_node_id:
         spec_changed = True
     if is_field_set("port_ranges") and (tunnel_update.port_ranges if tunnel_update.port_ranges else None) != tunnel.port_ranges:
         spec_changed = True
@@ -1792,7 +1806,7 @@ async def update_tunnel(
         spec_changed = True
     if is_field_set("selector_strategy") and tunnel_update.selector_strategy != tunnel.selector_strategy:
         spec_changed = True
-    if is_field_set("type") and tunnel_update.type and tunnel_update.type != tunnel.type:
+    if not multi_node and is_field_set("type") and tunnel_update.type and tunnel_update.type != tunnel.type:
         spec_changed = True
     if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval != tunnel.keepalive_interval:
         spec_changed = True
@@ -1828,13 +1842,17 @@ async def update_tunnel(
 
     if tunnel_update.name is not None:
         tunnel.name = tunnel_update.name
+    staged_request: Dict[str, Any] = {}
     if is_field_set("type") and tunnel_update.type:
         new_type = tunnel_update.type.strip().lower()
         if new_type in CORE_TYPES.get(tunnel.core, set()):
-            tunnel.type = new_type
-            if isinstance(tunnel.spec, dict):
-                tunnel.spec["type"] = new_type
-                tunnel.spec["tunnel_type"] = new_type
+            if multi_node:
+                staged_request["type"] = new_type
+            else:
+                tunnel.type = new_type
+                if isinstance(tunnel.spec, dict):
+                    tunnel.spec["type"] = new_type
+                    tunnel.spec["tunnel_type"] = new_type
     if tunnel_update.spec is not None:
         validate_tunnel_payload(tunnel_update.spec)
         # For Backhaul, ensure ports are preserved in the correct format
@@ -1890,12 +1908,20 @@ async def update_tunnel(
             if tunnel.is_reverse is not None:
                 tunnel.spec["is_reverse"] = tunnel.is_reverse
                 tunnel.spec["force_direct"] = not tunnel.is_reverse
-    if is_field_set("node_id"):
-        tunnel.node_id = tunnel_update.node_id.strip() if (tunnel_update.node_id and tunnel_update.node_id.strip()) else None
-    if is_field_set("foreign_node_id"):
-        tunnel.foreign_node_id = tunnel_update.foreign_node_id.strip() if (tunnel_update.foreign_node_id and tunnel_update.foreign_node_id.strip()) else None
-    if is_field_set("iran_node_id"):
-        tunnel.iran_node_id = tunnel_update.iran_node_id.strip() if (tunnel_update.iran_node_id and tunnel_update.iran_node_id.strip()) else None
+    if multi_node:
+        # The live node columns are never touched here: a changed node is staged and
+        # only switched by apply_pending_changes (node_id always follows the Iran node).
+        if is_field_set("iran_node_id") and tunnel_update.iran_node_id and tunnel_update.iran_node_id.strip():
+            staged_request["iran_node_id"] = tunnel_update.iran_node_id.strip()
+        if is_field_set("foreign_node_id") and tunnel_update.foreign_node_id and tunnel_update.foreign_node_id.strip():
+            staged_request["foreign_node_id"] = tunnel_update.foreign_node_id.strip()
+    else:
+        if is_field_set("node_id"):
+            tunnel.node_id = tunnel_update.node_id.strip() if (tunnel_update.node_id and tunnel_update.node_id.strip()) else None
+        if is_field_set("foreign_node_id"):
+            tunnel.foreign_node_id = tunnel_update.foreign_node_id.strip() if (tunnel_update.foreign_node_id and tunnel_update.foreign_node_id.strip()) else None
+        if is_field_set("iran_node_id"):
+            tunnel.iran_node_id = tunnel_update.iran_node_id.strip() if (tunnel_update.iran_node_id and tunnel_update.iran_node_id.strip()) else None
     if is_field_set("port_ranges"):
         if tunnel_update.port_ranges:
             validate_tunnel_payload({"port_ranges": tunnel_update.port_ranges})
@@ -1975,13 +2001,38 @@ async def update_tunnel(
     if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval is not None:
         tunnel.keepalive_interval = tunnel_update.keepalive_interval
         
-    if spec_changed or tunnel_update.spec is not None:
+    staged_changed = False
+    if multi_node and staged_request:
+        previous_pending = dict(tunnel.pending_changes or {})
+        new_pending = merge_pending(tunnel, staged_request)
+        if new_pending:
+            tunnel.pending_changes = new_pending
+            eff_iran = effective_value(tunnel, "iran_node_id")
+            eff_foreign = effective_value(tunnel, "foreign_node_id")
+            if "iran_node_id" in new_pending or "foreign_node_id" in new_pending:
+                await validate_nodes(db, eff_iran, eff_foreign)
+            if "type" in new_pending:
+                validate_type(tunnel.core, new_pending["type"])
+        else:
+            tunnel.pending_changes = None
+        staged_changed = new_pending != previous_pending
+
+    if spec_changed or staged_changed or tunnel_update.spec is not None:
+        if multi_node:
+            eff_type = effective_value(tunnel, "type")
+            check_spec = {**(tunnel.spec or {}), "type": eff_type, "tunnel_type": eff_type}
+            check_iran = effective_value(tunnel, "iran_node_id")
+            check_foreign = effective_value(tunnel, "foreign_node_id")
+            check_node = check_iran
+        else:
+            check_spec = tunnel.spec or {}
+            check_iran, check_foreign, check_node = tunnel.iran_node_id, tunnel.foreign_node_id, tunnel.node_id
         await check_port_conflicts(
             db=db,
-            spec=tunnel.spec or {},
-            iran_node_id=tunnel.iran_node_id,
-            foreign_node_id=tunnel.foreign_node_id,
-            node_id=tunnel.node_id,
+            spec=check_spec,
+            iran_node_id=check_iran,
+            foreign_node_id=check_foreign,
+            node_id=check_node,
             exclude_tunnel_id=tunnel.id,
             core=tunnel.core,
             is_reverse=tunnel.is_reverse
@@ -2013,18 +2064,71 @@ async def update_tunnel(
         await db.commit()
         await db.refresh(tunnel)
         logger.info(f"Tunnel {tunnel_id} spec updated and staged (_pending_reapply=True). Live running tunnel is untouched until explicit Reapply.")
+
+    if apply:
+        await _apply_locked(tunnel_id, request, db, current_user)
+        await db.refresh(tunnel)
     
     return tunnel
 
 
+@router.get("/{tunnel_id}/pending")
+async def get_pending_changes(tunnel_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Staged node/type changes and what applying them would do."""
+    result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
+    tunnel = result.scalar_one_or_none()
+    if not tunnel:
+        raise HTTPException(status_code=404, detail="Tunnel not found")
+    plan = await describe_pending(db, tunnel)
+    return {"pending_changes": tunnel.pending_changes or {}, "plan": plan}
+
+
+@router.delete("/{tunnel_id}/pending")
+async def discard_pending_changes(tunnel_id: str, db: AsyncSession = Depends(get_db), current_user: Admin = Depends(get_current_user)):
+    """Throw away staged node/type changes; the running tunnel is untouched."""
+    async with tunnel_lock(tunnel_id):
+        result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
+        tunnel = result.scalar_one_or_none()
+        if not tunnel:
+            raise HTTPException(status_code=404, detail="Tunnel not found")
+        tunnel.pending_changes = None
+        await db.commit()
+    return {"status": "discarded"}
+
+
+async def _apply_locked(tunnel_id: str, request: Request, db: AsyncSession, current_user: Optional[Admin]):
+    """Serialize applies of one tunnel (user actions and background jobs never overlap on it)."""
+    async with tunnel_lock(tunnel_id):
+        return await _apply_tunnel_impl(tunnel_id, request, db, current_user)
+
+
 @router.post("/{tunnel_id}/apply")
 async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depends(get_db), current_user: Optional[Admin] = Depends(get_current_user)):
-    """Apply tunnel configuration to node(s) - handles both single-node and reverse tunnels"""
+    """Apply tunnel configuration to node(s), including staged node/type changes"""
+    return await _apply_locked(tunnel_id, request, db, current_user)
+
+
+async def _apply_tunnel_impl(tunnel_id: str, request: Request, db: AsyncSession, current_user: Optional[Admin], _skip_pending: bool = False):
+    """Push the tunnel's configuration to its node(s) - single-node and reverse tunnels.
+
+    Staged node/type changes are routed through apply_pending_changes, which calls back
+    into this function (with _skip_pending) to push the candidate and, on failure, the
+    previous configuration.
+    """
     result = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
     tunnel = result.scalar_one_or_none()
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
     
+    if tunnel.pending_changes and not _skip_pending:
+        return await apply_pending_changes(
+            db,
+            tunnel,
+            lambda: _apply_tunnel_impl(tunnel_id, request, db, current_user, _skip_pending=True),
+            NodeClient(),
+            check_port_conflicts,
+        )
+
     client = NodeClient()
     
     is_multi_node_tunnel = tunnel.core in {"rathole", "backhaul", "chisel", "frp"} or (
@@ -2465,7 +2569,9 @@ async def reapply_all_tunnels(request: Request, db: AsyncSession = Depends(get_d
     
     for tunnel in tunnels:
         try:
-            result_data = await apply_tunnel(tunnel.id, request, db, current_user=current_user)
+            # Bulk re-apply pushes what is live; staged node/type changes need an explicit apply
+            async with tunnel_lock(tunnel.id):
+                result_data = await _apply_tunnel_impl(tunnel.id, request, db, current_user, _skip_pending=True)
             if result_data and result_data.get("status") in ["applied", "success"]:
                 applied += 1
             else:

@@ -10,7 +10,7 @@ import { CustomSelect } from '../components/CustomSelect'
 
 import {
   Tunnel, TunnelCategory, ReapplyStatus, TunnelReapplyState,
-  getBackhaulDisplayInfo, getCategoryColorClasses
+  getBackhaulDisplayInfo, getCategoryColorClasses, hasPendingChanges
 } from './tunnels/types'
 import EditTunnelModal from './tunnels/EditTunnelModal'
 import AddTunnelModal from './tunnels/AddTunnelModal'
@@ -26,6 +26,18 @@ const Tunnels = () => {
   const [tunnels, setTunnels] = useState<Tunnel[]>(_cachedTunnels)
   const [nodes, setNodes] = useState<any[]>(_cachedTunnelsIranNodes)
   const [servers, setServers] = useState<any[]>(_cachedTunnelsForeignServers)
+
+  // Tooltip for the "Pending" badge: name the staged server/type change, if any
+  const pendingTitle = (tunnel: Tunnel): string => {
+    const staged = tunnel.pending_changes || {}
+    const nameOf = (id?: string) => [...nodes, ...servers].find((n: any) => n.id === id)?.name || (id ? id.slice(0, 8) : '-')
+    const parts: string[] = []
+    if (staged.iran_node_id) parts.push(`${isRTL ? 'سرور ایران' : 'Iran server'}: ${nameOf(tunnel.iran_node_id || tunnel.node_id)} → ${nameOf(staged.iran_node_id)}`)
+    if (staged.foreign_node_id) parts.push(`${isRTL ? 'سرور خارج' : 'Foreign server'}: ${nameOf(tunnel.foreign_node_id)} → ${nameOf(staged.foreign_node_id)}`)
+    if (staged.type) parts.push(`${isRTL ? 'نوع' : 'Type'}: ${tunnel.type} → ${staged.type}`)
+    const base = isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."
+    return parts.length ? `${parts.join(' | ')} | ${base}` : base
+  }
   const [loading, setLoading] = useState(_cachedTunnels.length === 0)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingTunnel, setEditingTunnel] = useState<Tunnel | null>(null)
@@ -1236,10 +1248,10 @@ const Tunnels = () => {
                           </span>
 
                           {/* Pending Badge */}
-                          {Boolean(tunnel.spec?._pending_reapply) && (
+                          {hasPendingChanges(tunnel) && (
                             <span
                               className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse shrink-0"
-                              title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
+                              title={pendingTitle(tunnel)}
                             >
                               {t.tunnels.pendingChanges || 'Pending'}
                             </span>
@@ -1272,17 +1284,17 @@ const Tunnels = () => {
                             onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                             disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                             className={`p-1.5 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer ${
-                              Boolean(tunnel.spec?._pending_reapply)
+                              hasPendingChanges(tunnel)
                                 ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
                                 : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                             }`}
-                            title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                            title={hasPendingChanges(tunnel) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
                             aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                           >
                             {isReapplying ? (
                               <Loader2 size={16} className="animate-spin" />
                             ) : (
-                              <RotateCw size={16} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                              <RotateCw size={16} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
                             )}
                           </button>
                           <button
@@ -1434,17 +1446,17 @@ const Tunnels = () => {
                         onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                         className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
-                          Boolean(tunnel.spec?._pending_reapply)
+                          hasPendingChanges(tunnel)
                             ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
                             : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/20'
                         }`}
-                        title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                        title={hasPendingChanges(tunnel) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
                         aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                       >
                         {isReapplying ? (
                           <Loader2 size={18} className="animate-spin" />
                         ) : (
-                          <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                          <RotateCw size={18} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
                         )}
                       </button>
 
@@ -1523,10 +1535,10 @@ const Tunnels = () => {
                         </span>
 
                         {/* Pending Badge */}
-                        {Boolean(tunnel.spec?._pending_reapply) && (
+                        {hasPendingChanges(tunnel) && (
                           <span
                             className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse shrink-0"
-                            title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
+                            title={pendingTitle(tunnel)}
                           >
                             {t.tunnels.pendingChanges || 'Pending'}
                           </span>
@@ -1574,10 +1586,10 @@ const Tunnels = () => {
                               }`} />
                               {tunnel.status}
                             </span>
-                            {Boolean(tunnel.spec?._pending_reapply) && (
+                            {hasPendingChanges(tunnel) && (
                               <span
                                 className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
-                                title={isRTL ? "پیکربندی تغییر کرده است. برای اعمال روی «اعمال مجدد» کلیک کنید." : "Configuration modified. Click Reapply to apply changes to live core."}
+                                title={pendingTitle(tunnel)}
                               >
                                 {t.tunnels.pendingChanges || 'Pending'}
                               </span>
@@ -1702,17 +1714,17 @@ const Tunnels = () => {
                           onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                           disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                           className={`p-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer ${
-                            Boolean(tunnel.spec?._pending_reapply)
+                            hasPendingChanges(tunnel)
                               ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs hover:bg-amber-500/25'
                               : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20'
                           }`}
-                          title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                          title={hasPendingChanges(tunnel) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
                           aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                         >
                           {isReapplying ? (
                             <Loader2 size={18} className="animate-spin" />
                           ) : (
-                            <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                            <RotateCw size={18} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
                           )}
                         </button>
                         <button
@@ -1766,17 +1778,17 @@ const Tunnels = () => {
                         onClick={(e) => { e.stopPropagation(); reapplyTunnel(tunnel); }}
                         disabled={isReapplying || isDeleting || !!reapplyingTunnelId}
                         className={`h-11 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer border ${
-                          Boolean(tunnel.spec?._pending_reapply)
+                          hasPendingChanges(tunnel)
                             ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 border-amber-500/30 ring-2 ring-amber-500/20 shadow-xs'
                             : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/20'
                         }`}
-                        title={Boolean(tunnel.spec?._pending_reapply) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
+                        title={hasPendingChanges(tunnel) ? (isRTL ? 'اعمال تغییرات روی هسته' : 'Reapply pending changes to core') : (t.tunnels.reapplyTunnel || 'Reapply tunnel')}
                         aria-label={t.tunnels.reapplyTunnel || 'Reapply tunnel'}
                       >
                         {isReapplying ? (
                           <Loader2 size={18} className="animate-spin" />
                         ) : (
-                          <RotateCw size={18} className={Boolean(tunnel.spec?._pending_reapply) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                          <RotateCw size={18} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
                         )}
                       </button>
 
@@ -2198,7 +2210,7 @@ const Tunnels = () => {
       {editingTunnel && (
         <EditTunnelModal
           tunnel={editingTunnel}
-          nodes={nodes}
+          nodes={[...nodes, ...servers]}
           categories={categories}
           onCategoryCreated={createCategory}
           onClose={() => setEditingTunnel(null)}

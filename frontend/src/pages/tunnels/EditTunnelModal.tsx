@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { 
   X, Loader2, AlertTriangle, ShieldCheck, Gamepad2, Settings2, Sliders, Globe,
   Network, Cpu, Radio, Key, Lock, EyeOff, Gauge, Server, Terminal, RefreshCw, Zap,
@@ -24,7 +24,7 @@ import {
   BackhaulAdvancedState, BackhaulAdvancedServerState, BackhaulAdvancedClientState,
   generateRandomControlPort, createDefaultBackhaulState, createDefaultBackhaulAdvancedState, resetGamingAdvanced,
   numericServerKeys, booleanServerKeys, stringServerKeys,
-  numericClientKeys, booleanClientKeys, stringClientKeys, getCategoryColorClasses
+  numericClientKeys, booleanClientKeys, stringClientKeys, getCategoryColorClasses, hasPendingChanges
 } from './types'
 
 interface EditTunnelModalProps {
@@ -39,6 +39,14 @@ interface EditTunnelModalProps {
 const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, onClose, onSuccess }: EditTunnelModalProps) => {
   const { t } = useLanguage()
   const { showToast } = useToast()
+  const applyAfterSave = useRef(false)
+  const multiNode = tunnel.core !== 'gost' || Boolean(tunnel.iran_node_id || tunnel.foreign_node_id)
+  const nodeOptions = (role: string) => nodes
+    .filter((n: any) => n.metadata?.role === role)
+    .map((n: any) => ({ value: n.id, label: `${n.name}${n.metadata?.ip_address ? ` (${n.metadata.ip_address})` : ''}`, badge: n.status }))
+  const typeOptions = tunnel.core === 'chisel'
+    ? ['tcp', 'udp', 'tcp+udp', 'socks5']
+    : tunnel.core === 'frp' ? ['tcp', 'udp', 'tcp+udp', 'http', 'https'] : ['tcp', 'udp', 'tcp+udp']
   const forwardToParsed = tunnel.spec?.forward_to ? parseAddressPort(tunnel.spec.forward_to) : null
   const remoteIp = tunnel.spec?.remote_ip || forwardToParsed?.host || '127.0.0.1'
   const remotePort = tunnel.spec?.remote_port || forwardToParsed?.port || 8080
@@ -77,10 +85,10 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
   
   const [formData, setFormData] = useState({
     name: tunnel.name,
-    type: tunnel.type || 'tcp',
+    type: tunnel.pending_changes?.type || tunnel.type || 'tcp',
     node_id: tunnel.node_id || '',
-    iran_node_id: tunnel.iran_node_id || tunnel.node_id || '',
-    foreign_node_id: tunnel.foreign_node_id || '',
+    iran_node_id: tunnel.pending_changes?.iran_node_id || tunnel.iran_node_id || tunnel.node_id || '',
+    foreign_node_id: tunnel.pending_changes?.foreign_node_id || tunnel.foreign_node_id || '',
     ports: (() => {
       const basePorts = parsePortsFromSpec(tunnel.spec || {})
       const ranges = tunnel.port_ranges || tunnel.spec?.port_ranges
@@ -142,7 +150,12 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
   })
   const [showInlineNewCategory, setShowInlineNewCategory] = useState(false)
   const [inlineCategoryName, setInlineCategoryName] = useState('')
-  const parsedBackhaul = parseBackhaulSpec(tunnel.spec, tunnel.type)
+  // A staged type change wins over the live spec (accept_udp is derived from the type)
+  const stagedType: string | undefined = tunnel.pending_changes?.type
+  const parsedBackhaul = parseBackhaulSpec(
+    stagedType ? { ...tunnel.spec, accept_udp: undefined } : tunnel.spec,
+    stagedType || tunnel.type
+  )
   const [backhaulState, setBackhaulState] = useState<BackhaulFormState>(parsedBackhaul.state)
   const [backhaulAdvanced, setBackhaulAdvanced] = useState<BackhaulAdvancedState>(parsedBackhaul.advanced)
   const [showBackhaulAdvanced, setShowBackhaulAdvanced] = useState(false)
@@ -197,8 +210,31 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     }
   }
 
+  const discardPending = async () => {
+    try {
+      await api.delete(`/tunnels/${tunnel.id}/pending`)
+      showToast('success', 'Discarded', 'Staged server/type changes were discarded.')
+      onSuccess()
+    } catch (error: any) {
+      showToast('error', 'Error', error.response?.data?.detail || 'Failed to discard changes')
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    const applying = applyAfterSave.current
+    applyAfterSave.current = false
+    if (applying && multiNode) {
+      const liveIran = tunnel.iran_node_id || tunnel.node_id || ''
+      const liveForeign = tunnel.foreign_node_id || ''
+      const nodesChanged = (formData.iran_node_id || liveIran) !== liveIran || (formData.foreign_node_id || liveForeign) !== liveForeign
+      const typeChanged = tunnel.core !== 'backhaul' && (formData.type || tunnel.type) !== tunnel.type
+      if ((nodesChanged || typeChanged) && !window.confirm(
+        'Apply now? The tunnel is moved to the selected server(s)/type with a few seconds of interruption. '
+        + (nodesChanged ? 'Its token and certificates are re-issued, so the old server stops working for this tunnel. ' : '')
+        + 'If anything fails the previous configuration is restored automatically.'
+      )) return
+    }
     try {
       const effectiveGostSni = (String(formData.custom_sni || '').trim() || String(formData.stealth_domain || '').trim())
       let updatedSpec: Record<string, any> = { ...tunnel.spec, use_ipv6: formData.use_ipv6 }
@@ -434,6 +470,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         name: formData.name,
         category: formData.category ? formData.category.trim() : null,
         spec: updatedSpec,
+        ...(tunnel.core !== 'gost' && tunnel.core !== 'backhaul' && { type: formData.type || tunnel.type }),
         transport_type: tunnel.core === 'backhaul'
           ? (backhaulState.transport || 'tcpmux')
           : (tunnel.core === 'rathole' ? (formData.rathole_transport || 'tcp') : (tunnel.core === 'frp' ? (formData.frp_transport || 'tcp') : (tunnel.core === 'chisel' ? (formData.chisel_transport || 'ws') : formData.transport_type))),
@@ -490,8 +527,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         node_id: (formData.is_reverse !== false) ? (formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id) : (formData.foreign_node_id || tunnel.foreign_node_id || tunnel.node_id),
         iran_node_id: formData.iran_node_id || tunnel.iran_node_id || tunnel.node_id || undefined,
         foreign_node_id: formData.foreign_node_id || tunnel.foreign_node_id || undefined
-      })
-      showToast('success', 'Configuration Saved', `${formData.name} was saved safely. Active tunnel remains live until you click Reapply.`)
+      }, applying ? { params: { apply: true } } : undefined)
+      showToast(
+        'success',
+        applying ? 'Applied' : 'Configuration Saved',
+        applying
+          ? `${formData.name} was saved and applied.`
+          : `${formData.name} was saved safely. Active tunnel remains live until you click Reapply.`
+      )
       onSuccess()
     } catch (error: any) {
       console.error('Failed to update tunnel:', error)
@@ -540,6 +583,55 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                 <span>Zero-Downtime: Saving changes will not drop live connections until you click Reapply.</span>
               </p>
             </div>
+            {multiNode && (
+              <div className="p-3.5 border border-gray-200 dark:border-gray-700 rounded-xl space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                    <Server size={14} className="text-blue-500" />
+                    Servers {tunnel.core !== 'gost' && tunnel.core !== 'backhaul' ? '& Type' : ''}
+                  </span>
+                  {hasPendingChanges(tunnel) && tunnel.pending_changes && Object.keys(tunnel.pending_changes).length > 0 && (
+                    <button type="button" onClick={discardPending} className="text-xs text-amber-700 dark:text-amber-400 underline cursor-pointer">
+                      Discard staged changes
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Iran server</label>
+                    <CustomSelect
+                      value={formData.iran_node_id}
+                      onChange={(val) => setFormData({ ...formData, iran_node_id: val })}
+                      options={nodeOptions('iran')}
+                      placeholder="Select Iran server"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Foreign server</label>
+                    <CustomSelect
+                      value={formData.foreign_node_id}
+                      onChange={(val) => setFormData({ ...formData, foreign_node_id: val })}
+                      options={nodeOptions('foreign')}
+                      placeholder="Select foreign server"
+                    />
+                  </div>
+                </div>
+                {tunnel.core !== 'gost' && tunnel.core !== 'backhaul' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Tunnel type</label>
+                    <CustomSelect
+                      value={formData.type}
+                      onChange={(val) => setFormData({ ...formData, type: val })}
+                      options={typeOptions.map((v) => ({ value: v, label: v.toUpperCase() }))}
+                    />
+                  </div>
+                )}
+                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                  Changes to servers or type are staged: the running tunnel is untouched until you use <b>Save &amp; Apply</b> (or Reapply).
+                  Applying restores the previous setup automatically if it fails. Changing a server re-issues the token and certificates.
+                </p>
+              </div>
+            )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -851,6 +943,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
                 className="px-3.5 sm:px-4 py-2 sm:py-2.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 text-xs sm:text-sm font-semibold transition-all shadow-xs cursor-pointer min-h-[44px]"
               >
                 {t.tunnels.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={isTestingConfig}
+                onClick={() => { applyAfterSave.current = true }}
+                className="px-4 sm:px-5 py-2 sm:py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-emerald-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5 min-h-[44px]"
+              >
+                Save &amp; Apply
               </button>
               <button
                 type="submit"

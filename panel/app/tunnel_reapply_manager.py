@@ -357,6 +357,11 @@ class TunnelReapplyManager:
 
     async def _reapply_tunnel_safe(self, tunnel: Tunnel, session: AsyncSession, client: NodeClient) -> bool:
         """Safely re-apply a single tunnel to its node(s)"""
+        from app.tunnel_ops import tunnel_lock
+
+        if tunnel_lock(tunnel.id).locked():
+            logger.info(f"Tunnel {tunnel.id}: an apply is in progress, skipping background reapply")
+            return False
         from app.mutation_guard import mutation_guard
 
         if mutation_guard.is_engaged():
