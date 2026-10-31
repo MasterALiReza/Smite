@@ -1801,6 +1801,26 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         return iran_spec, foreign_spec
 
 
+def _gost_node_ports(spec: Dict[str, Any], ports: List[Any], target_host: str) -> List[Any]:
+    """Port list sent to the GOST node.
+
+    A single-port tunnel whose remote_port differs from its listen port forwards to
+    target_host:remote_port, encoded as "listen=host:target" (understood by the node agent).
+    Every other tunnel keeps plain ports, which the node forwards to the same port.
+    """
+    if len(ports) != 1 or spec.get("port_ranges"):
+        return ports
+    try:
+        listen_port = int(ports[0])
+        target_port = int(spec.get("remote_port"))
+    except (TypeError, ValueError):
+        return ports
+    if target_port == listen_port or not 1 <= target_port <= 65535:
+        return ports
+    host = f"[{target_host}]" if ":" in target_host and not target_host.startswith("[") else target_host
+    return [f"{listen_port}={host}:{target_port}"]
+
+
 def build_gost_node_specs(
     tunnel,
     iran_node_ip: str,
@@ -1956,7 +1976,7 @@ def build_gost_node_specs(
         "transport": transport_type,
         "transport_type": transport_type,
         "security_type": security_type,
-        "ports": ports,
+        "ports": _gost_node_ports(spec, ports, target_host),
         "cdn_mode": cdn_mode,
         "gaming_mode": gaming_mode,
         "custom_host": custom_host,

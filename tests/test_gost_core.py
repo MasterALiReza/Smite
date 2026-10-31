@@ -1231,3 +1231,41 @@ async def test_gost_adapter_rfc6066_and_stealth_domain(tmp_path, monkeypatch):
 
 
 
+
+
+@pytest.mark.parametrize("spec,expected", [
+    ({"ports": [47913], "remote_port": 22, "remote_ip": "127.0.0.1"}, ["47913=127.0.0.1:22"]),
+    ({"ports": [2095], "remote_port": 2095, "remote_ip": "127.0.0.1"}, [2095]),       # same port: unchanged
+    ({"ports": [2095], "remote_ip": "127.0.0.1"}, [2095]),                            # no remote_port
+    ({"ports": [80, 443], "remote_port": 22, "remote_ip": "127.0.0.1"}, [80, 443]),   # multi-port: per-port targets
+    ({"ports": [5000], "remote_port": 53, "remote_ip": "::1"}, ["5000=[::1]:53"]),
+    ({"ports": [5000], "remote_port": 53, "remote_ip": "2.2.2.2"}, ["5000=127.0.0.1:53"]),  # foreign IP -> local
+    ({"ports": [5000], "remote_port": 70000, "remote_ip": "127.0.0.1"}, [5000]),       # invalid target ignored
+])
+def test_gost_node_specs_honor_remote_port(spec, expected):
+    tunnel = DummyTunnel(spec={"is_reverse": True, "auth_token": "t", **spec})
+    server_spec, client_spec = build_gost_node_specs(tunnel, iran_node_ip="1.1.1.1", foreign_node_ip="2.2.2.2")
+    assert server_spec["ports"] == expected and client_spec["ports"] == expected
+    assert tunnel.spec["ports"] == spec["ports"]          # stored spec keeps plain listen ports
+    assert parse_ports_list(tunnel.spec) == spec["ports"]
+
+
+@pytest.mark.asyncio
+async def test_gost_adapter_forwards_to_remote_port(tmp_path, monkeypatch):
+    """The node listens on the tunnel port and forwards to target_host:remote_port"""
+    tunnel = DummyTunnel(spec={"is_reverse": True, "auth_token": "t", "control_port": 30111,
+                               "ports": [47913], "remote_port": 22, "remote_ip": "127.0.0.1"})
+    _, client_spec = build_gost_node_specs(tunnel, iran_node_ip="1.1.1.1", foreign_node_ip="2.2.2.2")
+
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=4321, returncode=None)
+        await adapter.apply("tun-rp", client_spec)
+
+    config = json.loads((tmp_path / "tun-rp.json").read_text())
+    svc = config["services"][0]
+    assert svc["addr"].endswith(":47913")
+    assert [n["addr"] for n in svc["forwarder"]["nodes"]] == ["127.0.0.1:22"]

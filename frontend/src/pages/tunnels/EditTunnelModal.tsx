@@ -336,7 +336,11 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.ports = ports
         updatedSpec.port_ranges = port_ranges
         const fallbackPort = ports.length > 0 ? ports[0] : (port_ranges.length > 0 ? parseInt(port_ranges[0].split('-')[0]) : 8080)
-        updatedSpec.remote_port = fallbackPort  // Keep for backward compatibility
+        // A single-port tunnel may forward to a different target port (remote_port); keep it
+        const liveTargetPort = Number(tunnel.spec?.remote_port)
+        const keepTargetPort = ports.length === 1 && port_ranges.length === 0 && liveTargetPort > 0
+          && liveTargetPort !== Number(tunnel.spec?.listen_port ?? tunnel.spec?.ports?.[0])
+        updatedSpec.remote_port = keepTargetPort ? liveTargetPort : fallbackPort
         updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
         updatedSpec.is_reverse = Boolean(formData.is_reverse)
         updatedSpec.force_direct = !formData.is_reverse
