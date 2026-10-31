@@ -980,17 +980,68 @@ class RatholeAdapter:
         return transport, use_websocket, use_noise, websocket_tls
 
     @staticmethod
-    def _effective_ports(spec: Dict[str, Any]) -> List[Any]:
-        ports = spec.get('ports') or []
+    def _extract_ports(spec: Dict[str, Any]) -> List[int]:
+        """Extract and expand all ports and port_ranges from Rathole spec up to 500 ports"""
+        ports: List[int] = []
+        candidates = []
+        raw_ports = spec.get('ports')
+        if raw_ports is not None:
+            if isinstance(raw_ports, (list, tuple, set)):
+                candidates.extend(raw_ports)
+            else:
+                candidates.append(raw_ports)
+        raw_ranges = spec.get('port_ranges')
+        if raw_ranges is not None:
+            if isinstance(raw_ranges, (list, tuple, set)):
+                candidates.extend(raw_ranges)
+            else:
+                candidates.append(raw_ranges)
+
+        for item in candidates:
+            if item is None:
+                continue
+            parts = re.split(r'[\r\n,]+', str(item)) if isinstance(item, str) and (',' in item or '\n' in item or '\r' in item) else [item]
+            for part in parts:
+                if isinstance(part, dict):
+                    val = part.get('remote') or part.get('remote_port') or part.get('local') or part.get('local_port') or part.get('port')
+                    if val is not None and str(val).isdigit():
+                        p_val = int(val)
+                        if 1 <= p_val <= 65535 and p_val not in ports:
+                            ports.append(p_val)
+                elif isinstance(part, str) and '=' in part:
+                    left = part.split('=', 1)[0].strip()
+                    if ':' in left:
+                        left = left.rsplit(':', 1)[-1].strip()
+                    if left.isdigit():
+                        p_val = int(left)
+                        if 1 <= p_val <= 65535 and p_val not in ports:
+                            ports.append(p_val)
+                elif isinstance(part, str) and '-' in part:
+                    sub_parts = part.split('-', 1)
+                    if sub_parts[0].strip().isdigit() and sub_parts[1].strip().isdigit():
+                        s_p, e_p = int(sub_parts[0].strip()), int(sub_parts[1].strip())
+                        if 1 <= s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
+                            for rp in range(s_p, e_p + 1):
+                                if rp not in ports:
+                                    ports.append(rp)
+                elif isinstance(part, (int, str)) and str(part).strip().isdigit():
+                    p_val = int(str(part).strip())
+                    if 1 <= p_val <= 65535 and p_val not in ports:
+                        ports.append(p_val)
+        return ports
+
+    @classmethod
+    def _effective_ports(cls, spec: Dict[str, Any]) -> List[int]:
+        ports = cls._extract_ports(spec)
         if not ports:
             proxy_port = spec.get('proxy_port') or spec.get('remote_port') or spec.get('listen_port')
-            if proxy_port:
-                ports = [proxy_port]
+            if proxy_port and str(proxy_port).strip().isdigit():
+                ports = [int(str(proxy_port).strip())]
         if not ports:
             local_addr = spec.get('local_addr', '127.0.0.1:8080')
             _, local_port, _ = parse_address_port(local_addr)
             ports = [local_port or 8080]
-        return list(ports)
+        return ports
 
     @staticmethod
     def _validate_ports(ports: Iterable[Any]) -> List[int]:
@@ -1057,17 +1108,14 @@ class RatholeAdapter:
             bind_addr = spec.get('bind_addr', '0.0.0.0:23333')
             token = spec.get('token', '').strip()
             
-            ports = spec.get('ports') or []
-            if not ports:
-                proxy_port = spec.get('proxy_port') or spec.get('remote_port') or spec.get('listen_port')
-                if proxy_port:
-                    ports = [int(proxy_port) if isinstance(proxy_port, (int, str)) and str(proxy_port).isdigit() else proxy_port]
+            ports = self._effective_ports(spec)
             
             token = sanitize_config_str(token)
             if not token:
                 raise ValueError("Rathole server requires 'token' in spec")
             if not ports:
                 raise ValueError("Rathole server requires 'ports' array or 'proxy_port'/'remote_port' in spec")
+
             
             bind_host, bind_port, is_ipv6 = parse_address_port(bind_addr)
             if not bind_port:
@@ -1123,12 +1171,14 @@ tls = {tls_val}
                     elif not pfx_path.exists():
                         raise ValueError(f"Rathole server in WSS mode requires 'tls_pkcs12_b64' or {pfx_path}")
 
+                    pfx_posix = pfx_path.resolve().as_posix()
                     config += f"""
 [server.transport.tls]
-pkcs12 = "{pfx_path}"
+pkcs12 = "{pfx_posix}"
 pkcs12_password = "{sanitize_config_str(pfx_pwd)}"
 """
             
+            service_bind_ip = "[::]" if spec.get("use_ipv6") else "0.0.0.0"
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
@@ -1136,27 +1186,28 @@ pkcs12_password = "{sanitize_config_str(pfx_pwd)}"
                 if tunnel_type == 'tcp+udp':
                     config += f"""
 [server.services.{base_service_name}_tcp]
-bind_addr = "0.0.0.0:{port_num}"
+bind_addr = "{service_bind_ip}:{port_num}"
 nodelay = true
 
 [server.services.{base_service_name}_udp]
-bind_addr = "0.0.0.0:{port_num}"
+bind_addr = "{service_bind_ip}:{port_num}"
 type = "udp"
 nodelay = true
 """
                 elif tunnel_type == 'udp':
                     config += f"""
 [server.services.{base_service_name}]
-bind_addr = "0.0.0.0:{port_num}"
+bind_addr = "{service_bind_ip}:{port_num}"
 type = "udp"
 nodelay = true
 """
                 else:
                     config += f"""
 [server.services.{base_service_name}]
-bind_addr = "0.0.0.0:{port_num}"
+bind_addr = "{service_bind_ip}:{port_num}"
 nodelay = true
 """
+
             
             config_path = self.config_dir / f"{tunnel_id}.toml"
             with open(config_path, "w", encoding="utf-8") as f:
@@ -1169,17 +1220,9 @@ nodelay = true
             remote_addr = spec.get('remote_addr', '').strip()
             token = spec.get('token', '').strip()
             
-            # Support multiple ports
-            ports = spec.get('ports') or []
-            if not ports:
-                # Fallback to single port for backward compatibility
-                local_addr = spec.get('local_addr', '127.0.0.1:8080')
-                # Extract port from local_addr
-                _, local_port, _ = parse_address_port(local_addr)
-                if local_port:
-                    ports = [local_port]
-                else:
-                    ports = [8080]
+            # Support multiple ports and port ranges
+            ports = self._effective_ports(spec)
+
             
             if not remote_addr:
                 raise ValueError("Rathole client requires 'remote_addr' (foreign server address) in spec")
@@ -1251,16 +1294,27 @@ tls = {tls_val}
 [client.transport.tls]
 """
                     if ca_path.exists():
-                        config += f'trusted_root = "{ca_path}"\n'
+                        config += f'trusted_root = "{ca_path.resolve().as_posix()}"\n'
                     if sni:
                         config += f'hostname = "{sni}"\n'
             
-            target_host = spec.get("target_host") or spec.get("local_host") or "127.0.0.1"
+            use_ipv6 = bool(spec.get("use_ipv6"))
+            target_host = spec.get("target_host") or spec.get("local_host")
+            if not target_host:
+                target_host = "::1" if use_ipv6 else "127.0.0.1"
+            elif use_ipv6 and str(target_host).strip() in ("127.0.0.1", "localhost"):
+                target_host = "::1"
+
             # Create multiple service sections for multiple ports
             for i, port in enumerate(ports):
                 port_num = int(port) if isinstance(port, (int, str)) and str(port).isdigit() else port
                 base_service_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
-                local_addr = format_address_port(str(target_host), port_num)
+                if use_ipv6 or ":" in str(target_host):
+                    clean_h = str(target_host).strip("[]")
+                    local_addr = f"[{clean_h}]:{port_num}"
+                else:
+                    local_addr = f"{target_host}:{port_num}"
+
                 
                 if tunnel_type == 'tcp+udp':
                     config += f"""
@@ -1360,7 +1414,7 @@ nodelay = true
         if config_path.exists():
             try:
                 content = config_path.read_text(encoding="utf-8", errors="ignore")
-                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
+                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:.*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
                     p_val = int(m.group(1))
                     if 0 < p_val <= 65535:
                         ports_to_free.add(p_val)
@@ -1867,12 +1921,17 @@ class BackhaulAdapter:
                     "control_port",
                 )
                 bind_ip = str(spec.get("bind_ip", "0.0.0.0")).strip() or "0.0.0.0"
+                if spec.get("use_ipv6") and bind_ip in ("0.0.0.0", ""):
+                    bind_ip = "::"
                 bind_addr = format_address_port(bind_ip, control_port)
             else:
                 bind_host, bind_port = _backhaul_split_host_port(
                     str(bind_addr), "bind_addr", allow_ipv6=True
                 )
+                if spec.get("use_ipv6") and bind_host in ("0.0.0.0", ""):
+                    bind_host = "::"
                 bind_addr = format_address_port(bind_host, bind_port)
+
 
             ports = _backhaul_effective_server_ports(spec)
             logger.info(f"Backhaul {mode} tunnel {tunnel_id}: received ports from spec: {ports} (type: {type(ports)})")
@@ -1954,18 +2013,25 @@ class BackhaulAdapter:
             if server_config.get("sniffer") and not server_config.get("sniffer_log"):
                 server_config["sniffer_log"] = str(self.config_dir / f"{tunnel_id}_sniffer.json")
 
-            # Write TLS certificates if provided as in-memory PEM
+            # Write TLS certificates if provided as in-memory PEM, or generate self-signed fallback
+            cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
+            key_path = self.config_dir / f"{tunnel_id}_key.pem"
             if spec.get("tls_cert_pem") and spec.get("tls_key_pem"):
-                cert_path = self.config_dir / f"{tunnel_id}_cert.pem"
-                key_path = self.config_dir / f"{tunnel_id}_key.pem"
                 await _run_core_worker(cert_path.write_text, spec["tls_cert_pem"], "utf-8")
                 await _run_core_worker(key_path.write_text, spec["tls_key_pem"], "utf-8")
                 try:
                     os.chmod(key_path, 0o600)
                 except Exception:
                     pass
-                server_config["tls_cert"] = str(cert_path)
-                server_config["tls_key"] = str(key_path)
+                server_config["tls_cert"] = cert_path.resolve().as_posix()
+                server_config["tls_key"] = key_path.resolve().as_posix()
+            elif transport in ("wss", "wssmux") or spec.get("tls") or spec.get("tls_enable"):
+                if not cert_path.exists() or not key_path.exists():
+                    sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "backhaul-tunnel"
+                    _ensure_self_signed_cert_and_key(cert_path, key_path, sni_domain)
+                if cert_path.exists() and key_path.exists():
+                    server_config["tls_cert"] = cert_path.resolve().as_posix()
+                    server_config["tls_key"] = key_path.resolve().as_posix()
 
             config_path = self.config_dir / f"{tunnel_id}.toml"
             rendered_cfg = self._render_toml({"server": server_config})
@@ -2157,7 +2223,7 @@ class BackhaulAdapter:
         if config_path.exists():
             try:
                 txt = config_path.read_text(encoding="utf-8", errors="ignore")
-                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', txt, re.IGNORECASE):
+                for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr)\s*=\s*["\']?(?:.*:)?(\d{1,5})["\']?', txt, re.IGNORECASE):
                     p_val = int(m.group(1))
                     if 0 < p_val <= 65535:
                         ports_to_free.add(p_val)
@@ -2316,7 +2382,25 @@ def _ensure_self_signed_cert_and_key(cert_path: Path, key_path: Path, common_nam
 
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         now = datetime.datetime.now(datetime.timezone.utc)
+        import ipaddress
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+        san_items = []
+        try:
+            san_items.append(x509.IPAddress(ipaddress.ip_address(common_name)))
+        except ValueError:
+            san_items.append(x509.DNSName(common_name))
+
+        for loopback in ["127.0.0.1", "::1"]:
+            try:
+                ip_obj = x509.IPAddress(ipaddress.ip_address(loopback))
+                if ip_obj not in san_items:
+                    san_items.append(ip_obj)
+            except Exception:
+                pass
+        localhost_dns = x509.DNSName("localhost")
+        if localhost_dns not in san_items:
+            san_items.append(localhost_dns)
+
         certificate = (
             x509.CertificateBuilder()
             .subject_name(name)
@@ -2325,7 +2409,7 @@ def _ensure_self_signed_cert_and_key(cert_path: Path, key_path: Path, common_nam
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - datetime.timedelta(minutes=5))
             .not_valid_after(now + datetime.timedelta(days=3650))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName(common_name)]), critical=False)
+            .add_extension(x509.SubjectAlternativeName(san_items), critical=False)
             .sign(private_key, hashes.SHA256())
         )
         key_bytes = private_key.private_bytes(
@@ -2546,8 +2630,22 @@ class ChiselAdapter:
             elif use_ipv6:
                 cmd.extend(["--host", "::"])
 
+            server_env = {}
             if auth_token:
-                cmd.extend(["--auth", auth_token])
+                server_env["AUTH"] = str(auth_token)
+                authfile_path = self.config_dir / f"{tunnel_id}_auth.json"
+                try:
+                    authfile_content = json.dumps({str(auth_token): [""]})
+                    with open(authfile_path, "w") as af:
+                        af.write(authfile_content)
+                    os.chmod(authfile_path, 0o600)
+                except Exception as e:
+                    logger.warning(f"Could not write chisel authfile: {e}")
+
+                if spec.get("credentials_in_env") or spec.get("auth_in_env") or spec.get("use_authfile"):
+                    cmd.extend(["--authfile", str(authfile_path.resolve().as_posix())])
+                else:
+                    cmd.extend(["--auth", auth_token])
             
             # Persistent SSH key to preserve host fingerprint across restarts
             ssh_key_pem = spec.get('ssh_key_pem') or spec.get('keyfile_content')
@@ -2620,6 +2718,15 @@ class ChiselAdapter:
             keepalive = spec.get('keepalive')
             if keepalive:
                 cmd.extend(["--keepalive", str(keepalive)])
+
+            # Track assigned server ports in metadata file for resilient teardown
+            ports_file = self.config_dir / f"{tunnel_id}_ports.json"
+            try:
+                with open(ports_file, "w") as pf:
+                    json.dump(list(ports_to_free), pf)
+                os.chmod(ports_file, 0o600)
+            except Exception:
+                pass
             
             log_file = self.config_dir / f"{tunnel_id}.log"
             try:
@@ -2636,11 +2743,19 @@ class ChiselAdapter:
                 log_f.write(f"Starting chisel server for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
-                proc = await _spawn_core_subprocess(
-                    cmd,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                )
+                try:
+                    proc = await _spawn_core_subprocess(
+                        cmd,
+                        stdout=log_f,
+                        stderr=subprocess.STDOUT,
+                        env=server_env if server_env else None,
+                    )
+                except TypeError:
+                    proc = await _spawn_core_subprocess(
+                        cmd,
+                        stdout=log_f,
+                        stderr=subprocess.STDOUT,
+                    )
             except FileNotFoundError:
                 log_f.close()
                 raise RuntimeError("chisel binary not found. Please install chisel.")
@@ -2754,12 +2869,21 @@ class ChiselAdapter:
                 raise ValueError("Chisel client requires at least one port mapping")
             
             cmd = [str(binary_path), "client"]
+            client_env = {}
             if auth_token:
-                cmd.extend(["--auth", auth_token])
+                client_env["AUTH"] = str(auth_token)
+            if key:
+                client_env["KEY"] = str(key).strip()
+
+            if spec.get("credentials_in_env") or spec.get("auth_in_env"):
+                pass
+            else:
+                if auth_token:
+                    cmd.extend(["--auth", auth_token])
+                if key:
+                    cmd.extend(["--key", str(key).strip()])
             if fingerprint:
                 cmd.extend(["--fingerprint", fingerprint.strip()])
-            if key:
-                cmd.extend(["--key", str(key).strip()])
             if keepalive:
                 cmd.extend(["--keepalive", str(keepalive)])
             if max_retry_count is not None:
@@ -2822,6 +2946,23 @@ class ChiselAdapter:
             
             cmd.append(server_url)
             cmd.extend(remotes)
+
+            # Track assigned client ports in metadata file for resilient teardown
+            client_ports = set()
+            for r in remotes:
+                m = re.match(r'^(?:R:)?(?:[0-9.]+:|\[[0-9a-fA-F:]+\]:)?(\d{1,5}):', r)
+                if m:
+                    p_val = int(m.group(1))
+                    if 0 < p_val <= 65535:
+                        client_ports.add(p_val)
+            if client_ports:
+                ports_file = self.config_dir / f"{tunnel_id}_ports.json"
+                try:
+                    with open(ports_file, "w") as pf:
+                        json.dump(list(client_ports), pf)
+                    os.chmod(ports_file, 0o600)
+                except Exception:
+                    pass
             
             log_file = self.config_dir / f"{tunnel_id}.log"
             try:
@@ -2838,11 +2979,19 @@ class ChiselAdapter:
                 log_f.write(f"Starting chisel client for tunnel {tunnel_id}\n")
                 log_f.write(f"Command: {sanitize_cmd_for_log(cmd)}\n")
                 log_f.flush()
-                proc = await _spawn_core_subprocess(
-                    cmd,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                )
+                try:
+                    proc = await _spawn_core_subprocess(
+                        cmd,
+                        stdout=log_f,
+                        stderr=subprocess.STDOUT,
+                        env=client_env if client_env else None,
+                    )
+                except TypeError:
+                    proc = await _spawn_core_subprocess(
+                        cmd,
+                        stdout=log_f,
+                        stderr=subprocess.STDOUT,
+                    )
             except FileNotFoundError:
                 log_f.close()
                 raise RuntimeError("chisel binary not found. Please install chisel.")
@@ -2877,34 +3026,44 @@ class ChiselAdapter:
                 pass
             del self.log_handles[tunnel_id]
 
-        # Ports are derived from the command line recorded in the log header only
-        # (never from log lines: timestamps like "22:15:03" used to be parsed as port 22).
+        # Prioritize metadata port tracking file, falling back to log header
         ports_to_free: Set[int] = set()
-        log_file = self.config_dir / f"{tunnel_id}.log"
-        if log_file.exists():
+        ports_file = self.config_dir / f"{tunnel_id}_ports.json"
+        if ports_file.exists():
             try:
-                with open(log_file, "r", encoding="utf-8", errors="ignore") as lf:
-                    header = [lf.readline() for _ in range(3)]
-                for line in header:
-                    if not line.startswith("Command:"):
-                        continue
-                    for token in line.split()[1:]:
-                        m = re.match(r'^(?:R:)?(?:[0-9.]+:|\[[0-9a-fA-F:]+\]:)?(\d{1,5}):', token)
-                        if m:
-                            p_val = int(m.group(1))
-                            if 0 < p_val <= 65535:
-                                ports_to_free.add(p_val)
-                    m_port = re.search(r'--port\s+(\d{1,5})', line)
-                    if m_port:
-                        ports_to_free.add(int(m_port.group(1)))
+                with open(ports_file, "r") as pf:
+                    loaded_ports = json.load(pf)
+                    if isinstance(loaded_ports, list):
+                        ports_to_free.update(int(p) for p in loaded_ports if str(p).isdigit() and 0 < int(p) <= 65535)
             except Exception:
                 pass
+
+        if not ports_to_free:
+            log_file = self.config_dir / f"{tunnel_id}.log"
+            if log_file.exists():
+                try:
+                    with open(log_file, "r", encoding="utf-8", errors="ignore") as lf:
+                        header = [lf.readline() for _ in range(3)]
+                    for line in header:
+                        if not line.startswith("Command:"):
+                            continue
+                        for token in line.split()[1:]:
+                            m = re.match(r'^(?:R:)?(?:[0-9.]+:|\[[0-9a-fA-F:]+\]:)?(\d{1,5}):', token)
+                            if m:
+                                p_val = int(m.group(1))
+                                if 0 < p_val <= 65535:
+                                    ports_to_free.add(p_val)
+                        m_port = re.search(r'--port\s+(\d{1,5})', line)
+                        if m_port:
+                            ports_to_free.add(int(m_port.group(1)))
+                except Exception:
+                    pass
 
         await safe_stop_subprocess(proc, patterns=[tunnel_id, f"{tunnel_id}.log"], pid=pid)
         _remove_tunnel_pid(tunnel_id)
 
-        # Clean up temporary certificate/key files
-        suffixes = ["_cert.pem", "_key.pem", "_ca.pem"]
+        # Clean up temporary certificate/key/ports/auth files
+        suffixes = ["_cert.pem", "_key.pem", "_ca.pem", "_ports.json", "_auth.json"]
         if purge:
             suffixes.extend(["_ssh.key", ".log", ".log.old"])
         for suffix in suffixes:
@@ -3076,7 +3235,32 @@ class FrpAdapter:
                         p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
                         if p_val and str(p_val).isdigit():
                             ports_to_free.append(int(p_val))
+
+            tunnel_type = (spec.get('tunnel_type') or spec.get('type') or 'tcp').lower()
+            first_service_port = None
+            for p_item in (spec.get('ports') or []):
+                if isinstance(p_item, (int, str)) and str(p_item).isdigit():
+                    first_service_port = int(p_item)
+                    break
+                elif isinstance(p_item, dict):
+                    p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
+                    if p_val and str(p_val).isdigit():
+                        first_service_port = int(p_val)
+                        break
+
+            hp = None
+            if tunnel_type in ['http', 'https'] and not is_provider:
+                if tunnel_type == 'http':
+                    hp = spec.get('vhost_http_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 80 else 80))
+                else:
+                    hp = spec.get('vhost_https_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
+                if isinstance(hp, (int, str)) and str(hp).isdigit() and int(hp) > 0:
+                    hp_num = int(hp)
+                    if hp_num not in ports_to_free:
+                        ports_to_free.append(hp_num)
+
             await free_ports(ports_to_free)
+
 
             token = spec.get('token')
             clean_token = str(token).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '') if token else None
@@ -3104,11 +3288,9 @@ class FrpAdapter:
             # Handle server TLS certificates if provided
             tls_cert_pem = spec.get('tls_cert_pem')
             tls_key_pem = spec.get('tls_key_pem')
-            cert_file = None
-            key_file = None
+            cert_file = self.config_dir / f"{tunnel_id}_cert.pem"
+            key_file = self.config_dir / f"{tunnel_id}_key.pem"
             if tls_cert_pem and tls_key_pem:
-                cert_file = self.config_dir / f"{tunnel_id}_cert.pem"
-                key_file = self.config_dir / f"{tunnel_id}_key.pem"
                 with open(cert_file, 'w', encoding='utf-8') as cf:
                     cf.write(tls_cert_pem)
                 with open(key_file, 'w', encoding='utf-8') as kf:
@@ -3118,6 +3300,13 @@ class FrpAdapter:
                     os.chmod(key_file, 0o600)
                 except Exception:
                     pass
+            elif force_tls or is_provider:
+                if not cert_file.exists() or not key_file.exists():
+                    sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "frp-tunnel"
+                    _ensure_self_signed_cert_and_key(cert_file, key_file, sni_domain)
+            else:
+                cert_file = None
+                key_file = None
 
             config_file = self.config_dir / f"frps_{tunnel_id}.yaml"
             config_content = f"""bindAddr: "::"
@@ -3130,23 +3319,11 @@ bindPort: {bind_port}
             else:
                 config_content += "kcpBindPort: 0\nquicBindPort: 0\n"
 
-            first_service_port = None
-            for p_item in (spec.get('ports') or []):
-                if isinstance(p_item, (int, str)) and str(p_item).isdigit():
-                    first_service_port = int(p_item)
-                    break
-                elif isinstance(p_item, dict):
-                    p_val = p_item.get('remote_port') or p_item.get('remote') or p_item.get('port') or p_item.get('listen_port')
-                    if p_val and str(p_val).isdigit():
-                        first_service_port = int(p_val)
-                        break
-
-            if tunnel_type == 'http' and not is_provider:
-                hp = spec.get('vhost_http_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 80 else 80))
+            if tunnel_type == 'http' and not is_provider and hp:
                 config_content += f"vhostHTTPPort: {hp}\n"
-            elif tunnel_type == 'https' and not is_provider:
-                hp = spec.get('vhost_https_port') or (first_service_port if first_service_port and first_service_port != bind_port else (bind_port + 1 if bind_port == 443 else 443))
+            elif tunnel_type == 'https' and not is_provider and hp:
                 config_content += f"vhostHTTPSPort: {hp}\n"
+
 
             tcp_mux = _frp_tcp_mux(spec)
             config_content += f"""transport:
@@ -3157,7 +3334,7 @@ bindPort: {bind_port}
   tls:
     force: {'true' if force_tls else 'false'}
 """
-            if cert_file and key_file:
+            if cert_file and key_file and cert_file.exists() and key_file.exists():
                 cert_posix = cert_file.resolve().as_posix()
                 key_posix = key_file.resolve().as_posix()
                 config_content += f"""    certFile: "{cert_posix}"
@@ -3225,11 +3402,32 @@ bindPort: {bind_port}
                 provider_config_content = f"""serverAddr: "127.0.0.1"
 serverPort: {bind_port}
 loginFailExit: false
+transport:
+  protocol: "{transport_proto}"
 """
                 if not tcp_mux:
-                    provider_config_content += """transport:
-  tcpMux: false
+                    provider_config_content += "  tcpMux: false\n"
+                else:
+                    provider_config_content += "  tcpMux: true\n"
+
+                provider_tls_enable = force_tls or (spec.get('security_type') in ['tls', 'force_tls'])
+                if transport_proto in ['wss', 'quic']:
+                    provider_tls_enable = True
+                elif transport_proto == 'kcp':
+                    provider_tls_enable = False
+
+                if provider_tls_enable:
+                    provider_config_content += """  tls:
+    enable: true
+    disableCustomTLSFirstByte: true
 """
+                    if cert_file and cert_file.exists():
+                        provider_config_content += f'    trustedCaFile: "{cert_file.resolve().as_posix()}"\n'
+                else:
+                    provider_config_content += """  tls:
+    enable: false
+"""
+
                 provider_config_content += f"""auth:
   method: token
   token: "{clean_token or ''}"
@@ -3258,7 +3456,17 @@ loginFailExit: false
                     health_check_path = f"/{health_check_path}"
                 health_check_path = health_check_path.replace('"', '').replace('\n', '').replace('\r', '')
 
-                raw_ports = spec.get('ports') or []
+                raw_ports = list(spec.get('ports') or [])
+                if spec.get("port_ranges"):
+                    for port_range in spec.get("port_ranges"):
+                        if isinstance(port_range, str) and '-' in port_range:
+                            try:
+                                start, end = port_range.split('-')
+                                if 1 <= int(start) <= 65535 and 1 <= int(end) <= 65535 and int(end) - int(start) <= 500:
+                                    for p in range(int(start), int(end) + 1):
+                                        raw_ports.append({'local': p, 'remote': p})
+                            except Exception:
+                                pass
                 clean_target_host = str(spec.get('local_ip') or spec.get('target_host') or '127.0.0.1').replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
 
                 for i, port_config in enumerate(raw_ports):
@@ -3433,7 +3641,7 @@ loginFailExit: false
                     if isinstance(port_range, str) and '-' in port_range:
                         try:
                             start, end = port_range.split('-')
-                            if 1 <= int(start) <= 65535 and 1 <= int(end) <= 65535 and int(end) - int(start) <= 200:
+                            if 1 <= int(start) <= 65535 and 1 <= int(end) <= 65535 and int(end) - int(start) <= 500:
                                 for p in range(int(start), int(end) + 1):
                                     ports.append({'local': p, 'remote': p})
                         except Exception:
@@ -3585,6 +3793,8 @@ transport:
                     p_num = int(local_port) if str(local_port).isdigit() else 8080
                     proxy_name = f"{tunnel_id}_{i}" if len(ports) > 1 else tunnel_id
 
+                    visitor_bind_addr = "::" if spec.get("use_ipv6") else "0.0.0.0"
+
                     def _build_visitor_block(v_name: str, v_type: str, s_name: str, b_port: int) -> str:
                         clean_v_name = str(v_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
                         clean_s_name = str(s_name).replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '')
@@ -3593,12 +3803,13 @@ transport:
     type: {v_type}
     serverName: "{clean_s_name}"
     secretKey: "{clean_sec_key}"
-    bindAddr: "0.0.0.0"
+    bindAddr: "{visitor_bind_addr}"
     bindPort: {b_port}
     transport:
       useEncryption: {'true' if use_encryption else 'false'}
       useCompression: {'true' if effective_compression else 'false'}
 """
+
 
                     if tunnel_type == 'tcp+udp':
                         config_content += _build_visitor_block(f"{proxy_name}_tcp_visitor", "stcp", f"{proxy_name}_tcp", p_num)
@@ -3702,7 +3913,7 @@ transport:
                 if cfg_path.exists():
                     try:
                         txt = cfg_path.read_text(encoding="utf-8", errors="ignore")
-                        for m in re.finditer(r'(?:bindPort|remotePort|localPort|serverPort|port)\s*[:=]\s*(\d{1,5})', txt, re.IGNORECASE):
+                        for m in re.finditer(r'(?:bindPort|remotePort|localPort|serverPort|vhostHTTPPort|vhostHTTPSPort|vhost_http_port|vhost_https_port|port)\s*[:=]\s*(\d{1,5})', txt, re.IGNORECASE):
                             p_val = int(m.group(1))
                             if 0 < p_val <= 65535:
                                 ports_to_free.add(p_val)
@@ -3732,24 +3943,31 @@ transport:
             )
             _remove_tunnel_pid(sub_id)
 
-        for cfg_name in [
+        cleanup_files = [
             f"frps_{tunnel_id}.yaml",
             f"frpc_{tunnel_id}.yaml",
             f"frpc_{tunnel_id}_provider.yaml",
             f"frps_{tunnel_id}.toml",
             f"frpc_{tunnel_id}.toml",
             f"frpc_{tunnel_id}_provider.toml",
-            f"{tunnel_id}.log",
-            f"{tunnel_id}_provider.log",
             f"{tunnel_id}_cert.pem",
-            f"{tunnel_id}_key.pem"
-        ]:
+            f"{tunnel_id}_key.pem",
+            f"frpc_{tunnel_id}_ca.pem"
+        ]
+        if purge:
+            cleanup_files.extend([
+                f"{tunnel_id}.log",
+                f"{tunnel_id}_provider.log"
+            ])
+
+        for cfg_name in cleanup_files:
             cfg_path = self.config_dir / cfg_name
             if cfg_path.exists():
                 try:
                     cfg_path.unlink()
                 except Exception:
                     pass
+
 
         if ports_to_free:
             await free_ports(ports_to_free)
@@ -4118,7 +4336,7 @@ class GostAdapter:
                     cert_path.write_text(str(cert_pem).strip())
                     key_path.write_text(str(key_pem).strip())
                 elif not cert_path.exists() or not key_path.exists():
-                    sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "www.cloudflare.com"
+                    sni_domain = spec.get("custom_sni") or spec.get("stealth_domain") or spec.get("sni") or "www.google.com"
                     _ensure_self_signed_cert_and_key(cert_path, key_path, sni_domain)
                 
                 if cert_path.exists() and key_path.exists():
@@ -4965,9 +5183,11 @@ class AdapterManager:
         self._stray_strikes: Dict[int, int] = {}
         logger.info(f"Tunnel persistence file: {self.tunnels_file}")
 
+        self._in_flight_tunnels: Set[str] = set()
+
         # Every tunnel configured on this node is protected from cross-tunnel port freeing
         global _protected_tunnels_provider
-        _protected_tunnels_provider = lambda: set(self.tunnel_configs.keys()) | set(self.active_tunnels.keys())
+        _protected_tunnels_provider = lambda: set(self.tunnel_configs.keys()) | set(self.active_tunnels.keys()) | set(self._in_flight_tunnels)
 
     # Keys that never affect the generated core configuration. They are stripped
     # before comparing/persisting specs so they can't trigger needless restarts.
@@ -5229,14 +5449,18 @@ class AdapterManager:
         # Also extract port_ranges
         raw_ranges = spec.get("port_ranges")
         if raw_ranges:
-            range_list = [x.strip() for x in re.split(r'[\r\n,]+', raw_ranges) if x.strip()] if isinstance(raw_ranges, str) else raw_ranges
+            range_list = [x.strip() for x in re.split(r'[\r\n,]+', raw_ranges) if x.strip()] if isinstance(raw_ranges, str) else (list(raw_ranges) if isinstance(raw_ranges, (list, tuple, set)) else [raw_ranges])
             for pr in range_list:
                 if isinstance(pr, str) and "-" in pr:
                     parts = pr.split("-", 1)
                     if parts[0].strip().isdigit() and parts[1].strip().isdigit():
                         start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
-                        if 0 < end_p - start_p <= 500:
+                        if 0 <= end_p - start_p <= 500:
                             ports.update(range(start_p, end_p + 1))
+                elif isinstance(pr, (int, str)) and str(pr).strip().isdigit():
+                    p_val = int(str(pr).strip())
+                    if 1 <= p_val <= 65535:
+                        ports.add(p_val)
 
         for k in ["proxy_port", "remote_port", "listen_port", "bind_port", "control_port", "server_port", "vhost_http_port", "vhost_https_port"]:
             val = spec.get(k)
@@ -5255,6 +5479,7 @@ class AdapterManager:
         backoff_delay: Dict[str, int] = {}
         next_retry_at: Dict[str, float] = {}
         restart_failures: Dict[str, int] = {}
+        last_revived_at: Dict[str, float] = {}
         last_log_sweep: float = 0.0
         cycle = 0
         
@@ -5284,11 +5509,14 @@ class AdapterManager:
                     except Exception as e_sw:
                         logger.debug(f"Watchdog: stray process sweep failed: {e_sw}")
 
-                for tunnel_id in list(self.tunnel_configs.keys()):
-                    # Respect exponential backoff window
-                    if tunnel_id in next_retry_at and now < next_retry_at[tunnel_id]:
-                        continue
+                configured_ids = set(self.tunnel_configs.keys())
+                for tid in set(backoff_delay.keys()) - configured_ids:
+                    backoff_delay.pop(tid, None)
+                    next_retry_at.pop(tid, None)
+                    restart_failures.pop(tid, None)
+                    last_revived_at.pop(tid, None)
 
+                for tunnel_id in list(self.tunnel_configs.keys()):
                     config = self.tunnel_configs.get(tunnel_id, {})
                     tunnel_core = config.get("core")
                     spec = config.get("spec", {})
@@ -5303,6 +5531,10 @@ class AdapterManager:
                     is_running = status.get("process_running", False) or status.get("active", False)
                     
                     if not is_running:
+                        # Respect exponential backoff window
+                        if tunnel_id in next_retry_at and now < next_retry_at[tunnel_id]:
+                            continue
+
                         # 1. Port-conflict protection check before reviving dead tunnel
                         dead_tunnel_ports = self._extract_spec_ports(spec)
                         conflicting_active_tunnel = None
@@ -5341,6 +5573,7 @@ class AdapterManager:
                         logger.warning(f"Watchdog: tunnel {tunnel_id} ({tunnel_core}) is inactive/dead! Auto-recovering...")
                         await asyncio.sleep(random.uniform(0.0, 2.0))
                         try:
+                            did_revive = False
                             async with self._get_tunnel_lock(tunnel_id):
                                 # The tunnel may have been removed (or re-applied with a new
                                 # spec) while we were waiting for the lock: use the current
@@ -5357,10 +5590,20 @@ class AdapterManager:
                                     await asyncio.sleep(0.2)
                                     await adapter.apply(tunnel_id, spec)
                                     self.active_tunnels[tunnel_id] = adapter
-                            backoff_delay.pop(tunnel_id, None)
-                            next_retry_at.pop(tunnel_id, None)
-                            restart_failures.pop(tunnel_id, None)
-                            logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
+                                    did_revive = True
+                                else:
+                                    self.active_tunnels[tunnel_id] = adapter
+
+                            if did_revive:
+                                last_revived_at[tunnel_id] = now
+                                failures = restart_failures.get(tunnel_id, 0) + 1
+                                restart_failures[tunnel_id] = failures
+                                next_delay = min(cur_delay * 2, 120)
+                                if failures >= 10:
+                                    next_delay = 300
+                                backoff_delay[tunnel_id] = next_delay
+                                next_retry_at[tunnel_id] = now + next_delay * random.uniform(0.9, 1.1)
+                                logger.info(f"Watchdog: successfully revived and restored tunnel {tunnel_id} ({tunnel_core})")
                         except Exception as e:
                             failures = restart_failures.get(tunnel_id, 0) + 1
                             restart_failures[tunnel_id] = failures
@@ -5380,9 +5623,12 @@ class AdapterManager:
                             backoff_delay[tunnel_id] = next_delay
                             next_retry_at[tunnel_id] = now + next_delay * random.uniform(0.9, 1.1)
                     else:
-                        backoff_delay.pop(tunnel_id, None)
-                        next_retry_at.pop(tunnel_id, None)
-                        restart_failures.pop(tunnel_id, None)
+                        if now - last_revived_at.get(tunnel_id, 0.0) >= 30.0:
+                            backoff_delay.pop(tunnel_id, None)
+                            next_retry_at.pop(tunnel_id, None)
+                            restart_failures.pop(tunnel_id, None)
+                            last_revived_at.pop(tunnel_id, None)
+
             except asyncio.CancelledError:
                 logger.info("AdapterManager watchdog loop cancelled")
                 break
@@ -5545,7 +5791,7 @@ class AdapterManager:
                     if fpath.is_file() and fpath.suffix in (".toml", ".json", ".yaml", ".yml"):
                         try:
                             content = fpath.read_text(encoding="utf-8", errors="ignore")
-                            for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr|addr|port|listen_port|proxy_port|remotePort|localPort|bindPort)\s*[:=]\s*["\']?(?:[^"\':\s]*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
+                            for m in re.finditer(r'(?:bind_addr|remote_addr|local_addr|addr|port|listen_port|proxy_port|remotePort|localPort|bindPort)\s*[:=]\s*["\']?(?:.*:)?(\d{1,5})["\']?', content, re.IGNORECASE):
                                 p_num = int(m.group(1))
                                 if 0 < p_num <= 65535:
                                     found.add(p_num)
@@ -5792,8 +6038,14 @@ class AdapterManager:
 
             adapter_name = getattr(adapter, "name", tunnel_core)
             logger.info(f"Using adapter: {adapter_name}, mode={spec.get('mode', 'N/A')}")
+            self._in_flight_tunnels.add(tunnel_id)
             try:
                 await adapter.apply(tunnel_id, clean_spec)
+                self.active_tunnels[tunnel_id] = adapter
+                self.tunnel_configs[tunnel_id] = {
+                    "core": tunnel_core,
+                    "spec": dict(clean_spec)
+                }
             except Exception as apply_error:
                 # The previous configuration (if any) was the last known good state.
                 # Put it back so a rejected config never leaves the tunnel dead.
@@ -5823,12 +6075,8 @@ class AdapterManager:
                 else:
                     logger.error(f"Tunnel {tunnel_id} could not be started: {apply_error}")
                 raise
-            self.active_tunnels[tunnel_id] = adapter
-
-            self.tunnel_configs[tunnel_id] = {
-                "core": tunnel_core,
-                "spec": dict(clean_spec)
-            }
+            finally:
+                self._in_flight_tunnels.discard(tunnel_id)
             logger.info(f"Saving tunnel {tunnel_id} to persistent storage (core={tunnel_core}, mode={spec.get('mode', 'N/A')})")
             self._save_tunnels()
             self.start_watchdog()
@@ -5957,7 +6205,9 @@ class AdapterManager:
         mode: str = "server",
         ports: Optional[List[int]] = None,
         control_port: Optional[int] = None,
-        proto: str = "udp"
+        proto: str = "udp",
+        is_reverse: Optional[bool] = None,
+        force_direct: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Inspect running process and listening sockets for a tunnel with high precision"""
         config = self.tunnel_configs.get(tunnel_id, {})
@@ -5979,6 +6229,42 @@ class AdapterManager:
             
         ctrl_port = control_port or spec.get("control_port") or spec.get("bind_port")
         
+        # Determine directionality: reverse mode is default for multi-node tunnels unless force_direct or is_reverse=False
+        def _to_bool_adapter(val: Any) -> Optional[bool]:
+            if val is None:
+                return None
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, (int, float)):
+                return bool(val)
+            if isinstance(val, str):
+                v = val.strip().lower()
+                if v in ("true", "1", "yes", "on"):
+                    return True
+                if v in ("false", "0", "no", "off"):
+                    return False
+            return None
+
+        eff_force_direct = (
+            _to_bool_adapter(force_direct) is True
+            or _to_bool_adapter(spec.get("force_direct")) is True
+            or _to_bool_adapter(config.get("force_direct")) is True
+        )
+        if eff_force_direct:
+            eff_is_reverse = False
+        else:
+            arg_rev = _to_bool_adapter(is_reverse)
+            spec_rev = _to_bool_adapter(spec.get("is_reverse"))
+            cfg_rev = _to_bool_adapter(config.get("is_reverse"))
+            if arg_rev is not None:
+                eff_is_reverse = arg_rev
+            elif spec_rev is not None:
+                eff_is_reverse = spec_rev
+            elif cfg_rev is not None:
+                eff_is_reverse = cfg_rev
+            else:
+                eff_is_reverse = True
+
         listening_ports = []
         missing_ports = []
         
@@ -5996,7 +6282,7 @@ class AdapterManager:
                     
             # In direct GOST/Chisel/FRP server mode, the server only terminates control_port.
             # Service ports listen on the Iran client side.
-            skip_service_ports = (core in ["gost", "chisel", "frp"] and not spec.get("is_reverse", False))
+            skip_service_ports = (core in ["gost", "chisel", "frp"] and not eff_is_reverse)
             if not skip_service_ports:
                 for p in checked_ports:
                     try:
@@ -6043,7 +6329,7 @@ class AdapterManager:
                                 missing_ports.append({"port": p_num, "type": f"service_{eff_proto}"})
                     except Exception:
                         pass
-        elif actual_mode == "client" and core in ["gost", "chisel", "frp"] and not spec.get("is_reverse", False):
+        elif actual_mode == "client" and core in ["gost", "chisel", "frp"] and not eff_is_reverse:
             # Direct GOST / Chisel / FRP tunnel: Iran client node listens locally on service ports
             for p in checked_ports:
                 try:

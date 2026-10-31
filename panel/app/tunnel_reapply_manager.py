@@ -386,17 +386,32 @@ class TunnelReapplyManager:
                 or tunnel.is_reverse is not None
             )
         )
-        if tunnel.core in {"rathole", "backhaul"}:
+        from app.spec_builder import _to_bool
+        force_direct = _to_bool((tunnel.spec or {}).get("force_direct")) is True if isinstance(tunnel.spec, dict) else False
+
+        if force_direct:
+            is_reverse = False
+        elif tunnel.core in {"rathole", "backhaul"}:
             is_reverse = True
         elif tunnel.core in {"gost", "chisel", "frp"}:
-            if tunnel.is_reverse is not None:
-                is_reverse = bool(tunnel.is_reverse)
-            elif not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):
+            raw_rev = _to_bool(tunnel.is_reverse)
+            if raw_rev is not None:
+                is_reverse = raw_rev
+            elif isinstance(tunnel.spec, dict) and _to_bool(tunnel.spec.get("is_reverse")) is not None:
+                is_reverse = _to_bool(tunnel.spec.get("is_reverse"))
+            elif tunnel.foreign_node_id or tunnel.iran_node_id:
                 is_reverse = True
             else:
                 is_reverse = False
         else:
-            is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
+            raw_rev = _to_bool(tunnel.is_reverse)
+            is_reverse = raw_rev if raw_rev is not None else False
+        
+        spec_snapshot = copy.deepcopy(tunnel.spec)
+        tunnel.is_reverse = is_reverse
+        if isinstance(tunnel.spec, dict):
+            tunnel.spec["is_reverse"] = is_reverse
+            tunnel.spec["force_direct"] = not is_reverse
         
         if is_multi_node_tunnel:
             iran_node_id = tunnel.iran_node_id or tunnel.node_id
@@ -436,7 +451,6 @@ class TunnelReapplyManager:
             foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
             
             from app.spec_builder import build_tunnel_node_specs, persist_generated_spec
-            spec_snapshot = copy.deepcopy(tunnel.spec)
             try:
                 iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
             except Exception as e:
@@ -468,19 +482,42 @@ class TunnelReapplyManager:
             
             await asyncio.sleep(1.0)
 
-            second_response = await client.send_to_node(
-                node_id=second_node.id,
-                endpoint="/api/agent/tunnels/apply",
-                data={
-                    "tunnel_id": tunnel.id,
-                    "core": tunnel.core,
-                    "type": tunnel.type,
-                    "spec": second_spec
-                }
-            )
+            try:
+                second_response = await client.send_to_node(
+                    node_id=second_node.id,
+                    endpoint="/api/agent/tunnels/apply",
+                    data={
+                        "tunnel_id": tunnel.id,
+                        "core": tunnel.core,
+                        "type": tunnel.type,
+                        "spec": second_spec
+                    }
+                )
+            except Exception as e:
+                second_response = {"status": "error", "message": f"Connection exception: {e}"}
             
             if second_response.get("status") == "error":
                 logger.error(f"Failed to reapply tunnel {tunnel.id} to {second_role}: {second_response.get('message')}")
+                try:
+                    from app.routers.tunnels import extract_all_tunnel_ports
+                    spec_to_extract = dict(first_spec or tunnel.spec or {})
+                    if getattr(tunnel, "port_ranges", None) and "port_ranges" not in spec_to_extract:
+                        spec_to_extract["port_ranges"] = tunnel.port_ranges
+                    f_ports = list(extract_all_tunnel_ports(spec_to_extract, validate_span=False).get("all_ports", set()))
+                    f_ctrl = (first_spec or {}).get("control_port") or (tunnel.spec or {}).get("control_port")
+                    await client.send_to_node(
+                        node_id=first_node.id,
+                        endpoint="/api/agent/tunnels/remove",
+                        data={
+                            "tunnel_id": tunnel.id,
+                            "purge": True,
+                            "core": tunnel.core,
+                            "ports": f_ports,
+                            "control_port": f_ctrl,
+                        }
+                    )
+                except Exception as rollback_err:
+                    logger.warning(f"Compensating rollback on {first_role} failed for tunnel {tunnel.id}: {rollback_err}")
                 return False
             
             ok = first_response.get("status") == "success" and second_response.get("status") == "success"

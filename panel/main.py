@@ -32,7 +32,7 @@ from app.frp_server import frp_server_manager
 from app.frp_comm_manager import frp_comm_manager
 from app.telegram_bot import telegram_bot
 from app.node_client import NodeClient
-from app.models import Settings
+from app.models import Settings, utcnow
 import logging
 
 logging.basicConfig(
@@ -457,30 +457,36 @@ async def _restore_node_tunnels():
                     
                     foreign_node_ip = foreign_node.node_metadata.get("ip_address") if foreign_node.node_metadata else None
                     
-                    from app.spec_builder import build_tunnel_node_specs
-                    force_direct = bool((tunnel.spec or {}).get("force_direct", False)) if isinstance(tunnel.spec, dict) else False
+                    from app.spec_builder import build_tunnel_node_specs, persist_generated_spec, _to_bool
+                    spec_snapshot = copy.deepcopy(tunnel.spec)
+                    force_direct = _to_bool((tunnel.spec or {}).get("force_direct")) is True if isinstance(tunnel.spec, dict) else False
                     if force_direct:
                         is_reverse = False
-                    elif tunnel.core in {"gost", "chisel"}:
-                        if tunnel.is_reverse is not None:
-                            is_reverse = bool(tunnel.is_reverse)
-                        elif isinstance(tunnel.spec, dict) and tunnel.spec.get("is_reverse") is not None:
-                            is_reverse = bool(tunnel.spec.get("is_reverse"))
+                    elif tunnel.core in {"gost", "chisel", "frp"}:
+                        raw_rev = _to_bool(tunnel.is_reverse)
+                        if raw_rev is not None:
+                            is_reverse = raw_rev
+                        elif isinstance(tunnel.spec, dict) and _to_bool(tunnel.spec.get("is_reverse")) is not None:
+                            is_reverse = _to_bool(tunnel.spec.get("is_reverse"))
                         elif getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
                             is_reverse = True
                         else:
                             is_reverse = False
                     else:
-                        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else True
+                        raw_rev = _to_bool(tunnel.is_reverse)
+                        is_reverse = raw_rev if raw_rev is not None else True
 
-                    spec_snapshot = copy.deepcopy(tunnel.spec)
+                    tunnel.is_reverse = is_reverse
+                    if isinstance(tunnel.spec, dict):
+                        tunnel.spec["is_reverse"] = is_reverse
+                        tunnel.spec["force_direct"] = not is_reverse
+
                     try:
                         iran_spec, foreign_spec = build_tunnel_node_specs(tunnel, iran_node_ip, foreign_node_ip or iran_node_ip)
                     except Exception as e:
                         logger.error(f"Spec builder failed for tunnel {tunnel.id} during sync: {e}")
                         skipped_count += 1
                         continue
-                    from app.spec_builder import persist_generated_spec
                     await persist_generated_spec(db, tunnel, spec_snapshot)
                     
                     if not iran_node.node_metadata.get("api_address"):
@@ -613,7 +619,7 @@ async def _auto_reset_scheduler(app: FastAPI):
                 result = await db.execute(select(CoreResetConfig).where(CoreResetConfig.enabled == True))
                 configs = result.scalars().all()
                 
-                now = datetime.utcnow()
+                now = utcnow()
                 
                 for config in configs:
                     if not config.next_reset:

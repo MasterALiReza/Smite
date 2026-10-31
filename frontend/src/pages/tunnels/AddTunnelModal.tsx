@@ -150,6 +150,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
+      const effectiveGostSni = (String(formData.custom_sni || '').trim() || String(formData.stealth_domain || '').trim())
       let spec = getSpecForType(formData.core, formData.type)
       let tunnelType = formData.type
       
@@ -209,7 +210,7 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         }
       }
       
-      if (formData.core === 'gost' && (formData.type === 'tcp' || formData.type === 'udp' || formData.type === 'tcp+udp' || formData.type === 'grpc' || formData.type === 'tcpmux')) {
+      if (formData.core === 'gost') {
         const remoteIp = formData.remote_ip || (formData.use_ipv6 ? '::1' : '127.0.0.1')
         // For GOST, ports are equal (listen_port = forward_to port)
         spec.remote_ip = remoteIp
@@ -225,7 +226,6 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         } else {
           delete spec.rate_limit_mbps
         }
-        const effectiveGostSni = (formData.custom_sni || formData.stealth_domain || '').trim()
         if (effectiveGostSni) {
           spec.stealth_domain = effectiveGostSni
           spec.custom_sni = effectiveGostSni

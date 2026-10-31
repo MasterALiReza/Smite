@@ -10,7 +10,7 @@ import time
 import asyncio
 
 from app.database import get_db
-from app.models import Tunnel, Node, Admin, TunnelCategory
+from app.models import Tunnel, Node, Admin, TunnelCategory, utcnow
 from app.node_client import NodeClient
 from app.routers.auth import get_current_user
 from app.tunnel_contract import CORE_TYPES, TunnelContractError, normalize_transport, validate_tunnel_request
@@ -29,6 +29,22 @@ def _spawn_background(coro) -> asyncio.Task:
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
+
+
+def _to_bool(val: Any) -> Optional[bool]:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off"):
+            return False
+    return None
 
 
 def _same_carrier(core: str, left: str | None, right: str | None) -> bool:
@@ -159,7 +175,7 @@ class TunnelCreate(BaseModel):
     custom_host: str | None = None
     custom_sni: str | None = None
     ws_path: str | None = None
-    is_reverse: bool | None = False
+    is_reverse: bool | None = None
     port_ranges: list[str] | None = None
     stealth_domain: str | None = None
     allowed_ips: list[str] | None = None
@@ -277,18 +293,77 @@ class BulkCategoryAssign(BaseModel):
 
 
 def parse_ports_from_spec(spec: dict) -> list:
-    """Parse ports from spec - supports both comma-separated string and list formats"""
+    """Parse ports from spec - supports both comma-separated string, int, and list formats"""
     ports = spec.get("ports", [])
+    if isinstance(ports, int):
+        return [ports]
     if isinstance(ports, str):
-        # Comma-separated string: "8080,8081,8082"
-        ports = [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()]
+        # Comma-separated string: "8080,8081,8082" or "8080, 1000-2000"
+        ports = [int(p.strip()) if p.strip().isdigit() else p.strip() for p in ports.split(",") if p.strip()]
     elif isinstance(ports, list) and ports:
         # List of numbers or strings
         ports = [int(p) if isinstance(p, (int, str)) and str(p).isdigit() else p for p in ports]
-    return ports if ports else []
+    return ports if isinstance(ports, list) else []
 
 
-def extract_all_tunnel_ports(spec: Any) -> Dict[str, Set[int]]:
+def validate_tunnel_payload(spec: Any) -> None:
+    """
+    Validate tunnel payload specifications.
+    Ensures port ranges do not exceed the maximum allowed span of 500 ports.
+    Raises HTTPException(status_code=400, ...) on violation.
+    """
+    if isinstance(spec, str):
+        try:
+            import json
+            spec = json.loads(spec)
+        except Exception:
+            return
+    if not spec or not isinstance(spec, dict):
+        return
+
+    # 1. port_ranges (list or comma-separated string)
+    port_ranges = spec.get("port_ranges") or []
+    if isinstance(port_ranges, str):
+        port_ranges = [r.strip() for r in port_ranges.split(",") if r.strip()]
+    if isinstance(port_ranges, list):
+        for pr in port_ranges:
+            if isinstance(pr, str):
+                pr_clean = pr.strip()
+                sides = [s.strip() for s in pr_clean.split("=")] if "=" in pr_clean else [pr_clean]
+                for side in sides:
+                    if ":" in side:
+                        side = side.rsplit(":", 1)[-1].strip()
+                    if "-" in side:
+                        parts = side.split("-", 1)
+                        if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                            start, end = int(parts[0].strip()), int(parts[1].strip())
+                            if 0 < start <= end <= 65535 and (end - start) > 500:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Port range '{side}' exceeds maximum allowed span of 500 ports."
+                                )
+
+    # 2. parsed ports (from ports list or string)
+    parsed = parse_ports_from_spec(spec)
+    for p in parsed:
+        if isinstance(p, str):
+            p_clean = p.strip()
+            sides = [s.strip() for s in p_clean.split("=")] if "=" in p_clean else [p_clean]
+            for side in sides:
+                if ":" in side:
+                    side = side.rsplit(":", 1)[-1].strip()
+                if "-" in side:
+                    parts = side.split("-", 1)
+                    if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 0 < s_p <= e_p <= 65535 and (e_p - s_p) > 500:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Port range '{side}' exceeds maximum allowed span of 500 ports."
+                            )
+
+
+def extract_all_tunnel_ports(spec: Any, validate_span: bool = True) -> Dict[str, Set[int]]:
     """
     Extract both service ports and control/bind ports from a tunnel spec.
     Returns a dict with 'service_ports', 'control_ports', and 'all_ports'.
@@ -313,26 +388,23 @@ def extract_all_tunnel_ports(spec: Any) -> Dict[str, Set[int]]:
             service_ports.add(p)
         elif isinstance(p, str):
             p_clean = p.strip()
-            if "=" in p_clean:
-                left = p_clean.split("=", 1)[0].strip()
-                if ":" in left:
-                    left = left.rsplit(":", 1)[-1].strip()
-                if left.isdigit() and int(left) > 0:
-                    service_ports.add(int(left))
-                elif "-" in left:
-                    parts = left.split("-", 1)
-                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+            sides = [s.strip() for s in p_clean.split("=")] if "=" in p_clean else [p_clean]
+            for side in sides:
+                if ":" in side:
+                    side = side.rsplit(":", 1)[-1].strip()
+                if side.isdigit() and int(side) > 0:
+                    service_ports.add(int(side))
+                elif "-" in side:
+                    parts = side.split("-", 1)
+                    if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
                         s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
-                        if 0 < s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
+                        if 0 < s_p <= e_p <= 65535:
+                            if validate_span and (e_p - s_p) > 500:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Port range '{side}' exceeds maximum allowed span of 500 ports."
+                                )
                             service_ports.update(range(s_p, e_p + 1))
-            elif "-" in p_clean:
-                parts = p_clean.split("-", 1)
-                if parts[0].strip().isdigit() and parts[1].strip().isdigit():
-                    s_p, e_p = int(parts[0].strip()), int(parts[1].strip())
-                    if 0 < s_p <= e_p <= 65535 and (e_p - s_p) <= 500:
-                        service_ports.update(range(s_p, e_p + 1))
-            elif p_clean.isdigit() and int(p_clean) > 0:
-                service_ports.add(int(p_clean))
         elif isinstance(p, dict):
             for k in ("remote", "remote_port", "local", "local_port", "port", "listen_port"):
                 v = p.get(k)
@@ -344,16 +416,31 @@ def extract_all_tunnel_ports(spec: Any) -> Dict[str, Set[int]]:
         if val and str(val).isdigit() and int(val) > 0:
             service_ports.add(int(val))
 
-    # Port ranges (e.g. ["10000-10020"])
+    # Port ranges (e.g. ["10000-10020"] or "10000-10020, 10030-10040")
     port_ranges = spec.get("port_ranges") or []
+    if isinstance(port_ranges, str):
+        port_ranges = [r.strip() for r in port_ranges.split(",") if r.strip()]
     if isinstance(port_ranges, list):
         for pr in port_ranges:
-            if isinstance(pr, str) and "-" in pr:
-                parts = pr.split("-")
-                if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
-                    start, end = int(parts[0].strip()), int(parts[1].strip())
-                    if 0 < start <= end <= 65535 and (end - start) <= 500:
-                        service_ports.update(range(start, end + 1))
+            if isinstance(pr, str):
+                pr_clean = pr.strip()
+                sides = [s.strip() for s in pr_clean.split("=")] if "=" in pr_clean else [pr_clean]
+                for side in sides:
+                    if ":" in side:
+                        side = side.rsplit(":", 1)[-1].strip()
+                    if "-" in side:
+                        parts = side.split("-", 1)
+                        if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                            start, end = int(parts[0].strip()), int(parts[1].strip())
+                            if 0 < start <= end <= 65535:
+                                if validate_span and (end - start) > 500:
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=f"Port range '{side}' exceeds maximum allowed span of 500 ports."
+                                    )
+                                service_ports.update(range(start, end + 1))
+                    elif side.isdigit() and int(side) > 0:
+                        service_ports.add(int(side))
             
     # 2. Control / bind ports
     for key in ["control_port", "bind_port", "server_port"]:
@@ -393,20 +480,30 @@ async def check_port_conflicts(
     if not spec:
         return
         
+    validate_tunnel_payload(spec)
     extracted = extract_all_tunnel_ports(spec)
     all_new_ports = extracted["all_ports"]
     if not all_new_ports:
         return
         
     # Determine reverse tunnel mode
-    if is_reverse is not None:
-        is_rev = bool(is_reverse)
+    force_direct = _to_bool((spec or {}).get("force_direct")) is True
+    if force_direct:
+        is_rev = False
     elif core in {"rathole", "backhaul"}:
         is_rev = True
     elif core in {"gost", "chisel", "frp"}:
-        is_rev = bool((foreign_node_id or iran_node_id) and not (spec or {}).get("force_direct"))
+        raw_rev = _to_bool(is_reverse)
+        if raw_rev is not None:
+            is_rev = raw_rev
+        elif _to_bool((spec or {}).get("is_reverse")) is not None:
+            is_rev = _to_bool((spec or {}).get("is_reverse"))
+        elif foreign_node_id or iran_node_id:
+            is_rev = True
+        else:
+            is_rev = False
     else:
-        is_rev = True
+        is_rev = _to_bool(is_reverse) if is_reverse is not None else True
 
     # Identify which node binds listening sockets
     # For reverse: Iran node binds both service ports and control port.
@@ -484,11 +581,23 @@ async def check_port_conflicts(
             ex_spec = ex.spec or {}
             ex_ports_info = extract_all_tunnel_ports(ex_spec)
             
-            ex_is_rev = ex.is_reverse
-            if ex_is_rev is None:
-                ex_is_rev = ex.core in {"rathole", "backhaul", "chisel", "frp"} or (
-                    ex.core == "gost" and not ex_spec.get("force_direct")
-                )
+            ex_force = _to_bool(ex_spec.get("force_direct")) is True
+            if ex_force:
+                ex_is_rev = False
+            elif ex.core in {"rathole", "backhaul"}:
+                ex_is_rev = True
+            elif ex.core in {"gost", "chisel", "frp"}:
+                raw_ex_rev = _to_bool(ex.is_reverse)
+                if raw_ex_rev is not None:
+                    ex_is_rev = raw_ex_rev
+                elif _to_bool(ex_spec.get("is_reverse")) is not None:
+                    ex_is_rev = _to_bool(ex_spec.get("is_reverse"))
+                elif ex.foreign_node_id or ex.iran_node_id:
+                    ex_is_rev = True
+                else:
+                    ex_is_rev = False
+            else:
+                ex_is_rev = _to_bool(ex.is_reverse) if ex.is_reverse is not None else False
             
             ex_bound_svc: Set[int] = set()
             ex_bound_ctrl: Set[int] = set()
@@ -585,6 +694,15 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
     for warning in contract["warnings"]:
         logger.warning(f"Tunnel contract ({tunnel.core}, create): {warning}")
 
+    if tunnel.spec:
+        validate_tunnel_payload(tunnel.spec)
+    if tunnel.port_ranges:
+        validate_tunnel_payload({"port_ranges": tunnel.port_ranges})
+        if isinstance(tunnel.spec, dict):
+            tunnel.spec["port_ranges"] = tunnel.port_ranges
+        elif tunnel.spec is None:
+            tunnel.spec = {"port_ranges": tunnel.port_ranges}
+
     if tunnel.spec and tunnel.core == "backhaul":
         ports_received = tunnel.spec.get("ports", [])
         logger.info(f"Backhaul tunnel creation: received ports from frontend: {ports_received} (type: {type(ports_received)}, length: {len(ports_received) if isinstance(ports_received, list) else 'N/A'})")
@@ -606,17 +724,28 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             or tunnel.is_reverse is not None
         )
     )
-    if tunnel.core in {"rathole", "backhaul"}:
+    force_direct = _to_bool((tunnel.spec or {}).get("force_direct")) is True
+    if force_direct:
+        is_reverse = False
+    elif tunnel.core in {"rathole", "backhaul"}:
         is_reverse = True
     elif tunnel.core in {"gost", "chisel", "frp"}:
-        if tunnel.is_reverse is not None:
-            is_reverse = bool(tunnel.is_reverse)
-        elif not (tunnel.spec or {}).get("force_direct") and (foreign_node_id_val or iran_node_id_val):
+        raw_rev = _to_bool(tunnel.is_reverse)
+        if raw_rev is not None:
+            is_reverse = raw_rev
+        elif _to_bool((tunnel.spec or {}).get("is_reverse")) is not None:
+            is_reverse = _to_bool((tunnel.spec or {}).get("is_reverse"))
+        elif foreign_node_id_val or iran_node_id_val:
             is_reverse = True
         else:
             is_reverse = False
     else:
-        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
+        is_reverse = _to_bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
+
+    tunnel.is_reverse = is_reverse
+    if isinstance(tunnel.spec, dict):
+        tunnel.spec["is_reverse"] = is_reverse
+        tunnel.spec["force_direct"] = not is_reverse
     foreign_node = None
     iran_node = None
     
@@ -817,16 +946,19 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
             await asyncio.sleep(1.0)
 
             logger.info(f"Applying config to {second_role} for tunnel {db_tunnel.id}")
-            second_response = await client.send_to_node(
-                node_id=second_node.id,
-                endpoint="/api/agent/tunnels/apply",
-                data={
-                    "tunnel_id": db_tunnel.id,
-                    "core": db_tunnel.core,
-                    "type": db_tunnel.type,
-                    "spec": second_spec
-                }
-            )
+            try:
+                second_response = await client.send_to_node(
+                    node_id=second_node.id,
+                    endpoint="/api/agent/tunnels/apply",
+                    data={
+                        "tunnel_id": db_tunnel.id,
+                        "core": db_tunnel.core,
+                        "type": db_tunnel.type,
+                        "spec": second_spec
+                    }
+                )
+            except Exception as e:
+                second_response = {"status": "error", "message": f"Connection exception: {e}"}
             
             if second_response.get("status") == "error":
                 db_tunnel.status = "error"
@@ -834,8 +966,11 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                 db_tunnel.error_message = f"{second_role} error: {error_msg}"
                 logger.error(f"Tunnel {db_tunnel.id}: {second_role} error: {error_msg}")
                 try:
-                    f_ports = list(extract_all_tunnel_ports(db_tunnel.spec or {}).get("all_ports", set()))
-                    f_ctrl = (db_tunnel.spec or {}).get("control_port")
+                    spec_to_extract = dict(first_spec or db_tunnel.spec or {})
+                    if getattr(db_tunnel, "port_ranges", None) and "port_ranges" not in spec_to_extract:
+                        spec_to_extract["port_ranges"] = db_tunnel.port_ranges
+                    f_ports = list(extract_all_tunnel_ports(spec_to_extract, validate_span=False).get("all_ports", set()))
+                    f_ctrl = (first_spec or {}).get("control_port") or (db_tunnel.spec or {}).get("control_port")
                     await client.send_to_node(
                         node_id=first_node.id,
                         endpoint="/api/agent/tunnels/remove",
@@ -847,8 +982,8 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
                             "control_port": f_ctrl,
                         }
                     )
-                except:
-                    pass
+                except Exception as rollback_err:
+                    logger.warning(f"Compensating rollback on {first_role} failed for tunnel {db_tunnel.id}: {rollback_err}")
                 await db.commit()
                 await db.refresh(db_tunnel)
                 return db_tunnel
@@ -1468,7 +1603,7 @@ async def list_categories(
             color=cat.color or "blue",
             description=cat.description,
             tunnel_count=counts.get(name, 0),
-            created_at=cat.created_at or datetime.utcnow()
+            created_at=cat.created_at or utcnow()
         ))
     return res
 
@@ -1701,6 +1836,7 @@ async def update_tunnel(
                 tunnel.spec["type"] = new_type
                 tunnel.spec["tunnel_type"] = new_type
     if tunnel_update.spec is not None:
+        validate_tunnel_payload(tunnel_update.spec)
         # For Backhaul, ensure ports are preserved in the correct format
         if tunnel.core == "backhaul" and tunnel_update.spec.get("ports"):
             # Ports should already be in the correct format from frontend, but ensure they're preserved
@@ -1736,13 +1872,19 @@ async def update_tunnel(
                 tunnel.spec["ws_path"] = tunnel.ws_path
             else:
                 tunnel.spec.pop("ws_path", None)
-    if is_field_set("is_reverse") and tunnel_update.is_reverse is not None:
-        tunnel.is_reverse = tunnel_update.is_reverse
+    force_direct = _to_bool((tunnel.spec or {}).get("force_direct")) is True
+    if force_direct:
+        tunnel.is_reverse = False
         if isinstance(tunnel.spec, dict):
-            tunnel.spec["is_reverse"] = tunnel_update.is_reverse
-            tunnel.spec["force_direct"] = not tunnel_update.is_reverse
-    elif tunnel.core == "gost":
-        if tunnel.is_reverse is None and not (tunnel.spec or {}).get("force_direct") and (tunnel.foreign_node_id or tunnel.iran_node_id):
+            tunnel.spec["is_reverse"] = False
+            tunnel.spec["force_direct"] = True
+    elif is_field_set("is_reverse") and tunnel_update.is_reverse is not None:
+        tunnel.is_reverse = _to_bool(tunnel_update.is_reverse)
+        if isinstance(tunnel.spec, dict):
+            tunnel.spec["is_reverse"] = tunnel.is_reverse
+            tunnel.spec["force_direct"] = not tunnel.is_reverse
+    elif tunnel.core in {"gost", "chisel", "frp"}:
+        if tunnel.is_reverse is None and (tunnel.foreign_node_id or tunnel.iran_node_id):
             tunnel.is_reverse = True
         if isinstance(tunnel.spec, dict):
             if tunnel.is_reverse is not None:
@@ -1755,12 +1897,15 @@ async def update_tunnel(
     if is_field_set("iran_node_id"):
         tunnel.iran_node_id = tunnel_update.iran_node_id.strip() if (tunnel_update.iran_node_id and tunnel_update.iran_node_id.strip()) else None
     if is_field_set("port_ranges"):
+        if tunnel_update.port_ranges:
+            validate_tunnel_payload({"port_ranges": tunnel_update.port_ranges})
         tunnel.port_ranges = tunnel_update.port_ranges if tunnel_update.port_ranges else None
         if isinstance(tunnel.spec, dict):
             if tunnel.port_ranges:
                 tunnel.spec["port_ranges"] = tunnel.port_ranges
             else:
                 tunnel.spec.pop("port_ranges", None)
+        spec_changed = True
     if is_field_set("stealth_domain"):
         tunnel.stealth_domain = tunnel_update.stealth_domain.strip() if tunnel_update.stealth_domain else None
         if isinstance(tunnel.spec, dict):
@@ -1843,7 +1988,7 @@ async def update_tunnel(
         )
 
     tunnel.revision += 1
-    tunnel.updated_at = datetime.utcnow()
+    tunnel.updated_at = utcnow()
     
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(tunnel, "spec")
@@ -1889,17 +2034,28 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
             or tunnel.is_reverse is not None
         )
     )
-    if tunnel.core in {"rathole", "backhaul"}:
+    force_direct = _to_bool((tunnel.spec or {}).get("force_direct")) is True
+    if force_direct:
+        is_reverse = False
+    elif tunnel.core in {"rathole", "backhaul"}:
         is_reverse = True
     elif tunnel.core in {"gost", "chisel", "frp"}:
-        if tunnel.is_reverse is not None:
-            is_reverse = bool(tunnel.is_reverse)
-        elif not (tunnel.spec or {}).get("force_direct") and (getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None)):
+        raw_rev = _to_bool(tunnel.is_reverse)
+        if raw_rev is not None:
+            is_reverse = raw_rev
+        elif _to_bool((tunnel.spec or {}).get("is_reverse")) is not None:
+            is_reverse = _to_bool((tunnel.spec or {}).get("is_reverse"))
+        elif getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
             is_reverse = True
         else:
             is_reverse = False
     else:
-        is_reverse = bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
+        is_reverse = _to_bool(tunnel.is_reverse) if tunnel.is_reverse is not None else False
+
+    tunnel.is_reverse = is_reverse
+    if isinstance(tunnel.spec, dict):
+        tunnel.spec["is_reverse"] = is_reverse
+        tunnel.spec["force_direct"] = not is_reverse
     foreign_node = None
     iran_node = None
     assigned_control_port: Optional[int] = None
@@ -2039,21 +2195,44 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                 await asyncio.sleep(1.0)
 
                 logger.info(f"Reapplying tunnel {tunnel.id}: applying config to {second_role}")
-                second_response = await client.send_to_node(
-                    node_id=second_node.id,
-                    endpoint="/api/agent/tunnels/apply",
-                    data={
-                        "tunnel_id": tunnel.id,
-                        "core": tunnel.core,
-                        "type": tunnel.type,
-                        "spec": second_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
-                    }
-                )
+                try:
+                    second_response = await client.send_to_node(
+                        node_id=second_node.id,
+                        endpoint="/api/agent/tunnels/apply",
+                        data={
+                            "tunnel_id": tunnel.id,
+                            "core": tunnel.core,
+                            "type": tunnel.type,
+                            "spec": second_spec if tunnel.core in ["backhaul", "frp", "rathole", "chisel", "gost"] else (tunnel.spec or {})
+                        }
+                    )
+                except Exception as e:
+                    second_response = {"status": "error", "message": f"Connection exception: {e}"}
                 
                 if second_response.get("status") == "error":
                     tunnel.status = "error"
                     error_msg = second_response.get("message", f"Unknown error from {second_role}")
                     tunnel.error_message = f"{second_role} error: {error_msg}"
+                    logger.error(f"Tunnel {tunnel.id}: {second_role} error: {error_msg}")
+                    try:
+                        spec_to_extract = dict(first_spec or tunnel.spec or {})
+                        if getattr(tunnel, "port_ranges", None) and "port_ranges" not in spec_to_extract:
+                            spec_to_extract["port_ranges"] = tunnel.port_ranges
+                        f_ports = list(extract_all_tunnel_ports(spec_to_extract, validate_span=False).get("all_ports", set()))
+                        f_ctrl = (first_spec or {}).get("control_port") or (tunnel.spec or {}).get("control_port")
+                        await client.send_to_node(
+                            node_id=first_node.id,
+                            endpoint="/api/agent/tunnels/remove",
+                            data={
+                                "tunnel_id": tunnel.id,
+                                "purge": True,
+                                "core": tunnel.core,
+                                "ports": f_ports,
+                                "control_port": f_ctrl,
+                            }
+                        )
+                    except Exception as rollback_err:
+                        logger.warning(f"Compensating rollback on {first_role} failed for tunnel {tunnel.id}: {rollback_err}")
                     await db.commit()
                     raise HTTPException(status_code=500, detail=error_msg)
                 
@@ -2081,7 +2260,9 @@ async def apply_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Depe
                             mode=verify_mode,
                             ports=verify_ports,
                             control_port=verify_ctrl_port,
-                            proto=("tcp+udp" if (tunnel.type == "tcp+udp" and tunnel.core == "backhaul") else ("udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp"))
+                            proto=("tcp+udp" if (tunnel.type == "tcp+udp" and tunnel.core == "backhaul") else ("udp" if tunnel.type in ["udp", "tcp+udp"] else "tcp")),
+                            is_reverse=is_reverse,
+                            force_direct=not is_reverse
                         )
                     except Exception as ve:
                         logger.debug(f"Verification probe error: {ve}")
@@ -2382,7 +2563,13 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
     else:
         spec_dict = {}
 
-    ports_info = extract_all_tunnel_ports(spec_dict)
+    try:
+        if getattr(tunnel, "port_ranges", None) and "port_ranges" not in spec_dict:
+            spec_dict = dict(spec_dict)
+            spec_dict["port_ranges"] = tunnel.port_ranges
+        ports_info = extract_all_tunnel_ports(spec_dict, validate_span=False)
+    except Exception:
+        ports_info = {"service_ports": set(), "control_ports": set(), "all_ports": set()}
     all_tunnel_ports = list(ports_info.get("all_ports", set()))
     control_port = spec_dict.get("control_port") or spec_dict.get("bind_port") or spec_dict.get("server_port")
 
@@ -2514,6 +2701,9 @@ async def test_tunnel_config(
     foreign_node_id = payload.get("foreign_node_id")
     raw_ports = payload.get("ports", "8080")
     spec = payload.get("spec") or {}
+    validate_tunnel_payload(payload)
+    if spec:
+        validate_tunnel_payload(spec)
     transport = payload.get("transport") or payload.get("rathole_transport") or payload.get("frp_transport") or spec.get("transport") or "tcp"
     
     client = NodeClient()
@@ -2639,16 +2829,26 @@ async def test_tunnel_config(
     control_port_num = int(ctrl_p) if (ctrl_p and str(ctrl_p).isdigit()) else None
 
     # Determine directionality
-    is_reverse = payload.get("is_reverse")
-    if is_reverse is None:
-        is_reverse = spec.get("is_reverse")
-    if is_reverse is None:
-        if core in {"rathole", "backhaul"}:
+    force_direct = _to_bool(payload.get("force_direct")) is True or _to_bool(spec.get("force_direct")) is True
+    if force_direct:
+        is_reverse = False
+    elif core in {"rathole", "backhaul"}:
+        is_reverse = True
+    elif core in {"gost", "chisel", "frp"}:
+        raw_rev = _to_bool(payload.get("is_reverse"))
+        if raw_rev is not None:
+            is_reverse = raw_rev
+        elif _to_bool(spec.get("is_reverse")) is not None:
+            is_reverse = _to_bool(spec.get("is_reverse"))
+        elif foreign_node_id or iran_node_id:
             is_reverse = True
-        elif core in {"gost", "chisel", "frp"}:
-            is_reverse = not bool(spec.get("force_direct"))
         else:
-            is_reverse = True
+            is_reverse = False
+    else:
+        raw_rev = _to_bool(payload.get("is_reverse"))
+        if raw_rev is None:
+            raw_rev = _to_bool(spec.get("is_reverse"))
+        is_reverse = raw_rev if raw_rev is not None else True
     is_reverse = bool(is_reverse)
 
     nodes_to_validate = []
@@ -2678,11 +2878,23 @@ async def test_tunnel_config(
         for at in active_tunnels:
             at_spec = at.spec or {}
             at_ports_info = extract_all_tunnel_ports(at_spec)
-            at_is_rev = at.is_reverse
-            if at_is_rev is None:
-                at_is_rev = at.core in {"rathole", "backhaul", "chisel", "frp"} or (
-                    at.core == "gost" and not at_spec.get("force_direct")
-                )
+            at_force = _to_bool(at_spec.get("force_direct")) is True
+            if at_force:
+                at_is_rev = False
+            elif at.core in {"rathole", "backhaul"}:
+                at_is_rev = True
+            elif at.core in {"gost", "chisel", "frp"}:
+                raw_at_rev = _to_bool(at.is_reverse)
+                if raw_at_rev is not None:
+                    at_is_rev = raw_at_rev
+                elif _to_bool(at_spec.get("is_reverse")) is not None:
+                    at_is_rev = _to_bool(at_spec.get("is_reverse"))
+                elif at.foreign_node_id or at.iran_node_id:
+                    at_is_rev = True
+                else:
+                    at_is_rev = False
+            else:
+                at_is_rev = _to_bool(at.is_reverse) if at.is_reverse is not None else False
             
             at_bound_on_node = set()
             if at_is_rev:

@@ -633,10 +633,12 @@ class NodeClient:
         mode: str = "server",
         ports: Optional[List[int]] = None,
         control_port: Optional[int] = None,
-        proto: str = "udp"
+        proto: str = "udp",
+        is_reverse: Optional[bool] = None,
+        force_direct: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Verify tunnel process and listening sockets on node"""
-        payload = {
+        payload: Dict[str, Any] = {
             "tunnel_id": tunnel_id,
             "core": core,
             "mode": mode,
@@ -644,6 +646,10 @@ class NodeClient:
             "control_port": control_port,
             "proto": proto
         }
+        if is_reverse is not None:
+            payload["is_reverse"] = is_reverse
+        if force_direct is not None:
+            payload["force_direct"] = force_direct
         return await self.send_to_node(node_id, "/api/agent/tunnels/verify", payload)
 
     async def probe_ping(self, node_id: str, target_ip: str, port: Optional[int] = None) -> Optional[int]:

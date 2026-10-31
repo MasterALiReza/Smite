@@ -13,7 +13,9 @@ Eliminates code duplication across:
 - panel/main.py
 - panel/app/tunnel_reapply_manager.py
 """
+import base64
 import hashlib
+import os
 import re
 import random
 import logging
@@ -32,6 +34,71 @@ except ImportError:
         generate_rathole_tls_bundle = None
         format_address_port = None
         is_safe_backend_url = None
+
+
+def _safe_noise_keypair() -> Tuple[str, str]:
+    """Generate a valid 32-byte Base64-encoded X25519 keypair for Rathole Noise protocol.
+    If generate_noise_keypair fails or is unavailable, generates valid Base64 keys
+    to prevent upstream Rathole x25519-dalek Base64 parser panic.
+    """
+    if generate_noise_keypair:
+        try:
+            pair = generate_noise_keypair()
+            if isinstance(pair, (tuple, list)) and len(pair) == 2 and _is_valid_base64_32bytes(pair[0]) and _is_valid_base64_32bytes(pair[1]):
+                return (pair[0], pair[1])
+        except Exception as e:
+            logger.warning(f"generate_noise_keypair failed, falling back to local X25519 generation: {e}")
+    try:
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        from cryptography.hazmat.primitives import serialization
+        priv = x25519.X25519PrivateKey.generate()
+        pub = priv.public_key()
+        priv_bytes = priv.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        pub_bytes = pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        return (
+            base64.b64encode(priv_bytes).decode("utf-8"),
+            base64.b64encode(pub_bytes).decode("utf-8"),
+        )
+    except Exception as e:
+        logger.warning(f"cryptography X25519 generation failed, falling back to urandom: {e}")
+        return (
+            base64.b64encode(os.urandom(32)).decode("utf-8"),
+            base64.b64encode(os.urandom(32)).decode("utf-8"),
+        )
+
+def _to_bool(val: Any) -> Optional[bool]:
+    """Safely coerce boolean-like values, rejecting falsey string representations like 'false' or '0'."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off"):
+            return False
+    return None
+
+
+def _is_valid_base64_32bytes(val: Any) -> bool:
+    """Check if value is a non-empty string that decodes to exactly 32 raw bytes (e.g. X25519 key)."""
+    if not val or not isinstance(val, str):
+        return False
+    try:
+        decoded = base64.b64decode(val.strip(), validate=True)
+        return len(decoded) == 32
+    except Exception:
+        return False
 
 if format_address_port is None:
     def format_address_port(host: str, port: Optional[int] = None) -> str:
@@ -71,6 +138,38 @@ if is_safe_backend_url is None:
 
 
 
+def _resolve_tunnel_directionality(tunnel: Any, spec: Dict[str, Any]) -> bool:
+    """Resolve authoritative directionality (is_reverse) across tunnel and spec.
+    Honors force_direct (spec or tunnel) first to enforce direct mode.
+    Handles MagicMock objects and string boolean representations safely.
+    """
+    tunnel_spec = getattr(tunnel, "spec", None) if hasattr(tunnel, "spec") else None
+    if not isinstance(tunnel_spec, dict):
+        tunnel_spec = {}
+
+    force_direct = (
+        _to_bool(spec.get("force_direct")) is True
+        or _to_bool(tunnel_spec.get("force_direct")) is True
+        or _to_bool(getattr(tunnel, "force_direct", None)) is True
+    )
+    if force_direct:
+        return False
+
+    raw_is_reverse = _to_bool(getattr(tunnel, "is_reverse", None))
+    if raw_is_reverse is not None:
+        return raw_is_reverse
+
+    spec_rev = _to_bool(tunnel_spec.get("is_reverse"))
+    if spec_rev is not None:
+        return spec_rev
+
+    local_spec_rev = _to_bool(spec.get("is_reverse"))
+    if local_spec_rev is not None:
+        return local_spec_rev
+
+    return True
+
+
 GAMING_PROFILE = "gaming-v1"
 
 
@@ -82,11 +181,22 @@ def _has_gaming_profile(tunnel, spec: Dict[str, Any]) -> bool:
 
 
 def is_valid_ipv6(addr: str) -> bool:
-    """Check if address is IPv6"""
-    if not addr:
+    """Check if address is IPv6 (handles brackets, optional ports, rejects IPv4:port)"""
+    if not addr or not isinstance(addr, str):
         return False
-    clean = addr.strip("[]")
-    return ":" in clean
+    clean = addr.strip()
+    if "://" in clean:
+        clean = clean.split("://", 1)[1]
+    if clean.startswith("[") and "]" in clean:
+        clean = clean[1:clean.index("]")]
+    elif ":" in clean:
+        if "." in clean and clean.count(":") == 1:
+            return False
+    try:
+        import ipaddress
+        return ipaddress.ip_address(clean).version == 6
+    except Exception:
+        return clean.count(":") >= 2 and " " not in clean
 
 
 def resolve_effective_sni(tunnel: Any, spec: Optional[Dict[str, Any]] = None) -> Optional[str]:
@@ -152,24 +262,34 @@ def _cert_covers_identities(cert_pem: Optional[str], dns_names: List[str], ip_ad
 def parse_ports_list(spec_or_ports: Any) -> List[int]:
     """Extract integer ports from various spec input formats (int, str, dict, ranges, comma-separated)"""
     if isinstance(spec_or_ports, dict):
-        raw_ports = spec_or_ports.get("ports") or []
+        raw_ports = spec_or_ports.get("ports")
         if not raw_ports:
-            single = spec_or_ports.get("listen_port") or spec_or_ports.get("remote_port") or spec_or_ports.get("public_port")
-            if single is not None:
-                raw_ports = [single]
-    elif isinstance(spec_or_ports, (list, tuple)):
-        raw_ports = list(spec_or_ports)
+            raw_ports = spec_or_ports.get("listen_port") or spec_or_ports.get("remote_port") or spec_or_ports.get("public_port")
     else:
-        raw_ports = [spec_or_ports] if spec_or_ports else []
+        raw_ports = spec_or_ports
 
-    if isinstance(raw_ports, str):
-        if "," in raw_ports:
-            raw_ports = [p.strip() for p in raw_ports.split(",") if p.strip()]
+    if raw_ports is None:
+        return []
+
+    if isinstance(raw_ports, (list, tuple, set)):
+        candidates = list(raw_ports)
+    else:
+        candidates = [raw_ports]
+
+    flattened = []
+    for item in candidates:
+        if item is None:
+            continue
+        if isinstance(item, str) and ("," in item or "\n" in item or "\r" in item):
+            for part in re.split(r'[\r\n,]+', item):
+                p_str = part.strip()
+                if p_str:
+                    flattened.append(p_str)
         else:
-            raw_ports = [raw_ports.strip()]
+            flattened.append(item)
 
     clean_ports: List[int] = []
-    for p in raw_ports:
+    for p in flattened:
         if isinstance(p, dict):
             val = p.get("remote") or p.get("remote_port") or p.get("local") or p.get("local_port") or p.get("port")
             if val is not None and str(val).isdigit():
@@ -177,13 +297,22 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
                 if 1 <= port_num <= 65535 and port_num not in clean_ports:
                     clean_ports.append(port_num)
         elif isinstance(p, str) and "=" in p:
-            left = p.split("=", 1)[0].strip()
-            if ":" in left:
-                left = left.rsplit(":", 1)[-1].strip()
-            if left.isdigit():
-                port_num = int(left)
-                if 1 <= port_num <= 65535 and port_num not in clean_ports:
-                    clean_ports.append(port_num)
+            sides = [s.strip() for s in p.split("=")]
+            for side in sides:
+                if ":" in side:
+                    side = side.rsplit(":", 1)[-1].strip()
+                if side.isdigit():
+                    port_num = int(side)
+                    if 1 <= port_num <= 65535 and port_num not in clean_ports:
+                        clean_ports.append(port_num)
+                elif "-" in side:
+                    parts = side.split("-", 1)
+                    if parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        start_p, end_p = int(parts[0].strip()), int(parts[1].strip())
+                        if 1 <= start_p <= end_p <= 65535 and (end_p - start_p) <= 500:
+                            for r_p in range(start_p, end_p + 1):
+                                if r_p not in clean_ports:
+                                    clean_ports.append(r_p)
         elif isinstance(p, str) and "-" in p:
             parts = p.split("-", 1)
             if parts[0].strip().isdigit() and parts[1].strip().isdigit():
@@ -192,14 +321,8 @@ def parse_ports_list(spec_or_ports: Any) -> List[int]:
                     for r_p in range(start_p, end_p + 1):
                         if r_p not in clean_ports:
                             clean_ports.append(r_p)
-        elif isinstance(p, str) and "," in p:
-            for sub_p in p.split(","):
-                if sub_p.strip().isdigit():
-                    port_num = int(sub_p.strip())
-                    if 1 <= port_num <= 65535 and port_num not in clean_ports:
-                        clean_ports.append(port_num)
-        elif isinstance(p, (int, str)) and str(p).isdigit():
-            port_num = int(p)
+        elif isinstance(p, (int, str)) and str(p).strip().isdigit():
+            port_num = int(str(p).strip())
             if 1 <= port_num <= 65535 and port_num not in clean_ports:
                 clean_ports.append(port_num)
     return clean_ports
@@ -229,10 +352,19 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
             tunnel.spec["token"] = token
 
     ports = parse_ports_list(spec)
+    port_ranges = getattr(tunnel, "port_ranges", None) or spec.get("port_ranges")
+    if port_ranges:
+        ranges_ports = parse_ports_list(port_ranges)
+        for rp in ranges_ports:
+            if rp not in ports:
+                ports.append(rp)
+        server_spec["port_ranges"] = port_ranges
+        client_spec["port_ranges"] = port_ranges
     if not ports:
         proxy_port = server_spec.get("remote_port") or server_spec.get("listen_port")
         if proxy_port and str(proxy_port).isdigit():
             ports = [int(proxy_port)]
+
 
     # Control port assignment
     control_port = server_spec.get("control_port")
@@ -262,16 +394,20 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
         client_priv = spec.get("client_private_key") or spec.get("local_private_key")
         client_pub = spec.get("client_public_key") or spec.get("remote_public_key")
 
-        if not (server_priv and server_pub and client_priv and client_pub):
-            if generate_noise_keypair:
-                s_priv, s_pub = generate_noise_keypair()
-                c_priv, c_pub = generate_noise_keypair()
-            else:
-                s_priv, s_pub = "mock-server-priv", "mock-server-pub"
-                c_priv, c_pub = "mock-client-priv", "mock-client-pub"
+        valid_keys = (
+            _is_valid_base64_32bytes(server_priv)
+            and _is_valid_base64_32bytes(server_pub)
+            and _is_valid_base64_32bytes(client_priv)
+            and _is_valid_base64_32bytes(client_pub)
+            and (server_priv != client_priv)
+            and (server_pub != client_pub)
+        )
+        if not valid_keys:
+            s_priv, s_pub = _safe_noise_keypair()
+            c_priv, c_pub = _safe_noise_keypair()
             server_priv, server_pub = s_priv, s_pub
             client_priv, client_pub = c_priv, c_pub
-            if tunnel.spec is not None:
+            if hasattr(tunnel, "spec") and tunnel.spec is not None and isinstance(tunnel.spec, dict):
                 tunnel.spec["server_private_key"] = server_priv
                 tunnel.spec["server_public_key"] = server_pub
                 tunnel.spec["client_private_key"] = client_priv
@@ -364,8 +500,12 @@ def build_rathole_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) ->
     if getattr(tunnel, "spec", None) is not None:
         tunnel.spec["remote_addr"] = client_spec["remote_addr"]
         tunnel.spec["control_port"] = control_port
+        tunnel.spec["ports"] = ports
+        if port_ranges:
+            tunnel.spec["port_ranges"] = port_ranges
 
     return server_spec, client_spec
+
 
 
 def build_backhaul_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -819,10 +959,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     spec = tunnel.spec.copy() if (hasattr(tunnel, "spec") and tunnel.spec) else {}
 
     # 0. Directionality (Reverse vs Direct)
-    is_reverse = getattr(tunnel, "is_reverse", None)
-    if is_reverse is None:
-        is_reverse = spec.get("is_reverse", True)
-    is_reverse = bool(is_reverse)
+    is_reverse = _resolve_tunnel_directionality(tunnel, spec)
 
     # 1. Transport & TLS Resolution
     transport = (
@@ -999,6 +1136,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     server_spec_dict["token"] = auth
     server_spec_dict["reverse_only"] = is_reverse
     server_spec_dict["is_reverse"] = is_reverse
+    server_spec_dict["force_direct"] = not is_reverse
     server_spec_dict["keepalive"] = keepalive
     if key:
         server_spec_dict["key"] = key
@@ -1020,10 +1158,13 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     if use_tls and tls_cert_pem and tls_key_pem:
         server_spec_dict["tls_cert_pem"] = tls_cert_pem
         server_spec_dict["tls_key_pem"] = tls_key_pem
+    server_spec_dict["credentials_in_env"] = True
+    server_spec_dict["use_authfile"] = True
 
     # Build client spec
     client_spec_dict = spec.copy()
     client_spec_dict["mode"] = "client"
+    client_spec_dict["credentials_in_env"] = True
     client_spec_dict["server_port"] = server_control_port
     client_spec_dict["control_port"] = server_control_port
     client_spec_dict["reverse_port"] = first_port
@@ -1039,6 +1180,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     client_spec_dict["auth_token"] = auth
     client_spec_dict["token"] = auth
     client_spec_dict["is_reverse"] = is_reverse
+    client_spec_dict["force_direct"] = not is_reverse
     client_spec_dict["keepalive"] = keepalive
     client_spec_dict["max_retry_interval"] = max_retry_interval
     if max_retry_count is not None:
@@ -1078,7 +1220,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
     client_spec_dict["server_url"] = f"{proto}{host_part}:{server_control_port}"
 
     # 8. Sync state back to tunnel.spec for persistent DB storage
-    if hasattr(tunnel, "spec") and tunnel.spec is not None:
+    if hasattr(tunnel, "spec") and tunnel.spec is not None and isinstance(tunnel.spec, dict):
         tunnel.spec["auth"] = auth
         tunnel.spec["auth_token"] = auth
         tunnel.spec["token"] = auth
@@ -1091,6 +1233,7 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
         tunnel.spec["type"] = tunnel_type
         tunnel.spec["tunnel_type"] = tunnel_type
         tunnel.spec["is_reverse"] = is_reverse
+        tunnel.spec["force_direct"] = not is_reverse
         if custom_sni:
             tunnel.spec["custom_sni"] = custom_sni
         else:
@@ -1112,6 +1255,12 @@ def build_chisel_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> 
             tunnel.spec["tls_cert_pem"] = tls_cert_pem
             tunnel.spec["tls_key_pem"] = tls_key_pem
 
+    if hasattr(tunnel, "is_reverse"):
+        try:
+            tunnel.is_reverse = is_reverse
+        except Exception:
+            pass
+
     # Return (iran_spec, foreign_spec)
     if is_reverse:
         return server_spec_dict, client_spec_dict
@@ -1128,12 +1277,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
     client_spec["mode"] = "client"
 
     # 0. Directionality (Reverse vs Direct)
-    is_reverse = getattr(tunnel, "is_reverse", None)
-    if is_reverse is None and hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        is_reverse = tunnel.spec.get("is_reverse")
-    if is_reverse is None:
-        is_reverse = spec.get("is_reverse", True)
-    is_reverse = bool(is_reverse)
+    is_reverse = _resolve_tunnel_directionality(tunnel, spec)
 
     # 1. Service / Proxy Type (tcp, udp, tcp+udp, http, https)
     tunnel_type = (
@@ -1147,11 +1291,17 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         tunnel_type = "tcp"
 
     # 2. Ports and Proxy List parsing (extract first so control port avoids collision)
+    port_ranges = getattr(tunnel, "port_ranges", None) or server_spec.get("port_ranges")
     raw_ports = server_spec.get("ports")
     if raw_ports and isinstance(raw_ports, list) and len(raw_ports) > 0:
-        ports = raw_ports
+        ports = list(raw_ports)
     else:
         ports = parse_ports_list(server_spec)
+        if port_ranges:
+            ranges_ports = parse_ports_list(port_ranges)
+            for rp in ranges_ports:
+                if rp not in ports:
+                    ports.append(rp)
         if not ports:
             local_port = server_spec.get("local_port")
             remote_port = server_spec.get("remote_port") or server_spec.get("listen_port")
@@ -1324,7 +1474,7 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
                         san_items.append(x509.IPAddress(ipaddress.ip_address(d)))
                     except ValueError:
                         san_items.append(x509.DNSName(d))
-                for s_ip in [target_server_ip, iran_node_ip, foreign_node_ip]:
+                for s_ip in [target_server_ip, iran_node_ip, foreign_node_ip, "127.0.0.1", "::1", "localhost"]:
                     if s_ip:
                         try:
                             ip_obj = x509.IPAddress(ipaddress.ip_address(s_ip))
@@ -1581,10 +1731,26 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             tunnel.spec["custom_domains"] = custom_domains
 
     # 9. Return (iran_spec, foreign_spec)
+    if hasattr(tunnel, "is_reverse"):
+        try:
+            tunnel.is_reverse = is_reverse
+        except Exception:
+            pass
+
+    if port_ranges:
+        server_spec["port_ranges"] = port_ranges
+        client_spec["port_ranges"] = port_ranges
+        if tunnel.spec is not None:
+            tunnel.spec["port_ranges"] = port_ranges
+
     if is_reverse:
         # Reverse Mode: Iran is Server (frps), Foreign is Client (frpc)
         server_spec["mode"] = "server"
+        server_spec["is_reverse"] = True
+        server_spec["force_direct"] = False
         client_spec["mode"] = "client"
+        client_spec["is_reverse"] = True
+        client_spec["force_direct"] = False
         client_spec["server_addr"] = iran_node_ip
         return server_spec, client_spec
     else:
@@ -1593,11 +1759,14 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         foreign_spec["mode"] = "server"
         foreign_spec["is_provider"] = True
         foreign_spec["is_reverse"] = False
+        foreign_spec["force_direct"] = True
         foreign_spec["secret_key"] = secret_key
         foreign_spec["bind_port"] = bind_port
         foreign_spec["control_port"] = bind_port
         foreign_spec["token"] = token
         foreign_spec["ports"] = ports
+        if port_ranges:
+            foreign_spec["port_ranges"] = port_ranges
         foreign_spec["local_ip"] = target_host
         foreign_spec["target_host"] = target_host
         if health_check_type:
@@ -1612,12 +1781,15 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
         iran_spec["mode"] = "client"
         iran_spec["is_visitor"] = True
         iran_spec["is_reverse"] = False
+        iran_spec["force_direct"] = True
         iran_spec["server_addr"] = foreign_node_ip
         iran_spec["server_port"] = bind_port
         iran_spec["control_port"] = bind_port
         iran_spec["token"] = token
         iran_spec["secret_key"] = secret_key
         iran_spec["ports"] = ports
+        if port_ranges:
+            iran_spec["port_ranges"] = port_ranges
         iran_spec["bind_addr"] = "0.0.0.0"
         # FRP Visitors do not support healthCheck block
         iran_spec.pop("health_check_type", None)
@@ -1675,24 +1847,7 @@ def build_gost_node_specs(
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
         tunnel.spec["ports"] = ports
 
-    force_direct = bool(spec.get("force_direct") or (getattr(tunnel, "spec", {}) or {}).get("force_direct"))
-    if force_direct:
-        is_reverse = False
-    else:
-        is_reverse = getattr(tunnel, "is_reverse", None)
-        if is_reverse is None and hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-            is_reverse = tunnel.spec.get("is_reverse")
-        if is_reverse is None:
-            is_reverse = spec.get("is_reverse")
-
-        # Only default to reverse if is_reverse was NOT explicitly set (i.e. is None)
-        if is_reverse is None:
-            if foreign_node_ip or getattr(tunnel, "foreign_node_id", None) or getattr(tunnel, "iran_node_id", None):
-                is_reverse = True
-            else:
-                is_reverse = False
-        else:
-            is_reverse = bool(is_reverse)
+    is_reverse = _resolve_tunnel_directionality(tunnel, spec)
 
     spec["is_reverse"] = is_reverse
     spec["force_direct"] = not is_reverse
@@ -1838,7 +1993,7 @@ def build_gost_node_specs(
             base_spec["mux_type"] = "smux"
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout", "force_direct"]:
+        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout"]:
             if k in tunnel.spec:
                 base_spec[k] = tunnel.spec[k]
 
@@ -2017,32 +2172,72 @@ def build_tunnel_node_specs(
     """Master entry point: generate (server_spec, client_spec) for any tunnel core"""
     core = (tunnel.core or "").lower()
     if core == "rathole":
-        return build_rathole_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+        server_spec, client_spec = build_rathole_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     elif core == "backhaul":
-        return build_backhaul_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+        server_spec, client_spec = build_backhaul_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     elif core == "chisel":
-        return build_chisel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+        server_spec, client_spec = build_chisel_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     elif core == "frp":
-        return build_frp_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+        server_spec, client_spec = build_frp_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     elif core == "gost":
-        return build_gost_node_specs(tunnel, iran_node_ip, foreign_node_ip)
+        server_spec, client_spec = build_gost_node_specs(tunnel, iran_node_ip, foreign_node_ip)
     else:
         raise ValueError(f"Unsupported tunnel core: {core}")
+
+    tunnel_spec = getattr(tunnel, "spec", None) or {}
+    use_ipv6 = bool(
+        is_valid_ipv6(iran_node_ip)
+        or is_valid_ipv6(foreign_node_ip)
+        or _to_bool(tunnel_spec.get("use_ipv6"))
+        or _to_bool(getattr(tunnel, "use_ipv6", False))
+    )
+    if use_ipv6:
+        server_spec["use_ipv6"] = True
+        client_spec["use_ipv6"] = True
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec["use_ipv6"] = True
+
+    return server_spec, client_spec
+
 
 
 async def persist_generated_spec(session, tunnel, spec_snapshot) -> bool:
     """Persist values the spec builder generated into tunnel.spec (tokens, keys,
-    TLS certificates, control ports).
+    TLS certificates, control ports) and authoritative directionality (is_reverse).
 
     Without this, background re-applies that never committed would generate fresh
     certificates/tokens on every run, so the nodes saw a "changed" spec and
     restarted the tunnel each cycle. Returns True when something was saved.
     """
     try:
-        if tunnel.spec == spec_snapshot:
+        spec_changed = (tunnel.spec != spec_snapshot) if hasattr(tunnel, "spec") else False
+        is_dirty = False
+        if session is not None and hasattr(session, "is_modified"):
+            try:
+                mod_res = session.is_modified(tunnel)
+                import inspect
+                if inspect.iscoroutine(mod_res):
+                    mod_res.close()
+                else:
+                    is_dirty = bool(mod_res)
+            except Exception:
+                is_dirty = False
+
+        if not spec_changed and not is_dirty:
             return False
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(tunnel, "spec")
+
+        if hasattr(tunnel, "_sa_instance_state"):
+            from sqlalchemy.orm.attributes import flag_modified
+            if spec_changed:
+                try:
+                    flag_modified(tunnel, "spec")
+                except Exception:
+                    pass
+            if hasattr(tunnel, "is_reverse"):
+                try:
+                    flag_modified(tunnel, "is_reverse")
+                except Exception:
+                    pass
         await session.commit()
         return True
     except Exception as e:

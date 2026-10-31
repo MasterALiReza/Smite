@@ -8,7 +8,7 @@ import os
 import signal
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .. import agent_auth
 from ..config import settings
@@ -217,6 +217,8 @@ class TunnelVerify(BaseModel):
     ports: Optional[List[Any]] = None
     control_port: Optional[int] = None
     proto: Optional[str] = "udp"
+    is_reverse: Optional[bool] = None
+    force_direct: Optional[bool] = None
 
     @field_validator("tunnel_id")
     @classmethod
@@ -235,7 +237,9 @@ async def verify_tunnel(data: TunnelVerify, request: Request):
             mode=data.mode or "server",
             ports=data.ports,
             control_port=data.control_port,
-            proto=data.proto or "udp"
+            proto=data.proto or "udp",
+            is_reverse=data.is_reverse,
+            force_direct=data.force_direct
         )
         return {"status": "success", "data": health}
     except Exception as e:
@@ -529,7 +533,7 @@ async def decommission_node(request: Request, payload: Optional[DecommissionRequ
         try:
             os.makedirs(os.path.dirname(marker_path), exist_ok=True)
             with open(marker_path, "w") as f:
-                f.write(f"decommissioned_at={datetime.utcnow().isoformat()}\n")
+                f.write(f"decommissioned_at={datetime.now(timezone.utc).isoformat()}\n")
             logger.info(f"Created persistent decommission marker: {marker_path}")
         except Exception as e:
             logger.debug(f"Could not write marker to {marker_path}: {e}")

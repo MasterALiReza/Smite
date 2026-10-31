@@ -13,7 +13,7 @@ if str(panel_dir) not in sys.path:
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import httpx
 
 
@@ -29,8 +29,8 @@ async def test_node_health_offline_no_fake_latency():
     mock_node.name = "IR FanAva-MT"
     mock_node.status = "active"
     mock_node.fingerprint = "fp123"
-    mock_node.registered_at = datetime.utcnow() - timedelta(minutes=10)
-    mock_node.last_seen = datetime.utcnow() - timedelta(minutes=5)
+    mock_node.registered_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+    mock_node.last_seen = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
     mock_node.node_metadata = {
         "ip_address": "94.184.34.13",
         "api_port": 8888,
@@ -60,8 +60,8 @@ async def test_node_health_reconnecting_when_recent_heartbeat():
     mock_node.name = "TR-Node-1 Normal"
     mock_node.status = "active"
     mock_node.fingerprint = "fp456"
-    mock_node.registered_at = datetime.utcnow() - timedelta(minutes=10)
-    mock_node.last_seen = datetime.utcnow() - timedelta(seconds=30)
+    mock_node.registered_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+    mock_node.last_seen = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=30)
     mock_node.node_metadata = {
         "ip_address": "213.142.148.254",
         "api_port": 8888,
@@ -89,8 +89,8 @@ async def test_node_health_live_connected_returns_real_rtt():
     mock_node.name = "FN-Node-Hetz"
     mock_node.status = "active"
     mock_node.fingerprint = "fp789"
-    mock_node.registered_at = datetime.utcnow() - timedelta(minutes=10)
-    mock_node.last_seen = datetime.utcnow() - timedelta(seconds=10)
+    mock_node.registered_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+    mock_node.last_seen = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10)
     mock_node.node_metadata = {
         "ip_address": "65.109.191.129",
         "api_port": 8889,

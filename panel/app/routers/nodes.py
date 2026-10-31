@@ -14,7 +14,7 @@ import time
 import asyncio
 
 from app.database import get_db
-from app.models import Node, Settings, Admin, Tunnel
+from app.models import Node, Settings, Admin, Tunnel, utcnow
 from app.node_client import NodeClient, public_node_metadata, RESERVED_NODE_METADATA_KEYS
 from app.routers.auth import get_current_user, get_current_user_optional
 
@@ -397,7 +397,7 @@ async def auto_register_node(payload: NodeAutoRegister, db: AsyncSession = Depen
     if existing:
         if final_name and not existing.name:
             existing.name = final_name
-        existing.last_seen = datetime.utcnow()
+        existing.last_seen = utcnow()
         existing.status = "active"
         merged_meta = dict(existing.node_metadata or {})
         if merged_meta.get("agent_transport_mode") == "pinned_https":
@@ -535,7 +535,7 @@ async def create_node(node: NodeCreate, request: Request, db: AsyncSession = Dep
                        f"Each node must have a consistent role."
             )
         
-        existing.last_seen = datetime.utcnow()
+        existing.last_seen = utcnow()
         existing.status = "active"
         if request_authenticated:
             merged_meta = dict(existing.node_metadata or {})
@@ -692,7 +692,7 @@ async def check_node_status(node: Any, client: Optional[NodeClient] = None) -> N
                     from datetime import timezone
                     diff = (datetime.now(timezone.utc) - node.last_seen).total_seconds()
                 else:
-                    diff = (datetime.utcnow() - node.last_seen).total_seconds()
+                    diff = (utcnow() - node.last_seen).total_seconds()
                 seconds_since_last_seen = max(0.0, diff)
             except Exception:
                 seconds_since_last_seen = 999999.0
@@ -1127,7 +1127,7 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db), current_
         current_decom = decom_setting.value.copy() if decom_setting.value else {}
         current_decom[node_fingerprint] = {
             "name": node_name,
-            "decommissioned_at": datetime.utcnow().isoformat(),
+            "decommissioned_at": utcnow().isoformat(),
             "tunnels_removed": tunnels_cleaned
         }
         decom_setting.value = current_decom

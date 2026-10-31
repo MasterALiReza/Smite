@@ -1,9 +1,16 @@
 """Database models"""
 from sqlalchemy import Column, String, Integer, DateTime, Float, JSON, Boolean, Text
 from sqlalchemy.dialects.sqlite import DATETIME as SQLiteDATETIME
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
 import uuid
+
+
+def utcnow(ctx=None) -> datetime:
+    """Return timezone-naive UTC timestamp for Python 3.12+ compatibility (avoids datetime.utcnow() deprecation)"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 
 
 def generate_uuid():
@@ -17,9 +24,10 @@ class Node(Base):
     name = Column(String, nullable=False)
     fingerprint = Column(String, unique=True, nullable=False)
     status = Column(String, default="pending")
-    registered_at = Column(DateTime, default=datetime.utcnow)
-    last_seen = Column(DateTime, default=datetime.utcnow)
+    registered_at = Column(DateTime, default=utcnow)
+    last_seen = Column(DateTime, default=utcnow)
     node_metadata = Column("metadata", JSON, default=dict)
+
     
 
 class Tunnel(Base):
@@ -67,8 +75,8 @@ class Tunnel(Base):
     selector_strategy = Column(String, default="fifo") # e.g., 'fifo', 'round', 'parallel', 'rand'
     keepalive_interval = Column(Integer, default=15)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class TunnelCategory(Base):
@@ -78,7 +86,7 @@ class TunnelCategory(Base):
     name = Column(String, unique=True, nullable=False)
     color = Column(String, default="blue")
     description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 
 class Admin(Base):
@@ -87,7 +95,7 @@ class Admin(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     username = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 
 class Usage(Base):
@@ -97,7 +105,7 @@ class Usage(Base):
     tunnel_id = Column(String, nullable=False)
     node_id = Column(String, nullable=False)
     bytes_used = Column(Integer, default=0)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
 
 class CoreResetConfig(Base):
@@ -109,8 +117,8 @@ class CoreResetConfig(Base):
     interval_minutes = Column(Integer, default=10)
     last_reset = Column(DateTime, nullable=True)
     next_reset = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Settings(Base):
@@ -119,8 +127,8 @@ class Settings(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     key = Column(String, unique=True, nullable=False)
     value = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class RevokedToken(Base):
@@ -128,5 +136,6 @@ class RevokedToken(Base):
 
     token_hash = Column(String(64), primary_key=True)
     expires_at = Column(DateTime, nullable=False, index=True)
-    revoked_at = Column(DateTime, default=datetime.utcnow)
+    revoked_at = Column(DateTime, default=utcnow)
+
 

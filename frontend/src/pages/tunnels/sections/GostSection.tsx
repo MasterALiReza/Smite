@@ -376,7 +376,7 @@ export const GostSection: React.FC<GostSectionProps> = ({
             </p>
             <input
               type="text"
-              value={formData.custom_sni || formData.stealth_domain || ''}
+              value={(formData.custom_sni && formData.custom_sni.trim()) || formData.stealth_domain || ''}
               onChange={(e) =>
                 onChange({
                   stealth_domain: e.target.value,
@@ -507,7 +507,7 @@ export const GostSection: React.FC<GostSectionProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.custom_sni || formData.stealth_domain || ''}
+                value={(formData.custom_sni && formData.custom_sni.trim()) || formData.stealth_domain || ''}
                 onChange={(e) =>
                   onChange({
                     custom_sni: e.target.value,

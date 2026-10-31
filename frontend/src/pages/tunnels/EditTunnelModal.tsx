@@ -108,7 +108,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     frp_local_ip: tunnel.spec?.local_ip || '127.0.0.1',
     frp_transport: tunnel.spec?.transport_type || tunnel.spec?.transport || 'tcp',
     frp_security: tunnel.spec?.security_type || 'tls',
-    frp_sni: (tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.stealth_domain || tunnel.spec?.stealth_domain || '').trim(),
+    frp_sni: (String(tunnel.custom_sni || '').trim() || String(tunnel.spec?.custom_sni || '').trim() || String(tunnel.stealth_domain || '').trim() || String(tunnel.spec?.stealth_domain || '').trim()),
     frp_encryption: tunnel.spec?.use_encryption !== false,
     frp_compression: tunnel.spec?.use_compression !== false,
     frp_health_check: tunnel.spec?.enable_health_check !== false && tunnel.spec?.health_check_type !== null,
@@ -120,14 +120,14 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
     cdn_mode: tunnel.cdn_mode || false,
     gaming_mode: tunnel.gaming_mode || false,
     custom_host: tunnel.custom_host || tunnel.spec?.custom_host || '',
-    custom_sni: (tunnel.custom_sni || tunnel.spec?.custom_sni || tunnel.stealth_domain || tunnel.spec?.stealth_domain || '').trim(),
+    custom_sni: (String(tunnel.custom_sni || '').trim() || String(tunnel.spec?.custom_sni || '').trim() || String(tunnel.stealth_domain || '').trim() || String(tunnel.spec?.stealth_domain || '').trim()),
     ws_path: tunnel.ws_path || tunnel.spec?.ws_path || '',
     is_reverse: tunnel.is_reverse !== undefined && tunnel.is_reverse !== null
       ? Boolean(tunnel.is_reverse)
       : (tunnel.spec?.is_reverse !== undefined && tunnel.spec?.is_reverse !== null
           ? Boolean(tunnel.spec.is_reverse)
           : !tunnel.spec?.force_direct),
-    stealth_domain: (tunnel.stealth_domain || tunnel.spec?.stealth_domain || tunnel.custom_sni || tunnel.spec?.custom_sni || '').trim(),
+    stealth_domain: (String(tunnel.stealth_domain || '').trim() || String(tunnel.spec?.stealth_domain || '').trim() || String(tunnel.custom_sni || '').trim() || String(tunnel.spec?.custom_sni || '').trim()),
     transport_type: tunnel.transport_type || 'tcp',
     security_type: tunnel.security_type === 'utls' ? 'tls' : (tunnel.security_type || 'none'),
     selector_strategy: tunnel.selector_strategy || 'fifo',
@@ -200,6 +200,7 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
+      const effectiveGostSni = (String(formData.custom_sni || '').trim() || String(formData.stealth_domain || '').trim())
       let updatedSpec: Record<string, any> = { ...tunnel.spec, use_ipv6: formData.use_ipv6 }
       
       const useV4ToV6 = updatedSpec.use_ipv6 || false
@@ -308,7 +309,6 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         } else {
           delete updatedSpec.rate_limit_mbps
         }
-        const effectiveGostSni = (formData.custom_sni || formData.stealth_domain || '').trim()
         if (effectiveGostSni) {
           updatedSpec.stealth_domain = effectiveGostSni
           updatedSpec.custom_sni = effectiveGostSni
