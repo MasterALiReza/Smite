@@ -242,7 +242,7 @@ async def test_volatile_spec_keys_do_not_restart_tunnel(tmp_path):
     await m.apply_tunnel("t1", "gost", dict(spec))
     assert adapter.apply.await_count == 1
 
-    for extra in ({"latency_ms": 42}, {"_pending_reapply": True}, {"latency_ms": 17, "_pending_reapply": True}):
+    for extra in ({"latency_ms": 42}, {"_pending_reapply": True}, {"_needs_manual_reapply": True}, {"latency_ms": 17, "_pending_reapply": True, "_needs_manual_reapply": True}):
         await m.apply_tunnel("t1", "gost", {**spec, **extra})
     assert adapter.apply.await_count == 1, "bookkeeping keys must never restart a tunnel"
     assert "latency_ms" not in m.tunnel_configs["t1"]["spec"]
@@ -486,7 +486,7 @@ def test_status_reports_capabilities(agent_client):
 
 def test_node_client_strips_volatile_keys_only_for_apply():
     from app.node_client import _strip_volatile_spec_keys
-    payload = {"tunnel_id": "t", "spec": {"ports": [1], "latency_ms": 9, "_pending_reapply": True, "force_restart": True}}
+    payload = {"tunnel_id": "t", "spec": {"ports": [1], "latency_ms": 9, "_pending_reapply": True, "_needs_manual_reapply": True, "force_restart": True}}
     out = _strip_volatile_spec_keys("/api/agent/tunnels/apply", payload)
     assert out["spec"] == {"ports": [1], "force_restart": True}
     assert payload["spec"]["latency_ms"] == 9  # caller's dict untouched

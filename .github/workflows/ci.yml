@@ -7,7 +7,7 @@ on:
 
 jobs:
   python-lint:
-    name: Python lint & syntax (panel + node)
+    name: Python lint & syntax (panel + node + cli)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,10 +18,10 @@ jobs:
         run: pip install ruff
       - name: Ruff lint
         run: |
-          ruff check panel/app panel/main.py node/app node/main.py
+          ruff check panel/app panel/main.py node/app node/main.py cli
       - name: Syntax compile check
         run: |
-          python -m compileall -q panel/app panel/main.py node/app node/main.py
+          python -m compileall -q panel/app panel/main.py node/app node/main.py cli
 
   python-tests:
     name: Python unit tests (pytest)
@@ -34,9 +34,12 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r panel/requirements.txt -r node/requirements.txt -r requirements-dev.txt
+      - name: Ruff check
+        run: |
+          ruff check panel/app node/app cli
       - name: Run pytest
         run: |
-          pytest tests/test_gost_core.py tests/test_spec_builder.py tests/test_gaming_profile_and_deletion.py
+          pytest
 
 
   frontend-build:

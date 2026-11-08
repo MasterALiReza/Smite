@@ -1823,14 +1823,36 @@ async def update_tunnel(
     if is_field_set("keepalive_interval") and tunnel_update.keepalive_interval != tunnel.keepalive_interval:
         spec_changed = True
     
-    if any(is_field_set(f) for f in ("spec", "type", "transport_type", "security_type", "mux_type")):
+    stored_spec = tunnel.spec if isinstance(tunnel.spec, dict) else {}
+    norm_sec = tunnel.security_type or stored_spec.get("security_type") or "none"
+    norm_transport = tunnel.transport_type or stored_spec.get("transport_type") or stored_spec.get("transport") or "tcp"
+    contract_evaluated = any(is_field_set(f) for f in ("spec", "type", "transport_type", "security_type", "mux_type", "custom_sni", "stealth_domain"))
+    if contract_evaluated:
         effective_type = tunnel_update.type if (is_field_set("type") and tunnel_update.type) else (tunnel.type or "tcp")
-        stored_spec = tunnel.spec or {}
         stored_transport = tunnel.transport_type or stored_spec.get("transport_type") or stored_spec.get("transport")
         effective_transport = tunnel.transport_type
         if is_field_set("transport_type") and tunnel_update.transport_type:
             effective_transport = tunnel_update.transport_type
-        validation_spec = tunnel_update.spec if tunnel_update.spec is not None else stored_spec
+        validation_spec = dict(tunnel_update.spec if tunnel_update.spec is not None else stored_spec)
+        if is_field_set("custom_sni") or is_field_set("stealth_domain"):
+            effective_sni = (
+                (tunnel_update.custom_sni.strip() if (is_field_set("custom_sni") and tunnel_update.custom_sni and tunnel_update.custom_sni.strip()) else None)
+                or (tunnel_update.stealth_domain.strip() if (is_field_set("stealth_domain") and tunnel_update.stealth_domain and tunnel_update.stealth_domain.strip()) else None)
+            )
+            if not effective_sni:
+                validation_spec.pop("sni", None)
+                validation_spec.pop("custom_sni", None)
+                validation_spec.pop("stealth_domain", None)
+        else:
+            effective_sni = (
+                validation_spec.get("sni")
+                or validation_spec.get("custom_sni")
+                or getattr(tunnel, "custom_sni", None)
+                or getattr(tunnel, "stealth_domain", None)
+            )
+        if effective_sni:
+            validation_spec["custom_sni"] = effective_sni
+            validation_spec["sni"] = effective_sni
         if not effective_transport:
             effective_transport = validation_spec.get("transport_type") or validation_spec.get("transport")
         effective_security = tunnel.security_type
@@ -1854,6 +1876,8 @@ async def update_tunnel(
 
         norm_sec = contract.get("security_type") or effective_security or "none"
         norm_transport = contract.get("transport") or effective_transport or "tcp"
+        if norm_sec != (tunnel.security_type or "none") or norm_transport != (tunnel.transport_type or "tcp"):
+            spec_changed = True
         tunnel.transport_type = norm_transport
         tunnel.security_type = norm_sec
         if isinstance(tunnel.spec, dict):
@@ -1994,15 +2018,12 @@ async def update_tunnel(
                 tunnel.spec.pop("bandwidth_limit", None)
                 tunnel.spec.pop("bandwidth_limit_mode", None)
                 tunnel.spec.pop("rate_limit_mbps", None)
-    if is_field_set("transport_type") and tunnel_update.transport_type:
-        tunnel.transport_type = tunnel_update.transport_type
-    if is_field_set("security_type") and tunnel_update.security_type:
-        tunnel.security_type = tunnel_update.security_type
-    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        if tunnel.security_type:
-            tunnel.spec["security_type"] = tunnel.security_type
-        if tunnel.transport_type:
-            tunnel.spec["transport_type"] = tunnel.transport_type
+    if contract_evaluated:
+        tunnel.transport_type = norm_transport
+        tunnel.security_type = norm_sec
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec["security_type"] = norm_sec
+            tunnel.spec["transport_type"] = norm_transport
     if is_field_set("failover_ips"):
         tunnel.failover_ips = tunnel_update.failover_ips if tunnel_update.failover_ips else None
     if is_field_set("utls_fingerprint"):
@@ -2410,8 +2431,8 @@ async def _apply_tunnel_impl(tunnel_id: str, request: Request, db: AsyncSession,
                     if tunnel.spec:
                         if latency_ms:
                             tunnel.spec["latency_ms"] = latency_ms
-                        if "_pending_reapply" in tunnel.spec:
-                            tunnel.spec.pop("_pending_reapply", None)
+                        tunnel.spec.pop("_pending_reapply", None)
+                        tunnel.spec.pop("_needs_manual_reapply", None)
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(tunnel, "spec")
                     await db.commit()
@@ -2558,8 +2579,9 @@ async def _apply_tunnel_impl(tunnel_id: str, request: Request, db: AsyncSession,
         if response.get("status") == "success":
             tunnel.status = "active"
             tunnel.error_message = None
-            if tunnel.spec and "_pending_reapply" in tunnel.spec:
+            if tunnel.spec:
                 tunnel.spec.pop("_pending_reapply", None)
+                tunnel.spec.pop("_needs_manual_reapply", None)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
             await db.commit()

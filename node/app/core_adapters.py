@@ -5313,7 +5313,7 @@ class AdapterManager:
 
     # Keys that never affect the generated core configuration. They are stripped
     # before comparing/persisting specs so they can't trigger needless restarts.
-    VOLATILE_SPEC_KEYS = {"force_restart", "latency_ms", "_pending_reapply"}
+    VOLATILE_SPEC_KEYS = {"force_restart", "latency_ms", "_pending_reapply", "_needs_manual_reapply"}
 
     @classmethod
     def _normalize_spec(cls, spec: Any) -> Dict[str, Any]:

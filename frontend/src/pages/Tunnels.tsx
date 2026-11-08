@@ -1837,6 +1837,20 @@ const Tunnels = () => {
                         </button>
                         <button
                           type="button"
+                          onClick={(e) => { e.stopPropagation(); rotateControlPort(tunnel.id); }}
+                          disabled={isReapplying || isDeleting || rotatingControlPortId === tunnel.id}
+                          className="p-2.5 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"
+                          title={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                          aria-label={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                        >
+                          {rotatingControlPortId === tunnel.id ? (
+                            <Loader2 size={18} className="animate-spin text-blue-500" />
+                          ) : (
+                            <Radio size={18} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
                           onClick={(e) => { e.stopPropagation(); setEditingTunnel(tunnel); }}
                           disabled={isReapplying || isDeleting}
                           className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 rounded-xl transition-all disabled:opacity-40 min-w-[40px] min-h-[40px] flex items-center justify-center active:scale-95 cursor-pointer"

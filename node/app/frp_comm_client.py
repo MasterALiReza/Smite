@@ -1,4 +1,5 @@
 """FRP communication client for node-panel communication"""
+import asyncio
 import os
 import subprocess
 import time

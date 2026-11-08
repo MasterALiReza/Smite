@@ -356,3 +356,69 @@ async def test_rotate_control_port_failure_rolls_back(db):
     t2 = res2.scalar_one()
     assert t2.spec["control_port"] == old_port
 
+
+@pytest.mark.asyncio
+async def test_apply_tunnel_clears_needs_manual_reapply(db):
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    tunnel = res.scalar_one()
+    tunnel.spec["_needs_manual_reapply"] = True
+    tunnel.spec["_pending_reapply"] = True
+    await db.commit()
+
+    req = MagicMock()
+    req.state.user = MagicMock()
+    result = await apply_tunnel(tunnel_id="tun-1", request=req, db=db, current_user=MagicMock())
+    assert result["status"] == "success"
+
+    res2 = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    t2 = res2.scalar_one()
+    assert "_needs_manual_reapply" not in t2.spec
+    assert "_pending_reapply" not in t2.spec
+
+
+@pytest.mark.asyncio
+async def test_update_tunnel_preserves_normalized_security(db):
+    update_data = TunnelUpdate(
+        security_type="none",
+        custom_sni="dl.google.com"
+    )
+    t = await update_tunnel("tun-1", update_data, _req(), db=db, current_user=MagicMock())
+    assert t.security_type == "tls"
+    assert t.spec.get("security_type") == "tls"
+
+
+@pytest.mark.asyncio
+async def test_update_tunnel_preserves_spec_when_contract_unevaluated(db):
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    t = res.scalar_one()
+    t.transport_type = "tcp"
+    t.security_type = "none"
+    t.spec["security_type"] = "tls"
+    t.spec["transport_type"] = "ws"
+    await db.commit()
+
+    update_data = TunnelUpdate(name="renamed-tunnel")
+    res = await update_tunnel("tun-1", update_data, _req(), db=db, current_user=MagicMock())
+    assert res.spec.get("security_type") == "tls"
+    assert res.spec.get("transport_type") == "ws"
+
+
+@pytest.mark.asyncio
+async def test_update_tunnel_can_clear_custom_sni_and_security(db):
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    t = res.scalar_one()
+    t.custom_sni = "old.example.com"
+    t.spec["custom_sni"] = "old.example.com"
+    t.security_type = "tls"
+    t.spec["security_type"] = "tls"
+    await db.commit()
+
+    update_data = TunnelUpdate(custom_sni="", security_type="none")
+    res = await update_tunnel("tun-1", update_data, _req(), db=db, current_user=MagicMock())
+    assert res.custom_sni is None
+    assert res.spec.get("custom_sni") is None
+    assert res.security_type == "none"
+    assert res.spec.get("security_type") == "none"
+
+
+

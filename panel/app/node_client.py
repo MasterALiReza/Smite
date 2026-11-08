@@ -23,7 +23,7 @@ def _local_addresses() -> list:
 # they don't change the core configuration but would make the node think the
 # config changed and restart the tunnel. (force_restart is an explicit command and
 # is therefore kept.)
-VOLATILE_SPEC_KEYS = ("latency_ms", "_pending_reapply")
+VOLATILE_SPEC_KEYS = ("latency_ms", "_pending_reapply", "_needs_manual_reapply")
 
 # Node metadata keys holding secrets: never returned by the API, never accepted
 # from node-supplied registration payloads.

@@ -789,15 +789,12 @@ def _rollback_panel(project_root: Path, prev_commit: Optional[str], backup_file:
     """Roll back git repository to previous commit, restore database, and restore container."""
     print("Initiating automatic rollback...")
     if backup_file and backup_file.exists():
-        for candidate_dir in [project_root / "panel" / "data", project_root / "data"]:
-            db_file = candidate_dir / "smite.db"
-            if db_file.exists() or candidate_dir.exists():
-                try:
-                    shutil.copy2(backup_file, db_file)
-                    print(f"Database restored from {backup_file.name}")
-                    break
-                except Exception as e:
-                    print(f"Warning: failed to restore database: {e}")
+        target_db = backup_file.parent / "smite.db"
+        try:
+            shutil.copy2(backup_file, target_db)
+            print(f"Database restored from {backup_file.name}")
+        except Exception as e:
+            print(f"Warning: failed to restore database: {e}")
     if prev_commit and (project_root / ".git").exists():
         print(f"Rolling back git repository to revision {prev_commit[:8]}...")
         subprocess.run(["git", "checkout", prev_commit], cwd=project_root, capture_output=True, text=True)

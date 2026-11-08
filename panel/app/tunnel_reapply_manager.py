@@ -526,8 +526,9 @@ class TunnelReapplyManager:
                 return False
             
             ok = first_response.get("status") == "success" and second_response.get("status") == "success"
-            if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+            if ok and tunnel.spec:
                 tunnel.spec.pop("_pending_reapply", None)
+                tunnel.spec.pop("_needs_manual_reapply", None)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
                 await session.commit()
@@ -558,8 +559,9 @@ class TunnelReapplyManager:
             )
             
             ok = response.get("status") == "success"
-            if ok and tunnel.spec and "_pending_reapply" in tunnel.spec:
+            if ok and tunnel.spec:
                 tunnel.spec.pop("_pending_reapply", None)
+                tunnel.spec.pop("_needs_manual_reapply", None)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(tunnel, "spec")
                 await session.commit()
