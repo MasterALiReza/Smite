@@ -75,12 +75,12 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
     cdn_mode: false,
     gaming_mode: false,
     custom_host: '',
-    custom_sni: '',
+    custom_sni: 'dl.google.com',
     ws_path: '',
     is_reverse: true,
-    stealth_domain: '',
+    stealth_domain: 'dl.google.com',
     transport_type: 'tcp',
-    security_type: 'none',
+    security_type: 'tls',
     selector_strategy: 'fifo',
     utls_fingerprint: 'chrome',
     keepalive_interval: 15,
@@ -221,6 +221,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         spec.remote_port = fallbackPort  // Keep first port for backward compatibility
         spec.is_reverse = Boolean(formData.is_reverse)
         spec.force_direct = !formData.is_reverse
+        if (spec.multiplex === undefined && !['kcp', 'quic'].includes(formData.transport_type)) {
+          spec.multiplex = true
+        }
         if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
           spec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
         } else {
@@ -411,6 +414,10 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         return
       }
 
+      const effectiveGostSecurity = (formData.core === 'gost' && effectiveGostSni && (!formData.security_type || formData.security_type === 'none') && !['kcp', 'ssh'].includes(formData.transport_type))
+        ? 'tls'
+        : formData.security_type
+
       const payload = {
         name: formData.name,
         core: formData.core,
@@ -426,9 +433,9 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
           is_reverse: Boolean(formData.is_reverse),
           stealth_domain: effectiveGostSni || null,
           transport_type: formData.transport_type,
-          security_type: formData.security_type,
+          security_type: effectiveGostSecurity,
           selector_strategy: formData.selector_strategy || 'fifo',
-          utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
+          utls_fingerprint: effectiveGostSecurity === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
           keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0 ? parseFloat(formData.rate_limit_mbps) : null,

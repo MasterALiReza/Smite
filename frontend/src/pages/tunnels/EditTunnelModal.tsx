@@ -344,6 +344,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
         updatedSpec.is_reverse = Boolean(formData.is_reverse)
         updatedSpec.force_direct = !formData.is_reverse
+        if (updatedSpec.multiplex === undefined && !['kcp', 'quic'].includes(formData.transport_type)) {
+          updatedSpec.multiplex = true
+        }
         if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
           updatedSpec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
         } else {
@@ -470,6 +473,13 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         return
       }
 
+      const effectiveGostSecurity = (tunnel.core === 'gost' && effectiveGostSni && (!formData.security_type || formData.security_type === 'none') && !['kcp', 'ssh'].includes(formData.transport_type))
+        ? 'tls'
+        : formData.security_type
+      if (tunnel.core === 'gost') {
+        updatedSpec.security_type = effectiveGostSecurity
+      }
+
       await api.put(`/tunnels/${tunnel.id}`, {
         name: formData.name,
         category: formData.category ? formData.category.trim() : null,
@@ -517,9 +527,9 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
           ws_path: (formData.ws_path && formData.ws_path.trim()) ? formData.ws_path.trim() : null,
           is_reverse: Boolean(formData.is_reverse),
           stealth_domain: effectiveGostSni || null,
-          security_type: formData.security_type,
+          security_type: effectiveGostSecurity,
           selector_strategy: formData.selector_strategy || 'fifo',
-          utls_fingerprint: formData.security_type === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
+          utls_fingerprint: effectiveGostSecurity === 'utls' ? (formData.utls_fingerprint || 'chrome') : null,
           keepalive_interval: formData.keepalive_interval ? parseInt(String(formData.keepalive_interval)) : 15,
           failover_ips: formData.failover_ips ? formData.failover_ips.split('\n').map((ip: string) => ip.trim()).filter((ip: string) => ip.length > 0) : null,
           rate_limit_mbps: formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0 ? parseFloat(formData.rate_limit_mbps) : null,

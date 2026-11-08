@@ -377,12 +377,17 @@ export const GostSection: React.FC<GostSectionProps> = ({
             <input
               type="text"
               value={(formData.custom_sni && formData.custom_sni.trim()) || formData.stealth_domain || ''}
-              onChange={(e) =>
-                onChange({
-                  stealth_domain: e.target.value,
-                  custom_sni: e.target.value,
-                })
-              }
+              onChange={(e) => {
+                const nextVal = e.target.value
+                const updates: Record<string, any> = {
+                  stealth_domain: nextVal,
+                  custom_sni: nextVal,
+                }
+                if (nextVal.trim() && (!formData.security_type || formData.security_type === 'none') && !['kcp', 'ssh'].includes(formData.transport_type)) {
+                  updates.security_type = 'tls'
+                }
+                onChange(updates)
+              }}
               className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xs"
               placeholder="e.g. www.google.com"
             />

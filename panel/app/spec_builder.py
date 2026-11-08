@@ -1930,6 +1930,11 @@ def build_gost_node_specs(
             tunnel.spec.pop("rate_limit_mbps", None)
     transport_type = getattr(tunnel, "transport_type", None) or spec.get("transport_type") or spec.get("transport") or "tcp"
     security_type = getattr(tunnel, "security_type", None) or spec.get("security_type") or "none"
+    if effective_sni and str(security_type).lower() == "none" and str(transport_type).lower() in ("tcp", "ws", "mws", "mtcp"):
+        security_type = "tls"
+        spec["security_type"] = "tls"
+        if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+            tunnel.spec["security_type"] = "tls"
     failover_ips = getattr(tunnel, "failover_ips", None) or spec.get("failover_ips")
     port_ranges = getattr(tunnel, "port_ranges", None) or spec.get("port_ranges")
     allowed_ips = getattr(tunnel, "allowed_ips", None) or spec.get("allowed_ips")
