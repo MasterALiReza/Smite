@@ -130,6 +130,49 @@ async def test_free_ports_skips_protected_process(monkeypatch, tmp_path):
     ca._set_port_owner(None)
 
 
+def test_may_kill_port_holder_with_smite_tunnel_id_env_across_restarts(monkeypatch):
+    """Orphan processes with SMITE_TUNNEL_ID matching owner may be cleaned up even across agent restarts."""
+    monkeypatch.setattr(ca, "_is_safe_core_process", lambda pid: True)
+    fake_proc = MagicMock()
+    fake_proc.environ.return_value = {ca.TUNNEL_TAG_ENV: "my-tunnel"}
+    fake_proc.cmdline.return_value = ["/usr/local/bin/chisel", "client", "x"]
+    monkeypatch.setattr(ca.psutil, "Process", lambda pid: fake_proc)
+    monkeypatch.setattr(ca, "_cmdline_of", lambda pid: " ".join(fake_proc.cmdline.return_value))
+
+    protected = {"my-tunnel", "other-tunnel"}
+    # Across restart: agent instance id is different, recorded_pids is empty
+    assert ca._may_kill_port_holder(999, "my-tunnel", protected, {}) is True
+
+    # If the process belongs to another tunnel, it must never be killed
+    fake_proc.environ.return_value = {ca.TUNNEL_TAG_ENV: "other-tunnel"}
+    assert ca._may_kill_port_holder(999, "my-tunnel", protected, {}) is False
+
+
+@pytest.mark.asyncio
+async def test_free_ports_reports_foreign_process_details_and_raises_on_conflict(monkeypatch):
+    """Foreign processes (like nginx or xray) are not killed and report (pid, process_name, port)."""
+    fake_proc = MagicMock()
+    fake_proc.name.return_value = "nginx"
+    monkeypatch.setattr(ca.psutil, "Process", lambda pid: fake_proc)
+    monkeypatch.setattr(ca, "_is_safe_core_process", lambda pid: False)
+    monkeypatch.setattr(ca, "_find_pids_by_port_procfs", lambda port, listen_only=True: {8080})
+    monkeypatch.setattr(ca.os.path, "exists", lambda p: True if p == "/proc/net/tcp" else False)
+
+    killed = []
+    monkeypatch.setattr(ca.os, "kill", lambda pid, sig: killed.append(pid))
+
+    occupied = await ca.free_ports([8080], raise_on_conflict=False)
+    assert killed == []
+    assert len(occupied) == 1
+    assert occupied[0]["pid"] == 8080 or occupied[0]["port"] == 8080
+    assert occupied[0]["process_name"] == "nginx"
+
+    with pytest.raises(ca.PortConflictError) as exc_info:
+        await ca.free_ports([8080], raise_on_conflict=True)
+    assert "nginx" in str(exc_info.value)
+    assert "8080" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # PID identity (PID reuse safety)
 # ---------------------------------------------------------------------------

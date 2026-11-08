@@ -396,6 +396,63 @@ async def test_country_node_deterministic_auto_naming():
     assert new_name == "DE Node 5"
 
 
+def test_collect_kernel_tuning_detects_drift(monkeypatch):
+    """Verify that _collect_kernel_tuning detects drift when parameters differ from standard zz-smite-tuning"""
+    from node.app.panel_client import _collect_kernel_tuning
+
+    # Mock non-standard values: qdisc = fq_codel, wmem_max = 16777216 (16MB), 2 frpc_comm processes
+    telemetry = _collect_kernel_tuning()
+    assert isinstance(telemetry, dict)
+    assert "kernel_drift" in telemetry
+
+    # Test drift evaluation with mock inputs
+    with patch("builtins.open") as mock_open:
+        def open_side_effect(path, *args, **kwargs):
+            m = MagicMock()
+            if "tcp_congestion_control" in str(path):
+                m.__enter__.return_value.read.return_value = "cubic"
+            elif "default_qdisc" in str(path):
+                m.__enter__.return_value.read.return_value = "fq_codel"
+            elif "tcp_wmem" in str(path):
+                m.__enter__.return_value.read.return_value = "4096 87380 16777216"
+            elif "tcp_notsent_lowat" in str(path):
+                m.__enter__.return_value.read.return_value = "131072"
+            else:
+                return MagicMock()
+            return m
+        mock_open.side_effect = open_side_effect
+
+        with patch("os.name", "posix"), \
+             patch("psutil.process_iter", return_value=[
+            MagicMock(info={"name": "frpc", "cmdline": ["frpc", "-c", "frpc_comm_1.yaml"]}),
+            MagicMock(info={"name": "frpc", "cmdline": ["frpc", "-c", "frpc_comm_2.yaml"]}),
+        ]):
+            drift_telemetry = _collect_kernel_tuning()
+            assert drift_telemetry["kernel_drift"] is True
+            assert any("fq_codel" in r for r in drift_telemetry["drift_reasons"])
+            assert any("16777216" in r for r in drift_telemetry["drift_reasons"])
+            assert any("frpc_comm processes=2" in r for r in drift_telemetry["drift_reasons"])
+
+
+def test_frp_comm_client_cleans_up_stale_processes(tmp_path):
+    """Verify FrpCommClient._cleanup_stale_processes kills orphan processes and unlinks pidfile"""
+    from node.app.frp_comm_client import FrpCommClient
+
+    client = FrpCommClient()
+    client.config_dir = tmp_path
+    client.pid_file = tmp_path / "frpc_comm.pid"
+    client.pid_file.write_text("12345")
+
+    mock_proc = MagicMock()
+    mock_proc.info = {"pid": 12345, "name": "frpc", "cmdline": ["frpc", "-c", "frpc_comm.yaml"]}
+
+    with patch("psutil.process_iter", return_value=[mock_proc]):
+        client._cleanup_stale_processes()
+        mock_proc.terminate.assert_called_once()
+        assert not client.pid_file.exists()
+
+
+
 
 
 

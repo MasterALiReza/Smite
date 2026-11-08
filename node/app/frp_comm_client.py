@@ -5,8 +5,10 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, Optional
-import asyncio
-from app.config import settings
+try:
+    from .config import settings
+except ImportError:
+    from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +22,47 @@ class FrpCommClient:
         self.process: Optional[asyncio.subprocess.Process] = None
         self.config_file = self.config_dir / "frpc_comm.yaml"
         self.log_file = self.config_dir / "frpc_comm.log"
+        self.pid_file = self.config_dir / "frpc_comm.pid"
         self.enabled = False
         self.server_addr: Optional[str] = None
         self.server_port: Optional[int] = None
         self.token: Optional[str] = None
         self.local_port = settings.node_api_port
         self.remote_port: Optional[int] = None
+
+    def _cleanup_stale_processes(self):
+        """Clean up previous orphan frpc_comm processes and stale pidfiles."""
+        old_pid = None
+        if self.pid_file.exists():
+            try:
+                content = self.pid_file.read_text().strip()
+                if content.isdigit():
+                    old_pid = int(content)
+            except Exception:
+                pass
+
+        try:
+            import psutil
+            for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    cmd = " ".join(p.info['cmdline'] or [])
+                    if (old_pid and p.info['pid'] == old_pid) or ("frpc_comm" in cmd and "frpc" in (p.info['name'] or "")):
+                        logger.info(f"Terminating stale frpc_comm process (PID {p.info['pid']})")
+                        p.terminate()
+                        try:
+                            p.wait(timeout=2.0)
+                        except Exception:
+                            p.kill()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"Process cleanup check: {e}")
+
+        try:
+            if self.pid_file.exists():
+                self.pid_file.unlink()
+        except Exception:
+            pass
     
     def _resolve_binary_path(self) -> Path:
         """Resolve frpc binary path"""
@@ -58,6 +95,8 @@ class FrpCommClient:
         if self.process and self.process.returncode is None:
             logger.warning("FRP communication client already running")
             return True
+
+        self._cleanup_stale_processes()
         
         try:
             self.server_addr = server_addr
@@ -143,6 +182,10 @@ proxies:
                 raise RuntimeError(error_msg)
             
             logger.info(f"[FRP] FRP communication client started (PID: {self.process.pid}, remote_port={self.remote_port})")
+            try:
+                self.pid_file.write_text(str(self.process.pid))
+            except Exception:
+                pass
             
             if self.remote_port:
                 await asyncio.sleep(1.0)
@@ -174,6 +217,11 @@ proxies:
             finally:
                 self.process = None
                 self.enabled = False
+                try:
+                    if self.pid_file.exists():
+                        self.pid_file.unlink()
+                except Exception:
+                    pass
                 logger.info("[FRP] FRP communication client stopped")
     
     def is_running(self) -> bool:

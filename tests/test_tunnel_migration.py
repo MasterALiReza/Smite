@@ -227,3 +227,132 @@ def test_invalidate_derived_spec():
     typed = invalidate_derived_spec(spec, nodes_changed=False, type_changed=True)
     assert set(typed) == {"token", "auth", "tls_cert_pem", "remote_addr", "ports", "control_port"}
     assert spec["token"] == "t"                      # input is not mutated
+
+
+@pytest.mark.asyncio
+async def test_migrate_db_normalizes_security_type_idempotent(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+    from app.database import migrate_db
+    from app.config import settings
+
+    db_file = tmp_path / "test_migration.db"
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE tunnels (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR,
+            core VARCHAR,
+            transport_type VARCHAR,
+            security_type VARCHAR,
+            spec JSON
+        )
+    """)
+    cur.execute("""
+        INSERT INTO tunnels (id, name, core, transport_type, security_type, spec) VALUES
+        ('7ec36485-f1be-40de-b229-67d921a8efa9', 'V2ray-Wexort-DE', 'gost', 'tcp', 'none', '{"ports": [9990], "control_port": 30155, "token": "tok1"}'),
+        ('ec32a81e-28df-4a9e-900c-cd57951f43d5', 'V2-Wexort-TR-GAME', 'frp', 'kcp', 'tls', '{"ports": [8080], "token": "tok2", "security_type": "none"}'),
+        ('00c43fe0-2002-44a9-8146-1bbb51720639', 'TR-V2-Groot', 'gost', 'wss', 'tls', '{"ports": [8443], "is_reverse": true, "multiplex": true, "sni": "dl.google.com", "token": "tok3"}')
+    """)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(settings, "db_type", "sqlite")
+    monkeypatch.setattr(settings, "db_path", str(db_file))
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+    from app import database
+    monkeypatch.setattr(database, "engine", test_engine)
+
+    # First run: should normalize and promote
+    await migrate_db()
+
+    conn = sqlite3.connect(str(db_file))
+    cur = conn.cursor()
+    cur.execute("SELECT id, security_type, spec FROM tunnels")
+    rows = {r[0][:8]: (r[1], json.loads(r[2])) for r in cur.fetchall()}
+    conn.close()
+
+    # 7ec36485 promoted to tls
+    sec_7e, spec_7e = rows["7ec36485"]
+    assert sec_7e == "tls"
+    assert spec_7e["security_type"] == "tls"
+    assert spec_7e["sni"] == "dl.google.com"
+    assert spec_7e["ports"] == [9990]
+    assert spec_7e["token"] == "tok1"
+    assert spec_7e.get("_needs_manual_reapply") is True
+
+    # ec32a81e normalized to none
+    sec_ec, spec_ec = rows["ec32a81e"]
+    assert sec_ec == "none"
+    assert spec_ec["security_type"] == "none"
+    assert spec_ec["ports"] == [8080]
+    assert spec_ec["token"] == "tok2"
+
+    # 00c43fe0 synced spec.security_type to tls and stripped redundant multiplex
+    sec_00, spec_00 = rows["00c43fe0"]
+    assert sec_00 == "tls"
+    assert spec_00["security_type"] == "tls"
+    assert spec_00["ports"] == [8443]
+    assert spec_00["token"] == "tok3"
+    assert "multiplex" not in spec_00
+    assert spec_00.get("_needs_manual_reapply") is True
+
+    # Second run: idempotent, no changes or error
+    await migrate_db()
+
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_allocate_new_control_port_different_from_current(db):
+    from app.tunnel_planning import allocate_new_control_port, _CONTROL_PORT_RANGES, _DEFAULT_CONTROL_RANGE
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    tunnel = res.scalar_one()
+    curr_port = tunnel.spec.get("control_port")
+    base, span = _CONTROL_PORT_RANGES.get(tunnel.core, _DEFAULT_CONTROL_RANGE)
+
+    new_port = await allocate_new_control_port(db, tunnel, [tunnel.iran_node_id, tunnel.foreign_node_id])
+    assert new_port != curr_port
+    assert base <= new_port < base + span
+    assert new_port != 8080
+
+
+@pytest.mark.asyncio
+async def test_rotate_control_port_success(db):
+    from app.routers.tunnels import rotate_control_port
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    tunnel = res.scalar_one()
+    old_port = tunnel.spec["control_port"]
+
+    user = MagicMock()
+    result = await rotate_control_port(tunnel_id="tun-1", db=db, current_user=user)
+    assert result["status"] == "success"
+    assert result["old_control_port"] == old_port
+    assert result["new_control_port"] != old_port
+
+    res2 = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    t2 = res2.scalar_one()
+    assert t2.spec["control_port"] == result["new_control_port"]
+
+
+@pytest.mark.asyncio
+async def test_rotate_control_port_failure_rolls_back(db):
+    from app.routers.tunnels import rotate_control_port
+    res = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    tunnel = res.scalar_one()
+    old_port = tunnel.spec["control_port"]
+
+    FakeClient.fail_apply_on = {"fo-x"}
+
+    user = MagicMock()
+    with pytest.raises(HTTPException) as exc_info:
+        await rotate_control_port(tunnel_id="tun-1", db=db, current_user=user)
+    assert exc_info.value.status_code == 500
+
+    res2 = await db.execute(select(Tunnel).where(Tunnel.id == "tun-1"))
+    t2 = res2.scalar_one()
+    assert t2.spec["control_port"] == old_port
+

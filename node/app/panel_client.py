@@ -5,12 +5,81 @@ import hashlib
 import socket
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
-from app.config import settings
-from app.frp_comm_client import frp_comm_client
+from typing import Dict, Any, Optional
+try:
+    from .config import settings
+    from .frp_comm_client import frp_comm_client
+except ImportError:
+    from app.config import settings
+    from app.frp_comm_client import frp_comm_client
 from . import agent_auth
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_kernel_tuning() -> Dict[str, Any]:
+    """Collect live kernel tuning parameters and frpc_comm process count for drift detection."""
+    import os
+    telemetry = {
+        "qdisc": None,
+        "tcp_cc": None,
+        "tcp_wmem_max": None,
+        "tcp_notsent_lowat": None,
+        "frpc_comm_count": 0,
+        "kernel_drift": False,
+        "drift_reasons": []
+    }
+    if os.name == "posix":
+        try:
+            with open("/proc/sys/net/ipv4/tcp_congestion_control", "r") as f:
+                telemetry["tcp_cc"] = f.read().strip()
+        except Exception:
+            pass
+        try:
+            with open("/proc/sys/net/core/default_qdisc", "r") as f:
+                telemetry["qdisc"] = f.read().strip()
+        except Exception:
+            pass
+        try:
+            with open("/proc/sys/net/ipv4/tcp_wmem", "r") as f:
+                parts = f.read().strip().split()
+                if parts:
+                    telemetry["tcp_wmem_max"] = int(parts[-1])
+        except Exception:
+            pass
+        try:
+            with open("/proc/sys/net/ipv4/tcp_notsent_lowat", "r") as f:
+                telemetry["tcp_notsent_lowat"] = int(f.read().strip())
+        except Exception:
+            pass
+
+    try:
+        import psutil
+        count = 0
+        for p in psutil.process_iter(['name', 'cmdline']):
+            try:
+                cmd = " ".join(p.info['cmdline'] or [])
+                if "frpc_comm" in cmd or (p.info['name'] == 'frpc' and "comm" in cmd):
+                    count += 1
+            except Exception:
+                pass
+        telemetry["frpc_comm_count"] = count
+    except Exception:
+        pass
+
+    reasons = []
+    if telemetry["qdisc"] and telemetry["qdisc"] != "fq":
+        reasons.append(f"qdisc={telemetry['qdisc']} (expected fq)")
+    if telemetry["tcp_wmem_max"] and telemetry["tcp_wmem_max"] < 67108864:
+        reasons.append(f"wmem_max={telemetry['tcp_wmem_max']} (< 64MB)")
+    if telemetry["frpc_comm_count"] > 1:
+        reasons.append(f"frpc_comm processes={telemetry['frpc_comm_count']} (expected <= 1)")
+
+    if reasons:
+        telemetry["kernel_drift"] = True
+        telemetry["drift_reasons"] = reasons
+
+    return telemetry
 
 
 class PanelClient:
@@ -127,7 +196,8 @@ class PanelClient:
                 "api_address": f"{agent_scheme}://{host}:{settings.node_api_port}",
                 "node_name": settings.node_name,
                 "panel_address": self.panel_address,
-                "role": settings.node_role
+                "role": settings.node_role,
+                "kernel_tuning": _collect_kernel_tuning()
             }
         }
         

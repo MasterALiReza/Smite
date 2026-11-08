@@ -91,6 +91,32 @@ async def ensure_conflict_free_control_port(db: Any, tunnel: Any, node_ids: Iter
     return None
 
 
+async def allocate_new_control_port(db: Any, tunnel: Any, node_ids: Iterable[str]) -> int:
+    """Allocate a fresh, non-colliding control port that is guaranteed different from the current control port."""
+    from app.routers.tunnels import extract_all_tunnel_ports
+
+    base, span = _CONTROL_PORT_RANGES.get(tunnel.core, _DEFAULT_CONTROL_RANGE)
+    used = await _ports_used_on_nodes(db, tunnel, node_ids)
+    used |= extract_all_tunnel_ports(tunnel.spec or {}).get("service_ports", set())
+    curr = _current_control_port(tunnel)
+    if curr:
+        used.add(curr)
+
+    # Offset using hash of tunnel id + current control port to find a new free port
+    start = (int(hashlib.sha256(f"{tunnel.id}-{curr}".encode()).hexdigest()[:8], 16) + 7) % span
+    for offset in range(span):
+        candidate = base + (start + offset) % span
+        if candidate not in used and candidate != curr:
+            logger.info(f"Tunnel {tunnel.id}: selected new rotated control port {candidate} (previous was {curr})")
+            return candidate
+
+    # Fallback to any port in span different from curr
+    for candidate in range(base, base + span):
+        if candidate != curr:
+            return candidate
+    return base + 1
+
+
 def is_latency_sensitive(tunnel: Any) -> bool:
     """Only activate gaming-v1 profile if gaming_mode is explicitly enabled."""
     if isinstance(tunnel, dict):
@@ -135,7 +161,40 @@ async def apply_latency_profile(tunnel: Any, client: Any, node_ids: Iterable[str
     return changed
 
 
+async def apply_gost_relay_tuning(tunnel: Any, client: Any, node_ids: Iterable[str]) -> bool:
+    """Enable high-throughput SMUX buffer tuning if both nodes support gost_relay_mux_tuning."""
+    if getattr(tunnel, "core", None) != "gost":
+        return False
+    ids = [n for n in node_ids if n]
+    if len(ids) < 2:
+        return False
+    spec = dict(getattr(tunnel, "spec", None) or {})
+    changed = False
+    try:
+        if await client.nodes_support("gost_relay_mux_tuning", *ids):
+            if not spec.get("relay_mux_tuning"):
+                spec["relay_mux_tuning"] = True
+                changed = True
+        else:
+            if spec.get("relay_mux_tuning"):
+                spec.pop("relay_mux_tuning", None)
+                changed = True
+    except Exception as e:
+        logger.debug(f"Capability check failed for tunnel {getattr(tunnel, 'id', '')}: {e}")
+        if spec.get("relay_mux_tuning"):
+            spec.pop("relay_mux_tuning", None)
+            changed = True
+    if changed:
+        tunnel.spec = spec
+        try:
+            flag_modified(tunnel, "spec")
+        except Exception:
+            pass
+    return changed
+
+
 async def prepare_tunnel_for_apply(db: Any, tunnel: Any, client: Any, node_ids: Iterable[str]) -> None:
     ids = [n for n in node_ids if n]
     await ensure_conflict_free_control_port(db, tunnel, ids)
     await apply_latency_profile(tunnel, client, ids)
+    await apply_gost_relay_tuning(tunnel, client, ids)

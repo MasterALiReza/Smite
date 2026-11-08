@@ -1110,6 +1110,83 @@ async def test_gost_reverse_mode_no_double_smux(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gost_reverse_relay_mux_tuning_applied_without_outer_mux(tmp_path, monkeypatch):
+    """
+    Verify GOST reverse tunnels WITH relay_mux_tuning: True tune the relay handler
+    and connector SMUX buffer to 8MB/32MB, but do NOT enable outer mux on listener or dialer.
+    Also verifies wss reverse tunnels avoid outer double-SMUX.
+    """
+    adapter = GostAdapter()
+    adapter.config_dir = tmp_path
+    monkeypatch.setattr(adapter, "_resolve_binary_path", lambda: Path("/bin/gost"))
+
+    with patch("node.app.core_adapters._spawn_core_subprocess", new_callable=AsyncMock) as mock_proc, \
+         patch("node.app.core_adapters.free_ports", new_callable=AsyncMock), \
+         patch("node.app.core_adapters.free_port", new_callable=AsyncMock), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_proc.return_value = MagicMock(pid=2001, returncode=None)
+
+        # 1. Reverse Server with relay_mux_tuning
+        srv_spec = {
+            "mode": "server",
+            "is_reverse": True,
+            "relay_mux_tuning": True,
+            "control_port": 25010,
+            "ports": [8080],
+            "transport_type": "tcp",
+            "security_type": "none",
+        }
+        await adapter.apply("gost-rev-tuned-srv", srv_spec)
+        srv_cfg = json.loads((tmp_path / "gost-rev-tuned-srv.json").read_text())
+        listener_meta = srv_cfg["services"][0]["listener"].get("metadata", {})
+        handler_meta = srv_cfg["services"][0]["handler"].get("metadata", {})
+        assert listener_meta.get("mux") is None, "Server listener must NOT have outer mux"
+        assert listener_meta.get("mux.type") is None
+        assert handler_meta.get("bind") is True
+        assert handler_meta.get("mux.maxStreamBuffer") == 8388608
+        assert handler_meta.get("mux.maxReceiveBuffer") == 33554432
+
+        # 2. Reverse Client with relay_mux_tuning
+        cli_spec = {
+            "mode": "client",
+            "is_reverse": True,
+            "relay_mux_tuning": True,
+            "server_ip": "1.1.1.1",
+            "control_port": 25010,
+            "ports": [8080],
+            "transport_type": "tcp",
+            "security_type": "none",
+        }
+        await adapter.apply("gost-rev-tuned-cli", cli_spec)
+        cli_cfg = json.loads((tmp_path / "gost-rev-tuned-cli.json").read_text())
+        node = cli_cfg["chains"][0]["hops"][-1]["nodes"][0]
+        dialer_meta = node["dialer"].get("metadata", {})
+        connector_meta = node["connector"].get("metadata", {})
+        assert dialer_meta.get("mux") is None, "Client dialer must NOT have outer mux"
+        assert connector_meta.get("mux.maxStreamBuffer") == 8388608
+        assert connector_meta.get("mux.maxReceiveBuffer") == 33554432
+
+        # 3. Reverse WSS Tunnel: must not have outer mux even if is_explicit_mux was toggled
+        wss_cli_spec = {
+            "mode": "client",
+            "is_reverse": True,
+            "relay_mux_tuning": True,
+            "server_ip": "1.1.1.1",
+            "control_port": 25011,
+            "ports": [8080],
+            "transport_type": "ws",
+            "security_type": "tls",
+            "multiplex": True,  # was previously triggering double-SMUX on wss
+        }
+        await adapter.apply("gost-rev-wss-cli", wss_cli_spec)
+        wss_cli_cfg = json.loads((tmp_path / "gost-rev-wss-cli.json").read_text())
+        wss_node = wss_cli_cfg["chains"][0]["hops"][-1]["nodes"][0]
+        wss_dialer_meta = wss_node["dialer"].get("metadata", {})
+        assert wss_dialer_meta.get("mux") is None, "WSS reverse tunnel must NOT have double-SMUX"
+
+
+
+@pytest.mark.asyncio
 async def test_gost_reverse_mode_explicit_mux_enabled(tmp_path, monkeypatch):
     """
     Verify GOST reverse tunnels WITH explicit multiplex: True or enable_mux: True

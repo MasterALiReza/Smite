@@ -407,6 +407,12 @@ def _is_node_managed_process(pid: int, recorded_pids: Optional[Dict[str, int]] =
         recorded_pids = _all_recorded_pids()
     if pid in recorded_pids.values():
         return True
+    try:
+        env = psutil.Process(pid).environ()
+        if env.get(AGENT_TAG_ENV) or env.get(TUNNEL_TAG_ENV):
+            return True
+    except Exception:
+        pass
     tagged, _ = _process_tags(pid)
     if tagged:
         return True
@@ -419,6 +425,12 @@ def _owning_tunnels(pid: int, candidate_ids: Iterable[str], recorded_pids: Dict[
     owners: Set[str] = set()
     cmdline = _cmdline_of(pid)
     _, tag = _process_tags(pid)
+    try:
+        env = psutil.Process(pid).environ()
+        env_tag = env.get(TUNNEL_TAG_ENV)
+    except Exception:
+        env_tag = None
+    tag = tag or env_tag
     for tid in candidate_ids:
         if not tid:
             continue
@@ -573,10 +585,105 @@ def _extract_ports_from_spec_dict(spec: Any) -> Set[int]:
     return extracted
 
 
-async def free_ports(ports: Iterable[Any]) -> None:
-    """Safely terminate any core proxy process holding any of the specified ports in a single batch pass."""
+class PortConflictError(RuntimeError):
+    """Raised when one or more required ports are held by foreign or protected processes."""
+    def __init__(self, conflicts: List[Dict[str, Any]]):
+        self.conflicts = conflicts
+        details = ", ".join(
+            f"(pid={c.get('pid')}, process_name={c.get('process_name')}, port={c.get('port')})"
+            for c in conflicts
+        )
+        super().__init__(f"Port conflict: port(s) held by foreign or protected process: {details}")
+
+
+def _has_established_connection_on_port(port: int) -> bool:
+    """Check if there is at least one active TCP connection in ESTABLISHED state on port."""
+    try:
+        port_int = int(port)
+    except (ValueError, TypeError):
+        return False
+
+    hex_p = f"{port_int:04X}"
+    if os.path.exists(PROC_NET_ROOT + "/tcp") or os.path.exists(PROC_NET_ROOT + "/tcp6"):
+        for proto in ["tcp", "tcp6"]:
+            path = f"{PROC_NET_ROOT}/{proto}"
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 4:
+                            # State 01 = TCP_ESTABLISHED
+                            if parts[3].upper() != "01":
+                                continue
+                            loc = parts[1].rsplit(":", 1)[-1].upper() if ":" in parts[1] else ""
+                            rem = parts[2].rsplit(":", 1)[-1].upper() if ":" in parts[2] else ""
+                            if loc == hex_p or rem == hex_p:
+                                return True
+            except Exception:
+                pass
+        return False
+
+    # psutil fallback (non-Linux / test environment)
+    try:
+        for c in psutil.net_connections(kind="tcp"):
+            if c.status == psutil.CONN_ESTABLISHED:
+                if (c.laddr and c.laddr.port == port_int) or (c.raddr and c.raddr.port == port_int):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+LOG_ERROR_PATTERNS = [
+    "os error 98",
+    "heartbeat timed out",
+    "read from workconn",
+    "connection refused",
+    "address already in use",
+]
+
+
+def _check_core_log_for_errors(tunnel_id: str, core: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    """Scan the last 50 lines of the tunnel core's log file for critical runtime error patterns."""
+    candidates = []
+    if core:
+        candidates.append(Path(f"/etc/smite-node/{core}/{tunnel_id}.log"))
+    for c in ["gost", "rathole", "backhaul", "frp", "chisel"]:
+        candidates.append(Path(f"/etc/smite-node/{c}/{tunnel_id}.log"))
+
+    log_path = None
+    for p in candidates:
+        if p.exists():
+            log_path = p
+            break
+
+    if not log_path:
+        return False, None
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        tail = lines[-50:] if len(lines) > 50 else lines
+        tail_text = "".join(tail).lower()
+        for pat in LOG_ERROR_PATTERNS:
+            if pat in tail_text:
+                return True, f"Recent error in core log: '{pat}'"
+    except Exception:
+        pass
+    return False, None
+
+
+async def free_ports(ports: Iterable[Any], raise_on_conflict: bool = False) -> List[Dict[str, Any]]:
+    """Safely terminate any core proxy process holding any of the specified ports in a single batch pass.
+
+    Returns list of occupied port entries that could not be freed:
+        [{"pid": pid, "process_name": name, "port": port_num}]
+    If raise_on_conflict is True and any port could not be freed, raises PortConflictError.
+    """
     if not ports:
-        return
+        return []
     target_ports: Set[int] = set()
     for p in ports:
         if not p:
@@ -588,7 +695,7 @@ async def free_ports(ports: Iterable[Any]) -> None:
         except (ValueError, TypeError):
             continue
     if not target_ports:
-        return
+        return []
 
     current_pid = os.getpid()
     ignored_pids = {current_pid, os.getppid(), 1}
@@ -596,12 +703,20 @@ async def free_ports(ports: Iterable[Any]) -> None:
     protected_ids = _get_protected_tunnel_ids()
     recorded_pids = _all_recorded_pids()
     killed: Set[int] = set()
+    occupied: List[Dict[str, Any]] = []
 
     def _try_kill(pid: int, port_num: int, source: str) -> None:
         if pid in ignored_pids or pid in killed:
             return
         if not _may_kill_port_holder(pid, owner, protected_ids, recorded_pids):
-            logger.debug(f"{source}: port {port_num} is held by protected/foreign process {pid}; leaving it untouched")
+            proc_name = "unknown"
+            try:
+                proc_name = psutil.Process(pid).name()
+            except Exception:
+                pass
+            logger.warning(f"{source}: port {port_num} is held by protected/foreign process {pid} ({proc_name}); leaving it untouched")
+            if not any(e["pid"] == pid and e["port"] == port_num for e in occupied):
+                occupied.append({"pid": pid, "process_name": proc_name, "port": port_num})
             return
         logger.warning(f"{source}: terminating stale core process {pid} holding port {port_num} (owner={owner})")
         try:
@@ -625,8 +740,6 @@ async def free_ports(ports: Iterable[Any]) -> None:
                 if p.pid in ignored_pids or p.pid in killed:
                     continue
                 try:
-                    if not _is_safe_core_process(p.pid):
-                        continue
                     conn_fn = getattr(p, "net_connections", None) or getattr(p, "connections")
                     for conn in conn_fn(kind='inet'):
                         if not conn.laddr or conn.laddr.port not in target_ports:
@@ -650,11 +763,16 @@ async def free_ports(ports: Iterable[Any]) -> None:
     if killed:
         await asyncio.sleep(0.1)
 
+    if raise_on_conflict and occupied:
+        raise PortConflictError(occupied)
+    return occupied
 
-async def free_port(port: Optional[Any]) -> None:
+
+async def free_port(port: Optional[Any], raise_on_conflict: bool = False) -> List[Dict[str, Any]]:
     """Safely terminate any core proxy process holding the specified port without affecting system or node services."""
     if port:
-        await free_ports([port])
+        return await free_ports([port], raise_on_conflict=raise_on_conflict)
+    return []
 
 
 async def safe_stop_subprocess(
@@ -4121,7 +4239,7 @@ class GostAdapter:
             or (spec.get("transport") or "").lower() in ["tcpmux", "mux"]
         )
         if is_reverse_mode:
-            enable_mux = is_explicit_mux and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
+            enable_mux = is_explicit_mux and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc", "wss"]
         else:
             enable_mux = (is_gaming_mode or is_explicit_mux or is_udp_mode) and gost_type not in ["mws", "mwss", "mtcp", "mtls", "grpc"]
         # Low-latency tuning for UDP/gaming tunnels. Everything here only changes how
@@ -4369,6 +4487,8 @@ class GostAdapter:
                 handler_metadata["keepAlive"] = True
             if is_reverse:
                 handler_metadata["bind"] = True
+                if bool(spec.get("relay_mux_tuning")):
+                    handler_metadata.update(mux_tuning)
             if enable_mux:
                 handler_metadata["mux.type"] = mux_type
                 handler_metadata["mux"] = True
@@ -4631,6 +4751,8 @@ class GostAdapter:
             connector_metadata = {
                 "bufferSize": 262144
             }
+            if is_reverse and bool(spec.get("relay_mux_tuning")):
+                connector_metadata.update(mux_tuning)
             if enable_mux:
                 connector_metadata["mux.type"] = mux_type
                 connector_metadata["mux"] = True
@@ -5903,7 +6025,10 @@ class AdapterManager:
         # 5. Free the ports and verify they really are released
         if target_ports:
             logger.info(f"Freeing and verifying ports {sorted(list(target_ports))} for tunnel {tunnel_id}")
-            await free_ports(target_ports)
+            occupied_ports = await free_ports(target_ports)
+            if occupied_ports:
+                result["occupied_ports"] = occupied_ports
+                result["stuck_details"] = [f"(pid={c['pid']}, process_name={c['process_name']}, port={c['port']})" for c in occupied_ports]
             stuck: Set[int] = set()
             for attempt in range(6):
                 await asyncio.sleep(0.25 if attempt else 0.1)
@@ -5922,11 +6047,21 @@ class AdapterManager:
                                 result["killed_pids"].append(hp)
                             except Exception:
                                 pass
+                        else:
+                            stuck.add(p)
+                            proc_name = "unknown"
+                            try:
+                                proc_name = psutil.Process(hp).name()
+                            except Exception:
+                                pass
+                            if not any(e.get("pid") == hp and e.get("port") == p for e in result.get("occupied_ports", [])):
+                                result.setdefault("occupied_ports", []).append({"pid": hp, "process_name": proc_name, "port": p})
+                                result.setdefault("stuck_details", []).append(f"(pid={hp}, process_name={proc_name}, port={p})")
                 if not stuck:
                     break
             result["stuck_ports"] = sorted(stuck)
             if stuck:
-                logger.error(f"Tunnel {tunnel_id}: ports {sorted(stuck)} are still held after removal")
+                logger.error(f"Tunnel {tunnel_id}: ports {sorted(stuck)} are still held after removal: {result.get('stuck_details', [])}")
 
         logger.info(f"Tunnel {tunnel_id} removal complete. Ports checked: {sorted(list(target_ports))}")
         return result
@@ -6250,12 +6385,12 @@ class AdapterManager:
             or _to_bool_adapter(spec.get("force_direct")) is True
             or _to_bool_adapter(config.get("force_direct")) is True
         )
+        arg_rev = _to_bool_adapter(is_reverse)
+        spec_rev = _to_bool_adapter(spec.get("is_reverse"))
+        cfg_rev = _to_bool_adapter(config.get("is_reverse"))
         if eff_force_direct:
             eff_is_reverse = False
         else:
-            arg_rev = _to_bool_adapter(is_reverse)
-            spec_rev = _to_bool_adapter(spec.get("is_reverse"))
-            cfg_rev = _to_bool_adapter(config.get("is_reverse"))
             if arg_rev is not None:
                 eff_is_reverse = arg_rev
             elif spec_rev is not None:
@@ -6376,15 +6511,54 @@ class AdapterManager:
                 except Exception:
                     pass
                         
-        is_healthy = proc_alive and (len(missing_ports) == 0)
-        
+        # Task 9: Check core log for errors and control_port ESTAB connection for reverse tunnels
+        has_log_error, log_err_reason = _check_core_log_for_errors(tunnel_id, core)
+
+        is_explicit_reverse = (
+            not eff_force_direct and (
+                arg_rev is True
+                or spec_rev is True
+                or cfg_rev is True
+                or (core in ["rathole", "backhaul"] and spec_rev is not False and cfg_rev is not False)
+            )
+        )
+
+        has_estab = True
+        estab_reason = None
+        if is_explicit_reverse and ctrl_port and proc_alive:
+            try:
+                has_estab = _has_established_connection_on_port(int(ctrl_port))
+            except Exception:
+                has_estab = True
+            if not has_estab:
+                estab_reason = f"No established connection on control port {ctrl_port}"
+
+        health_state = "healthy"
+        degraded_reason = None
+
+        if not proc_alive:
+            health_state = "down"
+            degraded_reason = "Core process is not running"
+        elif has_log_error:
+            health_state = "degraded"
+            degraded_reason = log_err_reason
+        elif not has_estab:
+            health_state = "degraded"
+            degraded_reason = estab_reason
+        elif missing_ports:
+            health_state = "degraded"
+            degraded_reason = f"Required port(s) not listening: {[p['port'] for p in missing_ports]}"
+
         return {
-            "healthy": is_healthy,
+            "healthy": health_state == "healthy",
+            "health_state": health_state,
+            "degraded_reason": degraded_reason,
             "process_running": proc_alive,
             "mode": actual_mode,
             "core": core,
             "listening_ports": listening_ports,
-            "missing_ports": missing_ports
+            "missing_ports": missing_ports,
+            "control_established": has_estab if (is_explicit_reverse and ctrl_port) else None,
         }
 
     async def cleanup(self, kill_processes: bool = False):

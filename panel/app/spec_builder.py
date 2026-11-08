@@ -1405,6 +1405,10 @@ def build_frp_node_specs(tunnel, iran_node_ip: str, foreign_node_ip: str) -> Tup
             logger.warning(
                 f"FRP tunnel {getattr(tunnel, 'id', '')}: KCP transport operates over UDP and cannot be wrapped in TLS; falling back to security_type='none'"
             )
+            if hasattr(tunnel, "security_type"):
+                tunnel.security_type = "none"
+            if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+                tunnel.spec["security_type"] = "none"
     else: # tcp
         if explicit_security == "none":
             use_tls = False
@@ -1933,6 +1937,8 @@ def build_gost_node_specs(
     if effective_sni and str(security_type).lower() == "none" and str(transport_type).lower() in ("tcp", "ws", "mws", "mtcp"):
         security_type = "tls"
         spec["security_type"] = "tls"
+        if hasattr(tunnel, "security_type"):
+            tunnel.security_type = "tls"
         if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
             tunnel.spec["security_type"] = "tls"
     failover_ips = getattr(tunnel, "failover_ips", None) or spec.get("failover_ips")
@@ -2018,7 +2024,7 @@ def build_gost_node_specs(
             base_spec["mux_type"] = "smux"
 
     if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
-        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout"]:
+        for k in ["utls_fingerprint", "utls_client", "mux_type", "handler_type", "user_agent", "multiplex", "selector_strategy", "strategy", "keepalive_interval", "max_fails", "fail_timeout", "relay_mux_tuning"]:
             if k in tunnel.spec:
                 base_spec[k] = tunnel.spec[k]
 

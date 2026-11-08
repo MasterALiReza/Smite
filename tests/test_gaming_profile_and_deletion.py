@@ -513,3 +513,129 @@ async def test_apply_purge_skips_tunnel_with_operation_in_flight(tmp_path, monke
     finally:
         lock.release()
     assert "concurrent" in m.tunnel_configs
+
+
+@pytest.mark.asyncio
+async def test_delete_tunnel_fast_timeout_and_pending_removals():
+    """Verify delete_tunnel commits DB deletion immediately and records offline nodes in pending_tunnel_removals in < 2s."""
+    import time
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.database import Base
+    from app.models import Tunnel, Settings
+    from app.routers.tunnels import delete_tunnel
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
+        t = Tunnel(
+            id="tun-fast-del",
+            name="fast-del",
+            core="gost",
+            type="tcp",
+            node_id="node-offline",
+            spec={"ports": [8080], "control_port": 30010}
+        )
+        db.add(t)
+        await db.commit()
+
+        # Mock NodeClient to simulate a slow / hanging node that takes 5 seconds
+        async def slow_send(*args, **kwargs):
+            await asyncio.sleep(5.0)
+            return {"status": "success"}
+
+        with patch("panel.app.routers.tunnels.NodeClient") as MockClient:
+            instance = MockClient.return_value
+            instance.send_to_node = slow_send
+
+            start = time.monotonic()
+            res = await delete_tunnel(
+                tunnel_id="tun-fast-del",
+                request=MagicMock(),
+                db=db,
+                current_user=MagicMock()
+            )
+            duration = time.monotonic() - start
+
+        assert res == {"status": "deleted"}
+        # Verify call finished in < 2.5s (due to 1.2s timeout, not waiting 5s)
+        assert duration < 2.5
+
+        # Verify tunnel is deleted from DB
+        check_t = await db.execute(select(Tunnel).where(Tunnel.id == "tun-fast-del"))
+        assert check_t.scalar_one_or_none() is None
+
+        # Verify pending_tunnel_removals holds the failed node payload
+        s_res = await db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+        s_row = s_res.scalar_one_or_none()
+        assert s_row is not None
+        assert "node-offline" in s_row.value
+        assert any(item.get("tunnel_id") == "tun-fast-del" for item in s_row.value["node-offline"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delete_tunnel_online_node_cleans_up_without_pending():
+    """Verify delete_tunnel with responsive node deletes cleanly without leaving pending removals."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.database import Base
+    from app.models import Tunnel, Settings
+    from app.routers.tunnels import delete_tunnel
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
+        t = Tunnel(
+            id="tun-online-del",
+            name="online-del",
+            core="gost",
+            type="tcp",
+            node_id="node-online",
+            spec={"ports": [8080], "control_port": 30011}
+        )
+        db.add(t)
+        await db.commit()
+
+        sent = []
+        async def fast_send(node_id, endpoint, data=None):
+            sent.append((node_id, endpoint, data))
+            return {"status": "success", "killed_pids": [123], "stuck_ports": []}
+
+        with patch("app.routers.tunnels.NodeClient") as MockClient:
+            instance = MockClient.return_value
+            instance.send_to_node = fast_send
+
+            res = await delete_tunnel(
+                tunnel_id="tun-online-del",
+                request=MagicMock(),
+                db=db,
+                current_user=MagicMock()
+            )
+
+        assert res == {"status": "deleted"}
+        assert len(sent) >= 1
+        assert sent[0][0] == "node-online"
+        assert sent[0][1] == "/api/agent/tunnels/remove"
+
+        # Tunnel is deleted
+        check_t = await db.execute(select(Tunnel).where(Tunnel.id == "tun-online-del"))
+        assert check_t.scalar_one_or_none() is None
+
+        # No pending removals created
+        s_res = await db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+        s_row = s_res.scalar_one_or_none()
+        assert s_row is None or s_row.value == {}
+
+    await engine.dispose()
+
+

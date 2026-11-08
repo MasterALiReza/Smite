@@ -221,9 +221,6 @@ const AddTunnelModal = ({ nodes, servers, categories = [], onCategoryCreated, on
         spec.remote_port = fallbackPort  // Keep first port for backward compatibility
         spec.is_reverse = Boolean(formData.is_reverse)
         spec.force_direct = !formData.is_reverse
-        if (spec.multiplex === undefined && !['kcp', 'quic'].includes(formData.transport_type)) {
-          spec.multiplex = true
-        }
         if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
           spec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
         } else {

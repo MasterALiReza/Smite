@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 try:
-    from panel.app.spec_builder import (
+    from app.spec_builder import (
         build_tunnel_node_specs,
         build_rathole_node_specs,
         build_backhaul_node_specs,
@@ -20,7 +20,7 @@ try:
         build_gost_node_specs,
     )
 except ImportError:
-    from app.spec_builder import (
+    from panel.app.spec_builder import (
         build_tunnel_node_specs,
         build_rathole_node_specs,
         build_backhaul_node_specs,
@@ -871,7 +871,7 @@ def test_extract_all_tunnel_ports_with_dict_and_vhost():
 
 def test_parse_ports_list_robustness():
     """Verify parse_ports_list handles comma strings, ranges, dicts, and integer lists"""
-    from panel.app.spec_builder import parse_ports_list
+    from app.spec_builder import parse_ports_list
 
     # Comma-separated string in dict
     assert parse_ports_list({"ports": "8080,8081"}) == [8080, 8081]
@@ -1177,6 +1177,36 @@ def test_spec_builder_gost_handles_ipv6_and_bracketed_addresses():
     ips = [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
     assert "2001:db8::1" in ips or "2001:db8::2" in ips
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caps,expected", [
+    ({"n1": False, "n2": False}, False),
+    ({"n1": True, "n2": False}, False),
+    ({"n1": False, "n2": True}, False),
+    ({"n1": True, "n2": True}, True),
+])
+async def test_gost_relay_mux_tuning_capability_gating(caps, expected):
+    from unittest.mock import AsyncMock
+    from app.tunnel_planning import apply_gost_relay_tuning
+
+    class FakeClient:
+        async def nodes_support(self, cap, *node_ids):
+            assert cap == "gost_relay_mux_tuning"
+            return all(caps.get(nid, False) for nid in node_ids)
+
+    tunnel = DummyTunnel(id="t1", core="gost", type="tcp", spec={"ports": [8080]})
+    await apply_gost_relay_tuning(tunnel, FakeClient(), ["n1", "n2"])
+
+    if expected:
+        assert tunnel.spec.get("relay_mux_tuning") is True
+        s, c = build_gost_node_specs(tunnel, "10.0.0.1", "10.0.0.2")
+        assert s.get("relay_mux_tuning") is True
+        assert c.get("relay_mux_tuning") is True
+    else:
+        assert "relay_mux_tuning" not in tunnel.spec
+        s, c = build_gost_node_specs(tunnel, "10.0.0.1", "10.0.0.2")
+        assert "relay_mux_tuning" not in s
+        assert "relay_mux_tuning" not in c
 
 
 if __name__ == "__main__":

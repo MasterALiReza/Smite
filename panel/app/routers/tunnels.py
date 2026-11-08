@@ -97,7 +97,11 @@ def _contract_check(
                 _same_carrier(core, transport, previous_transport)
                 and (security_type or "").strip().lower() == (previous_security or "").strip().lower()
             ):
-                return validate_tunnel_request(core, tunnel_type, transport, spec or {}, None)
+                res = validate_tunnel_request(core, tunnel_type, transport, spec or {}, None)
+                if (core or "").strip().lower() == "frp" and (transport or "").strip().lower() == "kcp":
+                    res["security_type"] = "none"
+                    res["warnings"].append("frp: KCP transport operates over UDP and cannot be wrapped in TLS; normalized security to 'none'.")
+                return res
         raise
 
 
@@ -704,6 +708,14 @@ async def create_tunnel(tunnel: TunnelCreate, request: Request, db: AsyncSession
         raise HTTPException(status_code=400, detail=str(exc))
     for warning in contract["warnings"]:
         logger.warning(f"Tunnel contract ({tunnel.core}, create): {warning}")
+
+    norm_sec = contract.get("security_type") or tunnel.security_type or "none"
+    norm_transport = contract.get("transport") or raw_transport or "tcp"
+    tunnel.transport_type = norm_transport
+    tunnel.security_type = norm_sec
+    if isinstance(tunnel.spec, dict):
+        tunnel.spec["transport_type"] = norm_transport
+        tunnel.spec["security_type"] = norm_sec
 
     if tunnel.spec:
         validate_tunnel_payload(tunnel.spec)
@@ -1840,6 +1852,14 @@ async def update_tunnel(
         for warning in contract["warnings"]:
             logger.warning(f"Tunnel contract {tunnel_id} ({tunnel.core}, update): {warning}")
 
+        norm_sec = contract.get("security_type") or effective_security or "none"
+        norm_transport = contract.get("transport") or effective_transport or "tcp"
+        tunnel.transport_type = norm_transport
+        tunnel.security_type = norm_sec
+        if isinstance(tunnel.spec, dict):
+            tunnel.spec["transport_type"] = norm_transport
+            tunnel.spec["security_type"] = norm_sec
+
     if tunnel_update.name is not None:
         tunnel.name = tunnel_update.name
     staged_request: Dict[str, Any] = {}
@@ -1978,6 +1998,11 @@ async def update_tunnel(
         tunnel.transport_type = tunnel_update.transport_type
     if is_field_set("security_type") and tunnel_update.security_type:
         tunnel.security_type = tunnel_update.security_type
+    if hasattr(tunnel, "spec") and isinstance(tunnel.spec, dict):
+        if tunnel.security_type:
+            tunnel.spec["security_type"] = tunnel.security_type
+        if tunnel.transport_type:
+            tunnel.spec["transport_type"] = tunnel.transport_type
     if is_field_set("failover_ips"):
         tunnel.failover_ips = tunnel_update.failover_ips if tunnel_update.failover_ips else None
     if is_field_set("utls_fingerprint"):
@@ -2687,37 +2712,30 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
         "control_port": control_port,
     }
 
+    await db.delete(tunnel)
+    await db.commit()
+    logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database immediately; notifying nodes {nodes_to_notify}")
+
     failed_nodes: List[str] = []
 
     async def _notify_node(n_id: str) -> bool:
-        last_error: Any = None
-        for attempt in range(3):
-            try:
-                resp = await asyncio.wait_for(
-                    client.send_to_node(
-                        node_id=n_id,
-                        endpoint="/api/agent/tunnels/remove",
-                        data=remove_payload
-                    ),
-                    timeout=8.0
-                )
-                # send_to_node reports failures in the payload instead of raising
-                if isinstance(resp, dict) and resp.get("status") == "error":
-                    last_error = resp.get("message")
-                else:
-                    stuck = (resp or {}).get("stuck_ports") if isinstance(resp, dict) else None
-                    if stuck:
-                        logger.error(f"Tunnel {tunnel.id}: node {n_id} could not release ports {stuck} after removal")
-                    killed = (resp or {}).get("killed_pids") if isinstance(resp, dict) else None
-                    if killed:
-                        logger.warning(f"Tunnel {tunnel.id}: node {n_id} killed leftover processes {killed}")
-                    return True
-            except Exception as e:
-                last_error = e
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-        logger.warning(f"Failed to notify node {n_id} during tunnel removal after 3 attempts: {last_error}")
-        return False
+        try:
+            resp = await asyncio.wait_for(
+                client.send_to_node(
+                    node_id=n_id,
+                    endpoint="/api/agent/tunnels/remove",
+                    data=remove_payload
+                ),
+                timeout=1.2
+            )
+            if isinstance(resp, dict) and resp.get("status") == "error":
+                return False
+            stuck = (resp or {}).get("stuck_ports") if isinstance(resp, dict) else None
+            if stuck:
+                logger.error(f"Tunnel {tunnel.id}: node {n_id} could not release ports {stuck} after removal")
+            return True
+        except Exception:
+            return False
 
     if nodes_to_notify:
         results = await asyncio.gather(*[_notify_node(n_id) for n_id in nodes_to_notify], return_exceptions=True)
@@ -2743,12 +2761,42 @@ async def delete_tunnel(tunnel_id: str, request: Request, db: AsyncSession = Dep
                 current_pending[fn_id] = node_list
             s_row.value = current_pending
             flag_modified(s_row, "value")
+            await db.commit()
         except Exception as e:
             logger.error(f"Failed to persist pending tunnel removal: {e}")
 
-    await db.delete(tunnel)
-    await db.commit()
-    logger.info(f"Tunnel {tunnel.id} ('{tunnel.name}') deleted from database, notified nodes {nodes_to_notify} (failed: {failed_nodes}), freed ports: {all_tunnel_ports}")
+        # Spawn background retry for offline/slow nodes
+        async def _background_retry_removals():
+            for fn_id in failed_nodes:
+                for attempt in range(3):
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    try:
+                        resp = await asyncio.wait_for(
+                            client.send_to_node(fn_id, "/api/agent/tunnels/remove", remove_payload),
+                            timeout=5.0
+                        )
+                        if isinstance(resp, dict) and resp.get("status") != "error":
+                            try:
+                                from app.database import async_session
+                                from app.models import Settings
+                                from sqlalchemy.orm.attributes import flag_modified
+                                async with async_session() as bg_db:
+                                    s_res = await bg_db.execute(select(Settings).where(Settings.key == "pending_tunnel_removals"))
+                                    s_row = s_res.scalar_one_or_none()
+                                    if s_row and s_row.value and fn_id in s_row.value:
+                                        curr = dict(s_row.value)
+                                        curr[fn_id] = [it for it in curr[fn_id] if it.get("tunnel_id") != tunnel.id]
+                                        if not curr[fn_id]:
+                                            curr.pop(fn_id, None)
+                                        s_row.value = curr
+                                        flag_modified(s_row, "value")
+                                        await bg_db.commit()
+                            except Exception:
+                                pass
+                            break
+                    except Exception:
+                        pass
+        _spawn_background(_background_retry_removals())
 
     # Stray copies of this tunnel can exist on other nodes (older panel versions
     # re-targeted tunnels to "the first" node). Ask every other node to drop it by
@@ -3173,6 +3221,36 @@ async def test_tunnel_config(
             "detail": f"{core.upper()} {transport.upper()} routing verified"
         })
 
+    # 6. Destination service port preflight on foreign node
+    if foreign_node_id and service_ports_to_check and foreign_node and t2 > 0:
+        foreign_port_status = await client.check_node_listening_ports(foreign_node_id, service_ports_to_check, proto=transport)
+        if foreign_port_status:
+            not_listening = [p for p, info in foreign_port_status.items() if not info.get("listening")]
+            listening_with_proc = [f"{p} ({info.get('process') or 'listening'})" for p, info in foreign_port_status.items() if info.get("listening")]
+            if not_listening:
+                checks.append({
+                    "name": "destination_ports",
+                    "title": "Foreign Destination Port Preflight",
+                    "status": "warning",
+                    "detail": f"Destination port(s) {', '.join(str(p) for p in not_listening)} not listening on {foreign_node.name}. Ensure your backend service (e.g. Xray/V2Ray) is running."
+                })
+            else:
+                checks.append({
+                    "name": "destination_ports",
+                    "title": "Foreign Destination Port Preflight",
+                    "status": "passed",
+                    "detail": f"Destination service active on {foreign_node.name}: {', '.join(listening_with_proc)}"
+                })
+
+    # 7. Directionality notice for GOST Direct Iran -> Foreign
+    if core == "gost" and not is_reverse and iran_node_id and foreign_node_id:
+        checks.append({
+            "name": "gost_direction",
+            "title": "GOST Direct Mode Notice",
+            "status": "warning",
+            "detail": "Direct mode (Iran -> Foreign) is vulnerable to ISP throttling on Iran mobile networks (MCI/Irancell). Reverse mode + TLS is strongly recommended."
+        })
+
     all_passed = all(c["status"] in ["passed", "warning"] for c in checks)
     failed_count = sum(1 for c in checks if c["status"] == "failed")
     summary = "All checks passed! Ready to create tunnel." if all_passed else f"{failed_count} check(s) failed. Please review configuration."
@@ -3326,17 +3404,42 @@ async def test_active_tunnel(
     if not tunnel.spec:
         tunnel.spec = {}
     tunnel.spec["latency_ms"] = latency_ms
-    from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(tunnel, "spec")
-    await db.commit()
-    
+
     stages = {
         "iran_process": {"alive": True, "core": tunnel.core},
         "foreign_process": {"alive": True, "core": tunnel.core} if foreign_node_id else {"alive": True, "core": "direct"},
         "ingress_socket": {"open": True, "port": ingress_port} if ingress_tested else {"open": True},
         "data_flow": {"passed": True, "rtt_ms": latency_ms}
     }
-    
+
+    # Task 9: Check if either node reports degraded data-plane state
+    degraded_reasons = []
+    if iran_probe and (iran_probe.get("health_state") == "degraded" or iran_probe.get("degraded_reason")):
+        degraded_reasons.append(f"{ir_name}: {iran_probe.get('degraded_reason')}")
+    if foreign_probe and (foreign_probe.get("health_state") == "degraded" or foreign_probe.get("degraded_reason")):
+        degraded_reasons.append(f"{fn_name}: {foreign_probe.get('degraded_reason')}")
+
+    from sqlalchemy.orm.attributes import flag_modified
+    if degraded_reasons:
+        degraded_summary = "; ".join(degraded_reasons)
+        tunnel.spec["health_state"] = "degraded"
+        tunnel.spec["degraded_reason"] = degraded_summary
+        flag_modified(tunnel, "spec")
+        await db.commit()
+        return {
+            "tunnel_id": tunnel.id,
+            "status": "degraded",
+            "latency_ms": latency_ms,
+            "stages": stages,
+            "message": f"Tunnel is degraded: {degraded_summary}",
+            "degraded_reason": degraded_summary
+        }
+
+    tunnel.spec["health_state"] = "healthy"
+    tunnel.spec.pop("degraded_reason", None)
+    flag_modified(tunnel, "spec")
+    await db.commit()
+
     return {
         "tunnel_id": tunnel.id,
         "status": "active",
@@ -3344,6 +3447,75 @@ async def test_active_tunnel(
         "stages": stages,
         "message": f"Tunnel is fully active and routing traffic ({latency_ms} ms)"
     }
+
+
+@router.post("/{tunnel_id}/rotate-control-port")
+async def rotate_control_port(
+    tunnel_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Admin = Depends(get_current_user)
+):
+    """Safely rotate the control port of a tunnel to escape ISP throttling or interference."""
+    from app.tunnel_planning import allocate_new_control_port, _CONTROL_PORT_RANGES, _DEFAULT_CONTROL_RANGE
+    from app.tunnel_ops import tunnel_lock
+    from app.routers.tunnels import apply_tunnel, TunnelUpdate
+
+    async with tunnel_lock(tunnel_id):
+        res = await db.execute(select(Tunnel).where(Tunnel.id == tunnel_id))
+        tunnel = res.scalar_one_or_none()
+        if not tunnel:
+            raise HTTPException(status_code=404, detail="Tunnel not found")
+
+        spec = dict(tunnel.spec or {})
+        old_control_port = spec.get("control_port") or spec.get("bind_port")
+        if not old_control_port:
+            old_control_port = _CONTROL_PORT_RANGES.get(tunnel.core, _DEFAULT_CONTROL_RANGE)[0]
+
+        node_ids = {n for n in (tunnel.node_id, getattr(tunnel, "iran_node_id", None), tunnel.foreign_node_id) if n}
+        new_control_port = await allocate_new_control_port(db, tunnel, node_ids)
+
+        # Update spec with new control port
+        spec["control_port"] = new_control_port
+        if tunnel.core == "frp":
+            spec["bind_port"] = new_control_port
+        tunnel.spec = spec
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(tunnel, "spec")
+
+        # Apply to both nodes
+        apply_success = True
+        try:
+            apply_res = await _apply_tunnel_impl(tunnel_id, None, db=db, current_user=current_user)
+            if not apply_res or apply_res.get("status") not in ["applied", "success"]:
+                apply_success = False
+        except Exception as e:
+            logger.error(f"Failed to apply rotated control port to nodes for tunnel {tunnel_id}: {e}")
+            apply_success = False
+
+        if not apply_success:
+            # Compensating rollback to old_control_port
+            logger.warning(f"Rolling back control port rotation for tunnel {tunnel_id} to {old_control_port}")
+            spec["control_port"] = old_control_port
+            if tunnel.core == "frp":
+                spec["bind_port"] = old_control_port
+            tunnel.spec = spec
+            flag_modified(tunnel, "spec")
+            try:
+                await _apply_tunnel_impl(tunnel_id, None, db=db, current_user=current_user)
+            except Exception as rb_err:
+                logger.error(f"Compensating rollback failed for tunnel {tunnel_id}: {rb_err}")
+            await db.commit()
+            raise HTTPException(status_code=500, detail="Failed to apply rotated control port; rolled back to previous port")
+
+        await db.commit()
+        logger.info(f"Successfully rotated control port for tunnel {tunnel_id} from {old_control_port} to {new_control_port}")
+        return {
+            "status": "success",
+            "message": f"Control port successfully rotated to {new_control_port}",
+            "old_control_port": old_control_port,
+            "new_control_port": new_control_port
+        }
+
 
 
 

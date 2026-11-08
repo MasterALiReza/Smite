@@ -267,25 +267,50 @@ NODE_CODE_FILES = [
 ]
 
 
-LOW_LATENCY_SYSCTL_FILE = Path("/etc/sysctl.d/99-smite-lowlatency.conf")
-LOW_LATENCY_SYSCTL = """# Smite low-latency network profile (managed by smite-node; safe to apply at runtime)
-# BBR + fq pacing: low queueing delay on lossy long-distance links (persisted across reboots)
+LOW_LATENCY_SYSCTL_FILE = Path("/etc/sysctl.d/zz-smite-tuning.conf")
+LOW_LATENCY_SYSCTL = """# Smite unified high-throughput low-latency network profile (managed by smite; persists across reboots)
+# BBR + fq pacing: low queueing delay on lossy long-distance links
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+
 # Keep the unsent part of TCP send buffers small: interactive packets (games, VoIP)
 # do not queue behind megabytes of bulk data inside the same tunnel connection
 net.ipv4.tcp_notsent_lowat = 16384
+
 # Long-lived tunnel connections keep their congestion window after idle periods
 net.ipv4.tcp_slow_start_after_idle = 0
+
 # Recover from path-MTU black holes instead of stalling (common on tunnelled paths)
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_fastopen = 3
-# UDP: no drops on short bursts
+
+# High performance 64MB buffer tuning for 10Gbps+ links & high-latency carrier transit
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 10000
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_keepalive_time = 60
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 6
+
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.udp_mem = 3145728 4194304 67108864
+
+# UDP & netdev tuning: no drops on short bursts
 net.ipv4.udp_rmem_min = 16384
 net.ipv4.udp_wmem_min = 16384
 net.core.rmem_default = 262144
 net.core.wmem_default = 262144
 net.core.netdev_budget = 600
+
+# IP forwarding
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
 """
 
 
@@ -306,6 +331,18 @@ def apply_low_latency_profile(verbose=True):
                 modules_conf.write_text(existing + ("" if existing.endswith("\n") or not existing else "\n") + "tcp_bbr\n")
         except Exception:
             pass
+
+        # Clean up obsolete legacy files
+        for old_file in [
+            Path("/etc/sysctl.d/99-smite-lowlatency.conf"),
+            Path("/etc/sysctl.d/99-smite-tuning.conf"),
+        ]:
+            try:
+                if old_file.exists():
+                    old_file.unlink()
+            except Exception:
+                pass
+
         LOW_LATENCY_SYSCTL_FILE.parent.mkdir(parents=True, exist_ok=True)
         LOW_LATENCY_SYSCTL_FILE.write_text(LOW_LATENCY_SYSCTL)
         res = subprocess.run(["sysctl", "-e", "-p", str(LOW_LATENCY_SYSCTL_FILE)], capture_output=True, text=True, check=False)

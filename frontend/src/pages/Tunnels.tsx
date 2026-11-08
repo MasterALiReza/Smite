@@ -45,6 +45,8 @@ const Tunnels = () => {
   const [reapplyingTunnelId, setReapplyingTunnelId] = useState<string | null>(null)
   // Per-tunnel delete loading (stores the tunnel id being deleted)
   const [deletingTunnelId, setDeletingTunnelId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<{ id: string; name: string; error: string } | null>(null)
+  const [rotatingControlPortId, setRotatingControlPortId] = useState<string | null>(null)
   // Reapply All progress modal
   const [reapplyAllProgress, setReapplyAllProgress] = useState<TunnelReapplyState[] | null>(null)
   const [reapplyAllDone, setReapplyAllDone] = useState(false)
@@ -443,6 +445,7 @@ const Tunnels = () => {
     })
     if (!confirmed) return
     
+    setDeleteError(null)
     setDeletingTunnelId(id)
     showToast('info', isRTL ? 'در حال حذف تونل' : 'Deleting Tunnel', isRTL ? `در حال حذف «${targetName}»...` : `Removing "${targetName}"...`, 2500)
 
@@ -457,13 +460,45 @@ const Tunnels = () => {
       })
       showToast('success', isRTL ? 'تونل حذف شد' : 'Tunnel Deleted', isRTL ? `تونل «${targetName}» با موفقیت حذف شد.` : `"${targetName}" was deleted successfully`)
       fetchData()
+      setDeletingTunnelId(null)
     } catch (error: any) {
       console.error('Failed to delete tunnel:', error)
       const errorMsg = error.response?.data?.detail || error.message || (isRTL ? 'حذف تونل با خطا مواجه شد' : 'Failed to delete tunnel')
       showToast('error', isRTL ? 'خطا در حذف تونل' : 'Delete Failed', errorMsg)
+      setDeleteError({ id, name: targetName, error: errorMsg })
       fetchData()
+    }
+  }
+
+  const rotateControlPort = async (id: string) => {
+    const target = tunnels.find(t => t.id === id)
+    const targetName = target?.name || 'this tunnel'
+
+    const confirmed = await showConfirm({
+      title: isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port',
+      message: isRTL
+        ? `آیا می‌خواهید پورت کنترل تونل «${targetName}» را تغییر دهید؟ این کار برای رفع اختلال و فیلترینگ توصیه می‌شود.`
+        : `Do you want to rotate the control port for "${targetName}"? This helps escape ISP throttling or interference.`,
+      variant: 'info',
+      confirmText: isRTL ? 'چرخش پورت' : 'Rotate Port',
+      cancelText: t.tunnels.cancel || 'Cancel',
+    })
+    if (!confirmed) return
+
+    setRotatingControlPortId(id)
+    showToast('info', isRTL ? 'در حال چرخش پورت کنترل' : 'Rotating Control Port', isRTL ? `در حال تخصیص و اعمال پورت جدید برای «${targetName}»...` : `Allocating new control port for "${targetName}"...`, 3000)
+
+    try {
+      const resp = await api.post(`/tunnels/${id}/rotate-control-port`)
+      const newPort = resp.data?.new_control_port
+      showToast('success', isRTL ? 'پورت کنترل تغییر یافت' : 'Control Port Rotated', isRTL ? `پورت کنترل به ${newPort} تغییر یافت.` : `Control port successfully rotated to ${newPort}`)
+      fetchData()
+    } catch (error: any) {
+      console.error('Failed to rotate control port:', error)
+      const errorMsg = error.response?.data?.detail || error.message || (isRTL ? 'خطا در چرخش پورت کنترل' : 'Failed to rotate control port')
+      showToast('error', isRTL ? 'خطا در چرخش پورت' : 'Rotation Failed', errorMsg)
     } finally {
-      setDeletingTunnelId(null)
+      setRotatingControlPortId(null)
     }
   }
 
@@ -1191,13 +1226,39 @@ const Tunnels = () => {
                   </div>
                 )}
 
-                {/* ── Per-card deleting overlay ── */}
-                {isDeleting && (
-                  <div className="absolute inset-0 bg-white/85 dark:bg-[#12161f]/85 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs">
-                    <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/20">
-                      <Loader2 size={18} className="animate-spin text-rose-500" />
-                      <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">Deleting tunnel...</span>
-                    </div>
+                {/* ── Per-card deleting overlay with error/retry support ── */}
+                {(isDeleting || deleteError?.id === tunnel.id) && (
+                  <div className="absolute inset-0 bg-white/85 dark:bg-[#12161f]/85 rounded-3xl z-10 flex items-center justify-center backdrop-blur-xs p-4">
+                    {deleteError?.id === tunnel.id ? (
+                      <div className="flex flex-col items-center text-center gap-2 px-5 py-3.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/30 max-w-sm">
+                        <div className="flex items-center gap-2 text-rose-500">
+                          <AlertTriangle size={18} />
+                          <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">{isRTL ? 'خطا در حذف' : 'Delete Failed'}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2">{deleteError.error}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => deleteTunnel(tunnel.id)}
+                            className="px-3 py-1 bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
+                          >
+                            {isRTL ? 'تلاش مجدد' : 'Retry'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setDeleteError(null); setDeletingTunnelId(null); }}
+                            className="px-3 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            {isRTL ? 'بستن' : 'Close'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-[#161c28] rounded-2xl shadow-xl border border-rose-500/20">
+                        <Loader2 size={18} className="animate-spin text-rose-500" />
+                        <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">{isRTL ? 'در حال حذف تونل...' : 'Deleting tunnel...'}</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1231,21 +1292,31 @@ const Tunnels = () => {
                           </button>
 
                           {/* Status Badge */}
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap flex items-center gap-1.5 ${
-                              tunnel.status === 'active'
-                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                : tunnel.status === 'error'
-                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                                : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
-                            }`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
-                              tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
-                            }`} />
-                            {tunnel.status}
-                          </span>
+                          {tunnel.spec?.health_state === 'degraded' ? (
+                            <span
+                              className="px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap flex items-center gap-1.5 bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                              title={tunnel.spec?.degraded_reason || 'Degraded connection'}
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                              {isRTL ? 'مختل' : 'Degraded'}
+                            </span>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap flex items-center gap-1.5 ${
+                                tunnel.status === 'active'
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                  : tunnel.status === 'error'
+                                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                  : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                              }`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                                tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                              }`} />
+                              {tunnel.status}
+                            </span>
+                          )}
 
                           {/* Pending Badge */}
                           {hasPendingChanges(tunnel) && (
@@ -1295,6 +1366,20 @@ const Tunnels = () => {
                               <Loader2 size={16} className="animate-spin" />
                             ) : (
                               <RotateCw size={16} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); rotateControlPort(tunnel.id); }}
+                            disabled={isReapplying || isDeleting || rotatingControlPortId === tunnel.id}
+                            className="p-1.5 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 rounded-lg transition-all disabled:opacity-40 min-w-[32px] min-h-[32px] flex items-center justify-center active:scale-95 cursor-pointer"
+                            title={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                            aria-label={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                          >
+                            {rotatingControlPortId === tunnel.id ? (
+                              <Loader2 size={16} className="animate-spin text-blue-500" />
+                            ) : (
+                              <Radio size={16} />
                             )}
                           </button>
                           <button
@@ -1571,21 +1656,31 @@ const Tunnels = () => {
                           </button>
 
                           <div className="flex flex-col gap-1.5 shrink-0">
-                            <span
-                              className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
-                                tunnel.status === 'active'
-                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                  : tunnel.status === 'error'
-                                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                                  : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
-                              }`}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full ${
-                                tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
-                                tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
-                              }`} />
-                              {tunnel.status}
-                            </span>
+                            {tunnel.spec?.health_state === 'degraded' ? (
+                              <span
+                                className="px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                                title={tunnel.spec?.degraded_reason || 'Degraded connection'}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                {isRTL ? 'مختل' : 'Degraded'}
+                              </span>
+                            ) : (
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap text-center flex items-center gap-1.5 ${
+                                  tunnel.status === 'active'
+                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                    : tunnel.status === 'error'
+                                    ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                    : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-white/[0.08]'
+                                }`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  tunnel.status === 'active' ? 'bg-emerald-500 animate-pulse' :
+                                  tunnel.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                                }`} />
+                                {tunnel.status}
+                              </span>
+                            )}
                             {hasPendingChanges(tunnel) && (
                               <span
                                 className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-center animate-pulse"
@@ -1643,6 +1738,19 @@ const Tunnels = () => {
                                 className={`px-2 sm:px-2.5 py-0.5 rounded-md sm:rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wide border ${transmissionBadge.bg} ${transmissionBadge.text} ${transmissionBadge.border} shrink-0`}
                               >
                                 {transmissionType}
+                              </span>
+                            )}
+
+                            {(tunnel.security_type || tunnel.spec?.security_type) && (
+                              <span
+                                className={`px-2 sm:px-2.5 py-0.5 rounded-md sm:rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase tracking-wide border shrink-0 ${
+                                  ['tls', 'utls', 'force_tls'].includes(String(tunnel.security_type || tunnel.spec?.security_type).toLowerCase())
+                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                    : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
+                                }`}
+                                title={`Security: ${String(tunnel.security_type || tunnel.spec?.security_type).toUpperCase()}`}
+                              >
+                                {String(tunnel.security_type || tunnel.spec?.security_type).toUpperCase()}
                               </span>
                             )}
 
@@ -1789,6 +1897,22 @@ const Tunnels = () => {
                           <Loader2 size={18} className="animate-spin" />
                         ) : (
                           <RotateCw size={18} className={hasPendingChanges(tunnel) ? 'text-amber-600 dark:text-amber-400' : ''} />
+                        )}
+                      </button>
+
+                      {/* Rotate Control Port */}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); rotateControlPort(tunnel.id); }}
+                        disabled={isReapplying || isDeleting || rotatingControlPortId === tunnel.id}
+                        className="h-11 rounded-xl bg-slate-100/80 dark:bg-white/[0.04] hover:bg-blue-500/15 text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 border border-slate-200/60 dark:border-white/[0.06] flex items-center justify-center transition-all disabled:opacity-40 active:scale-95 cursor-pointer"
+                        title={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                        aria-label={isRTL ? 'چرخش پورت کنترل' : 'Rotate Control Port'}
+                      >
+                        {rotatingControlPortId === tunnel.id ? (
+                          <Loader2 size={18} className="animate-spin text-blue-500" />
+                        ) : (
+                          <Radio size={18} />
                         )}
                       </button>
 

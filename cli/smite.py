@@ -9,6 +9,8 @@ import argparse
 import getpass
 import tempfile
 import shutil
+import time
+from typing import Optional
 from pathlib import Path
 
 try:
@@ -758,13 +760,74 @@ def _wait_for_new_panel(previous_id, timeout=180):
     return None
 
 
+def _backup_panel_db(project_root: Path, max_backups: int = 10) -> Optional[Path]:
+    """Create timestamped backup of smite.db before updating, keeping at most max_backups."""
+    for candidate_dir in [project_root / "panel" / "data", project_root / "data"]:
+        db_file = candidate_dir / "smite.db"
+        if db_file.exists():
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            bak_file = candidate_dir / f"smite.db.bak_auto_{ts}"
+            try:
+                shutil.copy2(db_file, bak_file)
+                print(f"Database backed up to {bak_file.name}")
+            except Exception as e:
+                print(f"Warning: failed to backup database: {e}")
+                return None
+
+            auto_backups = sorted(candidate_dir.glob("smite.db.bak_auto_*"), key=lambda p: p.stat().st_mtime)
+            if len(auto_backups) > max_backups:
+                for old_bak in auto_backups[:-max_backups]:
+                    try:
+                        old_bak.unlink()
+                    except Exception:
+                        pass
+            return bak_file
+    return None
+
+
+def _rollback_panel(project_root: Path, prev_commit: Optional[str], backup_file: Optional[Path] = None):
+    """Roll back git repository to previous commit, restore database, and restore container."""
+    print("Initiating automatic rollback...")
+    if backup_file and backup_file.exists():
+        for candidate_dir in [project_root / "panel" / "data", project_root / "data"]:
+            db_file = candidate_dir / "smite.db"
+            if db_file.exists() or candidate_dir.exists():
+                try:
+                    shutil.copy2(backup_file, db_file)
+                    print(f"Database restored from {backup_file.name}")
+                    break
+                except Exception as e:
+                    print(f"Warning: failed to restore database: {e}")
+    if prev_commit and (project_root / ".git").exists():
+        print(f"Rolling back git repository to revision {prev_commit[:8]}...")
+        subprocess.run(["git", "checkout", prev_commit], cwd=project_root, capture_output=True, text=True)
+    print("Rebuilding and recreating panel container with previous code...")
+    run_docker_compose(["up", "-d", "--no-deps", "--force-recreate", "--build", PANEL_SERVICE])
+
+
 def cmd_update(args):
     """Update only the panel service: pinned pull, recreate, verify health."""
     print("Updating panel (the panel API restarts; tunnels are not touched)...")
     compose_file = get_compose_file()
     project_root = compose_file.parent
 
+    prev_commit = None
     if (project_root / ".git").exists():
+        # Check for dirty working tree
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=project_root, capture_output=True, text=True)
+        if status.returncode != 0:
+            print("Update aborted: failed to check git status.")
+            sys.exit(1)
+        if status.stdout.strip():
+            print("Update aborted: git working directory has uncommitted changes (dirty).")
+            print("Commit or stash your changes before updating.")
+            sys.exit(1)
+
+        # Store commit hash before pull for rollback
+        rev_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_root, capture_output=True, text=True)
+        if rev_before.returncode == 0:
+            prev_commit = rev_before.stdout.strip()
+
         print("Pulling latest changes from git (fast-forward only)...")
         pull = subprocess.run(["git", "pull", "--ff-only"], cwd=project_root, capture_output=True, text=True)
         if pull.returncode != 0:
@@ -777,6 +840,9 @@ def cmd_update(args):
         if (project_root / "docker-compose.yml").exists():
             print("docker-compose.yml updated from git")
 
+    # Safe automated DB backup
+    backup_file = _backup_panel_db(project_root)
+
     before_id = _panel_container_id()
     pull_image = run_docker_compose(["pull", PANEL_SERVICE], capture_output=True)
     if pull_image.returncode != 0:
@@ -785,10 +851,11 @@ def cmd_update(args):
     run_docker_compose(["up", "-d", "--no-deps", "--force-recreate", "--build", PANEL_SERVICE])
     if before_id is not None and _panel_container_id() == before_id:
         print("Panel container was not replaced; the new code was not activated.")
+        _rollback_panel(project_root, prev_commit, backup_file)
         sys.exit(1)
     if not _wait_for_new_panel(before_id):
         print("Panel is not answering after the update. Check: docker logs --tail 100 smite-panel")
-        print("The previous binary is not restored automatically; verify before retrying.")
+        _rollback_panel(project_root, prev_commit, backup_file)
         sys.exit(1)
 
     cli_path = project_root / "cli" / "smite.py"

@@ -652,6 +652,18 @@ class NodeClient:
             payload["force_direct"] = force_direct
         return await self.send_to_node(node_id, "/api/agent/tunnels/verify", payload)
 
+    async def check_node_listening_ports(self, node_id: str, ports: List[int], proto: str = "tcp") -> Dict[str, Any]:
+        """Check whether destination ports are actively listening on the given node"""
+        if not node_id or not ports:
+            return {}
+        try:
+            res = await self.send_to_node(node_id, "/api/agent/ports/check-listening", {"ports": ports, "proto": proto})
+            if res and isinstance(res, dict) and res.get("status") == "success":
+                return res.get("ports", {})
+        except Exception as e:
+            logger.debug(f"Failed to check destination ports on node {node_id}: {e}")
+        return {}
+
     async def probe_ping(self, node_id: str, target_ip: str, port: Optional[int] = None) -> Optional[int]:
         """Ask node agent to measure precise layer-3/4 ping directly to target IP"""
         async with AsyncSessionLocal() as session:

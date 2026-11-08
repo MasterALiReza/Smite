@@ -454,6 +454,17 @@ const Nodes = () => {
                   </div>
                 </div>
 
+                {/* Kernel Drift Warning */}
+                {node.metadata?.kernel_tuning?.kernel_drift && (
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-mono"
+                    title={node.metadata.kernel_tuning.drift_reasons?.join(', ')}
+                  >
+                    <AlertCircle size={13} className="shrink-0 text-amber-500" />
+                    <span className="truncate font-semibold">Kernel Drift: {node.metadata.kernel_tuning.drift_reasons?.[0]}</span>
+                  </div>
+                )}
+
                 {/* Fingerprint Box with Tap-to-Copy */}
                 <div 
                   onClick={() => copyToClipboard(node.fingerprint, node.id)}

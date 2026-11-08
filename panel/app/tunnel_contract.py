@@ -138,10 +138,25 @@ def validate_tunnel_request(
 
     tls = carrier in _TLS_CARRIERS.get(core_key, set())
     effective_sec = security_type or (spec.get("security_type") if spec else None)
-    if effective_sec:
-        security = str(effective_sec).strip().lower()
+    security = str(effective_sec).strip().lower() if effective_sec else None
+
+    if core_key == "gost":
+        spec_dict = spec if isinstance(spec, dict) else {}
+        sni = spec_dict.get("sni") or spec_dict.get("custom_sni")
+        if sni and security in (None, "", "none") and carrier in ("tcp", "ws", "mws", "mtcp"):
+            security = "tls"
+            warnings.append(
+                f"gost: SNI '{sni}' was supplied; auto-promoting unencrypted transport '{carrier}' to TLS."
+            )
+        elif security in (None, "", "none") and carrier in ("tcp", "ws", "mws", "mtcp"):
+            warnings.append(
+                f"gost: Transport '{carrier}' is unencrypted and vulnerable to DPI throttling on Iranian mobile networks (MCI/Irancell). Consider enabling TLS."
+            )
+
+    if security:
         if core_key == "frp" and carrier == "quic" and security == "none":
             warnings.append("frp: QUIC always uses TLS 1.3; security 'none' is ignored for this carrier")
+            security = "tls"
         if core_key == "frp" and security == "none" and carrier == "wss":
             raise TunnelContractError("frp: WSS is TLS by definition; security 'none' contradicts it")
         if core_key == "frp" and carrier == "kcp" and security in ("tls", "utls", "force_tls"):
@@ -149,6 +164,8 @@ def validate_tunnel_request(
                 "frp: KCP transport operates over UDP and cannot be wrapped in TLS. "
                 "Use transport 'tcp' or 'wss' for TLS security, or set security to 'none' for KCP."
             )
+    else:
+        security = "tls" if tls else "none"
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -156,6 +173,7 @@ def validate_tunnel_request(
         "payload": payload,
         "transport": carrier,
         "multiplex": multiplex,
-        "tls": tls,
+        "tls": tls or (security in ("tls", "utls", "force_tls")),
+        "security_type": security,
         "warnings": warnings,
     }

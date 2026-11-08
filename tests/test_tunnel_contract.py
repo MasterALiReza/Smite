@@ -117,5 +117,31 @@ def test_frp_kcp_allows_none_security():
     result = validate_tunnel_request("frp", "tcp", "kcp", security_type="none")
     assert result["transport"] == "kcp"
     assert result["tls"] is False
+    assert result["security_type"] == "none"
+
+
+def test_gost_sni_auto_promotes_to_tls():
+    result = validate_tunnel_request("gost", "tcp", "tcp", spec={"sni": "dl.google.com"}, security_type="none")
+    assert result["transport"] == "tcp"
+    assert result["tls"] is True
+    assert result["security_type"] == "tls"
+    assert any("auto-promoting" in w for w in result["warnings"])
+
+
+def test_gost_tcp_without_sni_stays_none():
+    result = validate_tunnel_request("gost", "tcp", "tcp", spec={}, security_type="none")
+    assert result["transport"] == "tcp"
+    assert result["tls"] is False
+    assert result["security_type"] == "none"
+
+
+def test_router_contract_check_normalizes_frp_kcp_legacy_pair_to_none():
+    from app.routers.tunnels import _contract_check
+
+    result = _contract_check("frp", "tcp", "kcp", {}, "tls", legacy_pair=("kcp", "tls"))
+    assert result["transport"] == "kcp"
+    assert result["tls"] is False
+    assert result["security_type"] == "none"
+    assert any("normalized security to 'none'" in w for w in result["warnings"])
 
 

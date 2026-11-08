@@ -36,6 +36,7 @@ AGENT_CAPABILITIES = [
     "release_identity",
     # durable lockout of the agent API even if the token file disappears
     "auth_enforce",
+    "gost_relay_mux_tuning",
 ]
 # Changes on every (re)start of the agent process; lets the CLI confirm a hot reload.
 AGENT_STARTED_AT = time.time()
@@ -247,6 +248,48 @@ async def verify_tunnel(data: TunnelVerify, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class CheckPortsRequest(BaseModel):
+    ports: List[int]
+    proto: Optional[str] = "tcp"
+
+
+@router.post("/ports/check-listening")
+async def check_ports_listening(data: CheckPortsRequest, request: Request):
+    """Check if destination ports are actively listening on this host"""
+    import socket
+    import psutil
+    from ..core_adapters import is_port_listening_locally
+    results = {}
+    listening_map = {}
+    try:
+        for c in psutil.net_connections(kind='inet'):
+            if c.laddr and c.laddr.port in data.ports:
+                is_match = False
+                if data.proto in ("tcp", "any") and c.type == socket.SOCK_STREAM and c.status == psutil.CONN_LISTEN:
+                    is_match = True
+                elif data.proto in ("udp", "any") and c.type == socket.SOCK_DGRAM:
+                    is_match = True
+                if is_match:
+                    pname = None
+                    if c.pid:
+                        try:
+                            pname = psutil.Process(c.pid).name()
+                        except Exception:
+                            pass
+                    listening_map[c.laddr.port] = {"listening": True, "process": pname, "pid": c.pid}
+    except Exception as e:
+        logger.debug(f"psutil net_connections check failed: {e}")
+
+    for p in data.ports:
+        if p in listening_map:
+            results[p] = listening_map[p]
+        else:
+            is_up = is_port_listening_locally(p, proto=data.proto or "tcp")
+            results[p] = {"listening": is_up, "process": None, "pid": None}
+
+    return {"status": "success", "ports": results}
+
+
 @router.post("/tunnels/apply")
 async def apply_tunnel(data: TunnelApply, request: Request):
     """Apply tunnel configuration"""
@@ -290,6 +333,8 @@ async def remove_tunnel(data: TunnelRemove, request: Request):
                 "found": result.get("found", False),
                 "killed_pids": result.get("killed_pids", []),
                 "stuck_ports": result.get("stuck_ports", []),
+                "occupied_ports": result.get("occupied_ports", []),
+                "stuck_details": result.get("stuck_details", []),
             })
         return response
     except Exception as e:
@@ -399,6 +444,9 @@ async def probe_tunnel(tunnel_id: str, request: Request):
         "process_running": proc_alive,
         "core": core,
         "healthy": status.get("healthy", False),
+        "health_state": status.get("health_state", "healthy" if status.get("healthy", False) else "down"),
+        "degraded_reason": status.get("degraded_reason"),
+        "control_established": status.get("control_established"),
         "ingress_port": ingress_port,
         "ingress_port_open": ingress_port_open,
         "data_flow": data_flow,

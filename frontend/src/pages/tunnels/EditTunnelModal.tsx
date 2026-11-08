@@ -344,9 +344,6 @@ const EditTunnelModal = ({ tunnel, nodes, categories = [], onCategoryCreated, on
         updatedSpec.listen_port = fallbackPort  // Keep for backward compatibility
         updatedSpec.is_reverse = Boolean(formData.is_reverse)
         updatedSpec.force_direct = !formData.is_reverse
-        if (updatedSpec.multiplex === undefined && !['kcp', 'quic'].includes(formData.transport_type)) {
-          updatedSpec.multiplex = true
-        }
         if (formData.rate_limit_enabled && formData.rate_limit_mbps && parseFloat(formData.rate_limit_mbps) > 0) {
           updatedSpec.rate_limit_mbps = parseFloat(formData.rate_limit_mbps)
         } else {

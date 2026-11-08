@@ -207,7 +207,7 @@ if [ -f "/etc/sysctl.conf" ]; then
 
 # Smite Network Optimizations
 net.core.somaxconn = 65535
-net.core.netdev_max_backlog = 5000
+net.core.netdev_max_backlog = 10000
 net.ipv4.tcp_max_syn_backlog = 8192
 net.ipv4.ip_local_port_range = 10000 65535
 net.ipv4.tcp_tw_reuse = 1
@@ -216,12 +216,14 @@ net.ipv4.tcp_keepalive_time = 60
 net.ipv4.tcp_keepalive_intvl = 10
 net.ipv4.tcp_keepalive_probes = 6
 net.ipv4.tcp_slow_start_after_idle = 0
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216
-net.ipv4.udp_mem = 3145728 4194304 16777216
+net.ipv4.tcp_notsent_lowat = 16384
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.udp_mem = 3145728 4194304 67108864
 net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
 EOF
         # Apply optimizations
         sysctl -p > /dev/null 2>&1 || true
@@ -248,16 +250,52 @@ EOF
     ulimit -n 65535 2>/dev/null || true
 fi
 
-# Enable BBR congestion control (if available)
+# Enable BBR congestion control and write unified zz-smite-tuning.conf
 if modprobe -n tcp_bbr 2>/dev/null; then
     if ! grep -q "tcp_bbr" /etc/modules-load.d/*.conf 2>/dev/null && ! grep -q "tcp_bbr" /etc/modules 2>/dev/null; then
         echo "tcp_bbr" | tee -a /etc/modules-load.d/smite.conf > /dev/null 2>&1 || echo "tcp_bbr" >> /etc/modules 2>/dev/null || true
         modprobe tcp_bbr 2>/dev/null || true
-        sysctl -w net.ipv4.tcp_congestion_control=bbr > /dev/null 2>&1 || true
-        sysctl -w net.core.default_qdisc=fq > /dev/null 2>&1 || true
-        progress "BBR congestion control enabled"
     fi
 fi
+
+mkdir -p /etc/sysctl.d
+rm -f /etc/sysctl.d/99-smite-tuning.conf /etc/sysctl.d/99-smite-lowlatency.conf
+cat > /etc/sysctl.d/zz-smite-tuning.conf << 'EOF'
+# Smite unified high-throughput low-latency network profile (managed by smite; persists across reboots)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_notsent_lowat = 16384
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_fastopen = 3
+
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 10000
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_keepalive_time = 60
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 6
+
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.udp_mem = 3145728 4194304 67108864
+
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_budget = 600
+
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+sysctl -e -p /etc/sysctl.d/zz-smite-tuning.conf > /dev/null 2>&1 || true
+progress "Unified network profile applied (BBR + fq, 64MB buffers, notsent_lowat=16384)"
 
 # Generate CA certificate placeholder if not exists
 if [ ! -f "panel/certs/ca.crt" ]; then

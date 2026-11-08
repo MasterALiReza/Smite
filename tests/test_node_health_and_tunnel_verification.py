@@ -201,3 +201,187 @@ async def test_node_client_probe_tunnel_fallback_unpacks_data():
         assert resp["healthy"] is True
         assert resp["core"] == "gost"
 
+
+@pytest.mark.asyncio
+async def test_agent_check_ports_listening_endpoint():
+    """Verify agent /ports/check-listening reports listening and missing ports"""
+    from node.app.routers.agent import check_ports_listening, CheckPortsRequest
+
+    mock_request = MagicMock()
+    with patch("node.app.core_adapters.is_port_listening_locally", side_effect=lambda p, proto='tcp': p == 8080):
+        req = CheckPortsRequest(ports=[8080, 9999], proto="tcp")
+        resp = await check_ports_listening(req, mock_request)
+        assert resp["status"] == "success"
+        assert resp["ports"][8080]["listening"] is True
+        assert resp["ports"][9999]["listening"] is False
+
+
+@pytest.mark.asyncio
+async def test_test_tunnel_config_destination_port_warning_and_gost_direct():
+    """Verify test_tunnel_config reports warning when foreign destination port is closed and when GOST direct is chosen"""
+    from app.routers.tunnels import test_tunnel_config
+    from app.models import Node
+
+    iran_node = Node(id="ir-1", name="IR Node", status="active", node_metadata={"role": "iran", "ip_address": "1.1.1.1"})
+    fo_node = Node(id="fo-1", name="FO Node", status="active", node_metadata={"role": "foreign", "ip_address": "2.2.2.2"})
+
+    mock_db = AsyncMock()
+    mock_res_ir = MagicMock()
+    mock_res_ir.scalar_one_or_none.return_value = iran_node
+    mock_res_fo = MagicMock()
+    mock_res_fo.scalar_one_or_none.return_value = fo_node
+    mock_res_tuns = MagicMock()
+    mock_res_tuns.scalars.return_value.all.return_value = []
+
+    mock_db.execute = AsyncMock(side_effect=[mock_res_ir, mock_res_fo, mock_res_tuns])
+
+    # Direct mode GOST: is_reverse=False
+    payload = {
+        "core": "gost",
+        "iran_node_id": "ir-1",
+        "foreign_node_id": "fo-1",
+        "ports": "1080",
+        "transport": "tcp",
+        "is_reverse": False,
+    }
+
+    with patch("app.routers.tunnels.measure_node_latency", AsyncMock(return_value=(True, 30, "online"))), \
+         patch("app.routers.tunnels.NodeClient.check_node_listening_ports", AsyncMock(return_value={1080: {"listening": False}})):
+
+        res = await test_tunnel_config(payload, db=mock_db, current_user=MagicMock())
+        assert res["valid"] is True  # Non-blocking warning keeps valid=True
+
+        check_names = {c["name"]: c for c in res["checks"]}
+        assert "destination_ports" in check_names
+        assert check_names["destination_ports"]["status"] == "warning"
+        assert "1080 not listening" in check_names["destination_ports"]["detail"]
+
+        assert "gost_direction" in check_names
+        assert check_names["gost_direction"]["status"] == "warning"
+        assert "Reverse mode + TLS is strongly recommended" in check_names["gost_direction"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_tunnel_health_detects_log_errors_and_missing_estab(tmp_path, monkeypatch):
+    """inspect_tunnel_health maps log error patterns and missing reverse control ESTAB to degraded status."""
+    import node.app.core_adapters as ca
+    from node.app.core_adapters import AdapterManager
+
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+    tunnel_id = "test-degraded-tunnel"
+    manager.tunnel_configs[tunnel_id] = {
+        "core": "gost",
+        "spec": {
+            "mode": "server",
+            "is_reverse": True,
+            "control_port": 35000,
+            "ports": [8080]
+        }
+    }
+
+    # Simulate process alive, ports listening, but control port has NO established connection
+    monkeypatch.setattr(ca, "_is_tunnel_pid_alive", lambda tid, core=None: True)
+    monkeypatch.setattr(ca, "is_port_listening_locally", lambda p, proto='tcp': True)
+    monkeypatch.setattr(ca, "_has_established_connection_on_port", lambda p: False)
+    monkeypatch.setattr(ca, "_check_core_log_for_errors", lambda tid, core=None: (False, None))
+
+    st = await manager.inspect_tunnel_health(tunnel_id)
+    assert st["healthy"] is False
+    assert st["health_state"] == "degraded"
+    assert "No established connection on control port 35000" in st["degraded_reason"]
+
+    # Now simulate log error pattern "os error 98"
+    monkeypatch.setattr(ca, "_has_established_connection_on_port", lambda p: True)
+    monkeypatch.setattr(ca, "_check_core_log_for_errors", lambda tid, core=None: (True, "Recent error in core log: 'os error 98'"))
+
+    st2 = await manager.inspect_tunnel_health(tunnel_id)
+    assert st2["healthy"] is False
+    assert st2["health_state"] == "degraded"
+    assert "os error 98" in st2["degraded_reason"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_tunnel_health_idle_reverse_tunnel_stays_healthy(tmp_path, monkeypatch):
+    """An idle reverse tunnel with established control connection and no log errors remains healthy."""
+    import node.app.core_adapters as ca
+    from node.app.core_adapters import AdapterManager
+
+    manager = AdapterManager()
+    manager.config_dir = tmp_path
+    manager.tunnels_file = tmp_path / "tunnels.json"
+    tunnel_id = "test-idle-tunnel"
+    manager.tunnel_configs[tunnel_id] = {
+        "core": "gost",
+        "spec": {
+            "mode": "server",
+            "is_reverse": True,
+            "control_port": 35001,
+            "ports": [8080]
+        }
+    }
+
+    monkeypatch.setattr(ca, "_is_tunnel_pid_alive", lambda tid, core=None: True)
+    monkeypatch.setattr(ca, "is_port_listening_locally", lambda p, proto='tcp': True)
+    monkeypatch.setattr(ca, "_has_established_connection_on_port", lambda p: True)
+    monkeypatch.setattr(ca, "_check_core_log_for_errors", lambda tid, core=None: (False, None))
+
+    st = await manager.inspect_tunnel_health(tunnel_id)
+    assert st["healthy"] is True
+    assert st["health_state"] == "healthy"
+    assert st["degraded_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_test_active_tunnel_marks_degraded_status():
+    """test_active_tunnel marks tunnel as degraded when node reports degraded health."""
+    from app.routers.tunnels import test_active_tunnel
+    from app.models import Tunnel, Node
+
+    tunnel = Tunnel(
+        id="tun-deg-1",
+        name="Degraded Tunnel",
+        core="gost",
+        type="reverse",
+        iran_node_id="ir-1",
+        foreign_node_id="fo-1",
+        spec={"is_reverse": True, "control_port": 35000}
+    )
+    ir_node = Node(id="ir-1", name="Iran Node", node_metadata={"ip_address": "1.1.1.1"})
+    fo_node = Node(id="fo-1", name="Foreign Node", node_metadata={"ip_address": "2.2.2.2"})
+
+    mock_db = AsyncMock()
+    mock_res_tun = MagicMock()
+    mock_res_tun.scalar_one_or_none.return_value = tunnel
+    mock_res_ir = MagicMock()
+    mock_res_ir.scalar_one_or_none.return_value = ir_node
+    mock_res_fo = MagicMock()
+    mock_res_fo.scalar_one_or_none.return_value = fo_node
+
+    mock_db.execute = AsyncMock(side_effect=[mock_res_tun, mock_res_ir, mock_res_fo])
+
+    iran_probe_resp = {
+        "status": "success",
+        "process_running": True,
+        "healthy": False,
+        "health_state": "degraded",
+        "degraded_reason": "No established connection on control port 35000",
+        "tunnel_rtt_ms": 45
+    }
+    fo_probe_resp = {
+        "status": "success",
+        "process_running": True,
+        "healthy": True,
+        "health_state": "healthy"
+    }
+
+    with patch("app.routers.tunnels.NodeClient.probe_tunnel", AsyncMock(side_effect=[iran_probe_resp, fo_probe_resp])), \
+         patch("app.routers.tunnels.NodeClient.probe_ping", AsyncMock(return_value=45)):
+        res = await test_active_tunnel("tun-deg-1", db=mock_db, current_user=MagicMock())
+        assert res["status"] == "degraded"
+        assert "No established connection on control port" in res["message"]
+        assert tunnel.spec.get("health_state") == "degraded"
+
+
+
