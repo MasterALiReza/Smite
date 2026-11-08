@@ -460,13 +460,14 @@ const Tunnels = () => {
       })
       showToast('success', isRTL ? 'تونل حذف شد' : 'Tunnel Deleted', isRTL ? `تونل «${targetName}» با موفقیت حذف شد.` : `"${targetName}" was deleted successfully`)
       fetchData()
-      setDeletingTunnelId(null)
     } catch (error: any) {
       console.error('Failed to delete tunnel:', error)
       const errorMsg = error.response?.data?.detail || error.message || (isRTL ? 'حذف تونل با خطا مواجه شد' : 'Failed to delete tunnel')
       showToast('error', isRTL ? 'خطا در حذف تونل' : 'Delete Failed', errorMsg)
       setDeleteError({ id, name: targetName, error: errorMsg })
       fetchData()
+    } finally {
+      setDeletingTunnelId(null)
     }
   }
 
