@@ -1,6 +1,7 @@
+# Backhaul is built from source so node/patches/backhaul/*.patch can fix upstream bugs.
+# The commit is the one tag v0.7.2 points to; it is checked after cloning.
 ARG BACKHAUL_VERSION=v0.7.2
-ARG BACKHAUL_SHA256_AMD64=57bf95c2eabeddb1152d2e94ac42f4310883ce0fb909ee2a57bd53503b2dabbc
-ARG BACKHAUL_SHA256_ARM64=9a424c97ff16fc3f682e8314c418790d2b5bf3136e008edbb6cd402ea00999f6
+ARG BACKHAUL_COMMIT=df7966f8f725837a680ea7b90bd37ea52666c277
 
 # Stage 1: System dependencies
 FROM python:3.11-slim AS base
@@ -70,33 +71,14 @@ RUN set -eux; \
     /usr/local/bin/frpc --version || true; \
     /usr/local/bin/frps --version || true
 
-# Stage 3: Install backhaul (cached layer)
-FROM base AS backhaul-bin
+# Stage 3: Build backhaul from source with local patches (cached layer)
+# 0001: the client leaked one UDP socket and one tunnel connection for every UDP
+# session the server closed, until the process hit its fd limit.
+FROM golang:1.23-bookworm AS backhaul-bin
 ARG BACKHAUL_VERSION
-ARG BACKHAUL_SHA256_AMD64
-ARG BACKHAUL_SHA256_ARM64
-RUN set -eux; \
-    mkdir -p /opt/backhaul; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64|amd64) PLATFORM="amd64"; EXPECTED_SHA="$BACKHAUL_SHA256_AMD64" ;; \
-        aarch64|arm64) PLATFORM="arm64"; EXPECTED_SHA="$BACKHAUL_SHA256_ARM64" ;; \
-        *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
-    esac; \
-    ASSET_URL="https://github.com/Musixal/Backhaul/releases/download/${BACKHAUL_VERSION}/backhaul_linux_${PLATFORM}.tar.gz"; \
-    TMP_DIR="$(mktemp -d)"; \
-    curl -fsSL "$ASSET_URL" -o "$TMP_DIR/backhaul.tar.gz"; \
-    echo "${EXPECTED_SHA}  $TMP_DIR/backhaul.tar.gz" | sha256sum -c -; \
-    tar -xzf "$TMP_DIR/backhaul.tar.gz" -C "$TMP_DIR"; \
-    BIN_PATH="$(find "$TMP_DIR" -type f -name 'backhaul' | head -n1)"; \
-    if [ -z "$BIN_PATH" ]; then \
-        echo "Backhaul binary not found in archive"; \
-        ls -R "$TMP_DIR"; \
-        exit 1; \
-    fi; \
-    install -Dm755 "$BIN_PATH" /opt/backhaul/backhaul; \
-    rm -rf "$TMP_DIR"; \
-    /opt/backhaul/backhaul --version || true
+ARG BACKHAUL_COMMIT
+COPY node/patches/backhaul/ /tmp/backhaul-patches/
+RUN set -eux;     git clone --depth 1 --branch "${BACKHAUL_VERSION}" https://github.com/Musixal/Backhaul.git /src/backhaul;     cd /src/backhaul;     test "$(git rev-parse HEAD)" = "${BACKHAUL_COMMIT}";     for p in /tmp/backhaul-patches/*.patch; do git apply --verbose "$p"; done;     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /opt/backhaul/backhaul .;     /opt/backhaul/backhaul --version || true
 
 # Stage 4: Python dependencies (cached layer)
 FROM base AS deps
