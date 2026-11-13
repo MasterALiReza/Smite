@@ -1,0 +1,56 @@
+name: Publish node image
+
+# Builds node/Dockerfile and pushes ghcr.io/<owner>/smite-node:latest and :<short sha>
+# whenever the node code reaches main, or on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "node/**"
+      - ".github/workflows/publish-node.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-node
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name
+        id: img
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/smite-node" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: node/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ steps.img.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check the patched backhaul is in the image
+        run: |
+          docker pull "${{ steps.img.outputs.name }}:${{ steps.img.outputs.sha }}"
+          docker run --rm --entrypoint sh "${{ steps.img.outputs.name }}:${{ steps.img.outputs.sha }}" -c "backhaul -v && frpc -v"
