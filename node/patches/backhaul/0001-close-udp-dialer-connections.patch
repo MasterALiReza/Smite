@@ -1,0 +1,34 @@
+--- a/internal/client/transport/accept_udp.go
++++ b/internal/client/transport/accept_udp.go
+@@ -26,17 +26,28 @@
+ 	}
+ 
+ 	defer remoteConn.Close()
++	defer tcp.Close()
+ 
+-	done := make(chan struct{})
++	// Each direction runs until its connection fails. When the server ends the session
++	// (60s idle or congestion) only the TCP side sees it; udpToTCP would then block on
++	// udp.Read forever and leak this UDP socket and the tunnel stream. Closing both
++	// connections as soon as one direction finishes unblocks the other one.
++	done := make(chan struct{}, 2)
+ 
+ 	go func() {
+-		go tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
++		tcpToUDP(tcp, remoteConn, logger, usage, remotePort, sniffer)
+ 		done <- struct{}{}
+ 	}()
+ 
+-	udpToTCP(tcp, remoteConn, logger, usage, remotePort, sniffer)
++	go func() {
++		udpToTCP(tcp, remoteConn, logger, usage, remotePort, sniffer)
++		done <- struct{}{}
++	}()
+ 
+ 	<-done
++	remoteConn.Close()
++	tcp.Close()
++	<-done
+ }
+ 
+ func tcpToUDP(tcp net.Conn, udp *net.UDPConn, logger *logrus.Logger, usage *web.Usage, remotePort int, sniffer bool) {
