@@ -74,6 +74,8 @@ RUN set -eux; \
 # Stage 3: Build backhaul from source with local patches (cached layer)
 # 0001: the client leaked one UDP socket and one tunnel connection for every UDP
 # session the server closed, until the process hit its fd limit.
+# 0002: the server allocated a 100k-packet queue (~2.4 MB) per UDP session, so busy
+# WireGuard tunnels were OOM-killed; the queue is now 1024 packets.
 FROM golang:1.23-bookworm AS backhaul-bin
 ARG BACKHAUL_VERSION
 ARG BACKHAUL_COMMIT
